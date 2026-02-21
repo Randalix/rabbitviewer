@@ -3,23 +3,20 @@ import os
 import logging
 import hashlib
 from typing import Dict, Optional, List, Any, Set
+import threading
 from threading import Lock
 import time
 import json
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import ExifToolProcess
 
-_fallback_exiftool: Optional[ExifToolProcess] = None
-_fallback_exiftool_lock = Lock()
+_fallback_exiftool_local = threading.local()
 
 
 def _get_fallback_exiftool() -> ExifToolProcess:
-    global _fallback_exiftool
-    if _fallback_exiftool is None:
-        with _fallback_exiftool_lock:
-            if _fallback_exiftool is None:
-                _fallback_exiftool = ExifToolProcess()
-    return _fallback_exiftool
+    if not hasattr(_fallback_exiftool_local, "proc"):
+        _fallback_exiftool_local.proc = ExifToolProcess()
+    return _fallback_exiftool_local.proc
 
 
 class MetadataDatabase:
