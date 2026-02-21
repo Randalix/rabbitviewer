@@ -1,0 +1,100 @@
+{
+  "db.single_record_insert": {
+    "iterations": 100,
+    "total_ms": 0.589218339882791,
+    "mean_ms": 0.00589218339882791,
+    "min_ms": 0.002749962732195854,
+    "max_ms": 0.29137497767806053
+  },
+  "db.batch_insert_100": {
+    "iterations": 20,
+    "total_ms": 2.6707479264587164,
+    "mean_ms": 0.13353739632293582,
+    "min_ms": 0.06925000343471766,
+    "max_ms": 1.288166968151927
+  },
+  "db.get_metadata_miss": {
+    "iterations": 100,
+    "total_ms": 0.1504255924373865,
+    "mean_ms": 0.0015042559243738651,
+    "min_ms": 0.001374981366097927,
+    "max_ms": 0.005666050128638744
+  },
+  "db.get_metadata_hit": {
+    "iterations": 100,
+    "total_ms": 1.6747938934713602,
+    "mean_ms": 0.016747938934713602,
+    "min_ms": 0.008833012543618679,
+    "max_ms": 0.7102080853655934
+  },
+  "db.is_thumbnail_valid_no_thumb": {
+    "iterations": 100,
+    "total_ms": 0.488205230794847,
+    "mean_ms": 0.00488205230794847,
+    "min_ms": 0.004415982402861118,
+    "max_ms": 0.02583395689725876
+  },
+  "db.get_filtered_file_paths_none": {
+    "iterations": 50,
+    "total_ms": 3.395293257199228,
+    "mean_ms": 0.06790586514398456,
+    "min_ms": 0.06629107519984245,
+    "max_ms": 0.09483296889811754
+  },
+  "db.get_filtered_file_paths_text": {
+    "iterations": 50,
+    "total_ms": 3.4484161296859384,
+    "mean_ms": 0.06896832259371877,
+    "min_ms": 0.06687489803880453,
+    "max_ms": 0.09358394891023636
+  },
+  "db.set_rating": {
+    "iterations": 100,
+    "total_ms": 8.585041854530573,
+    "mean_ms": 0.08585041854530573,
+    "min_ms": 0.07700000423938036,
+    "max_ms": 0.1420830376446247
+  },
+  "db.batch_set_ratings_50": {
+    "iterations": 20,
+    "total_ms": 6.066997651942074,
+    "mean_ms": 0.3033498825971037,
+    "min_ms": 0.27954205870628357,
+    "max_ms": 0.41149999015033245
+  },
+  "plugin.registry_lookup_jpg": {
+    "iterations": 1000,
+    "total_ms": 0.27267890982329845,
+    "mean_ms": 0.00027267890982329845,
+    "min_ms": 0.00020908191800117493,
+    "max_ms": 0.0018749851733446121
+  },
+  "plugin.pil_generate_thumbnail": {
+    "iterations": 20,
+    "total_ms": 114.62079372722656,
+    "mean_ms": 5.731039686361328,
+    "min_ms": 5.590000073425472,
+    "max_ms": 6.0610000509768724
+  },
+  "plugin.pil_generate_view_image": {
+    "iterations": 20,
+    "total_ms": 109.81004172936082,
+    "mean_ms": 5.490502086468041,
+    "min_ms": 5.327500053681433,
+    "max_ms": 6.067166104912758
+  },
+  "plugin.pil_process_thumbnail_hit": {
+    "iterations": 200,
+    "total_ms": 0.4846687661483884,
+    "mean_ms": 0.002423343830741942,
+    "min_ms": 0.002249958924949169,
+    "max_ms": 0.009082956239581108
+  },
+  "plugin.pil_process_view_image_hit": {
+    "iterations": 200,
+    "total_ms": 0.48174685798585415,
+    "mean_ms": 0.0024087342899292707,
+    "min_ms": 0.0022079329937696457,
+    "max_ms": 0.015625031664967537
+  }
+}

@@ -1,0 +1,46 @@
+venv
+**__pycache__**
+**.DS_Store**
+.aider*
+*.log
+*.CR3
+*.CR2
+*.JPG
+*.diff
+*.hex
+*.patch
+test_metadata
+tools/
+
+# Perf run results (keep baseline.json tracked)
+tests/perf_results/*.json
+!tests/perf_results/baseline.json
+
+# Runtime database
+*.db
+*.db-shm
+*.db-wal
+
+# Benchmark output
+benchmark_cache/
+benchmark_results_*.log
+
+# Local debug utilities
+utils/logger_config.py
+utils/selection_debugger.py
+
+# Local config (contains personal paths); see config.yaml.example
+config.yaml
+
+# Top-level markdown files
+/*.md
+!README.md
+
+# Claude Code files
+.claude/
+.claude
+
+# Misc
+1
+rabbitviewer.egg-info/
+CLAUDE.md

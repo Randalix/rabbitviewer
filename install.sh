@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# install.sh — install RabbitViewer CLI tools so they are available from any directory.
+#
+# Usage:
+#   ./install.sh             # install / reinstall
+#   ./install.sh --clean     # wipe the venv and reinstall from scratch
+#   ./install.sh --uninstall # remove CLI wrappers from ~/.local/bin
+#
+# What it does:
+#   1. Creates (or reuses) a venv at <repo>/venv using Python 3.10–3.13
+#      (PySide6 does not yet support Python 3.14+).
+#   2. Installs the package in editable mode (source changes take effect immediately).
+#   3. Writes thin wrapper scripts into ~/.local/bin/ that prepend the repo to
+#      PYTHONPATH before invoking the venv entry point.  This guarantees the
+#      project's own packages (e.g. utils/) win over same-named modules that may
+#      exist elsewhere on the user's PYTHONPATH.
+#   4. Ensures ~/.local/bin is in PATH, patching the user's shell rc if needed.
+#
+# Requirements: Python 3.10–3.13
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$REPO_DIR/venv"
+BIN_DIR="$HOME/.local/bin"
+SCRIPTS=("rabbitviewer" "rabbitviewer-daemon")
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+red()    { printf '\033[31m%s\033[0m\n' "$*"; }
+bold()   { printf '\033[1m%s\033[0m\n'  "$*"; }
+
+# Find a Python 3.10–3.13 interpreter.
+# PySide6 6.x requires Python < 3.14, so we try specific minor versions first,
+# then fall back to the generic python3 only if it is in the supported range.
+require_python() {
+    local ver ok
+    # Prefer explicit minor-version binaries in compatible order.
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
+        if command -v "$candidate" &>/dev/null; then
+            ok=$("$candidate" -c "
+import sys
+v = sys.version_info
+print('ok' if (3,10) <= v < (3,14) else 'no')
+" 2>/dev/null || echo no)
+            if [[ "$ok" == "ok" ]]; then
+                echo "$candidate"
+                return
+            fi
+        fi
+    done
+    red "No compatible Python found (need 3.10–3.13; PySide6 does not support 3.14+)."
+    exit 1
+}
+
+# Returns the path of the user's shell rc file, or empty string if unknown.
+detect_shell_rc() {
+    local shell_name
+    shell_name="$(basename "${SHELL:-}")"
+    case "$shell_name" in
+        zsh)  echo "$HOME/.zshrc" ;;
+        bash)
+            if [[ "$(uname)" == "Darwin" ]]; then
+                echo "$HOME/.bash_profile"
+            else
+                echo "$HOME/.bashrc"
+            fi
+            ;;
+        fish) echo "$HOME/.config/fish/config.fish" ;;
+        *)    echo "" ;;
+    esac
+}
+
+# ── uninstall ─────────────────────────────────────────────────────────────────
+
+if [[ "${1:-}" == "--uninstall" ]]; then
+    yellow "Removing wrappers from $BIN_DIR …"
+    for script in "${SCRIPTS[@]}"; do
+        target="$BIN_DIR/$script"
+        if [[ -f "$target" || -L "$target" ]]; then
+            rm "$target"
+            green "  removed $target"
+        else
+            yellow "  $target not found, skipping"
+        fi
+    done
+    yellow "Done. The venv at $VENV_DIR was left intact."
+    exit 0
+fi
+
+# ── clean flag ────────────────────────────────────────────────────────────────
+
+# When --clean is requested: record the venv's Python path before wiping so we
+# can recreate the venv with the same interpreter.
+SAVED_PYTHON=""
+if [[ "${1:-}" == "--clean" ]]; then
+    if [[ -d "$VENV_DIR" && -x "$VENV_DIR/bin/python" ]]; then
+        # Resolve to the real system executable before the venv is deleted.
+        # The venv's python is a symlink; we follow it so the path survives rm -rf.
+        SAVED_PYTHON="$(python_real="$VENV_DIR/bin/python"
+            if command -v realpath &>/dev/null; then
+                realpath "$python_real"
+            else
+                # macOS fallback: readlink -f may not exist; use Python itself
+                "$python_real" -c "import os,sys; print(os.path.realpath(sys.executable))"
+            fi)"
+        yellow "Remembered venv Python: $SAVED_PYTHON ($("$SAVED_PYTHON" --version))"
+    fi
+    if [[ -d "$VENV_DIR" ]]; then
+        yellow "Removing existing venv at $VENV_DIR …"
+        rm -rf "$VENV_DIR"
+    fi
+    rm -rf "$REPO_DIR"/rabbitviewer.egg-info
+fi
+
+# ── update ────────────────────────────────────────────────────────────────────
+
+yellow "Pulling latest changes …"
+if git -C "$REPO_DIR" pull --ff-only 2>&1; then
+    green "Repository up to date."
+else
+    yellow "Could not fast-forward (local changes or detached HEAD) — skipping pull."
+fi
+
+# ── install ───────────────────────────────────────────────────────────────────
+
+# 1. Choose the Python interpreter.
+#    Priority: venv's own Python (for --clean rebuilds) > system search.
+if [[ -n "$SAVED_PYTHON" && -x "$SAVED_PYTHON" ]]; then
+    PYTHON="$SAVED_PYTHON"
+    green "Using saved venv Python: $("$PYTHON" --version)"
+else
+    PYTHON=$(require_python)
+    green "Using Python: $("$PYTHON" --version)"
+fi
+
+VENV_PYTHON="$VENV_DIR/bin/python"
+VENV_PIP="$VENV_DIR/bin/pip"
+
+# 2. Validate or create the venv.
+if [[ -d "$VENV_DIR" ]]; then
+    if "$VENV_PYTHON" -c "import sys" &>/dev/null; then
+        yellow "Reusing existing venv at $VENV_DIR"
+    else
+        yellow "Existing venv is broken — recreating …"
+        rm -rf "$VENV_DIR" "$REPO_DIR"/rabbitviewer.egg-info
+        "$PYTHON" -m venv "$VENV_DIR"
+    fi
+else
+    yellow "Creating venv at $VENV_DIR …"
+    "$PYTHON" -m venv "$VENV_DIR"
+fi
+
+# 3. Check for exiftool.
+if command -v exiftool &>/dev/null; then
+    green "exiftool found: $(exiftool -ver)"
+else
+    yellow "exiftool not found — RAW support and rating write-back will not work."
+    if [[ "$(uname)" == "Darwin" ]]; then
+        yellow "  Install with: brew install exiftool"
+    else
+        yellow "  Install with: sudo apt install libimage-exiftool-perl"
+    fi
+fi
+
+# 4. Editable install.
+yellow "Installing RabbitViewer (editable) …"
+"$VENV_PIP" install --upgrade pip
+"$VENV_PIP" install -e "$REPO_DIR"
+green "Package installed."
+
+# 4. Write wrapper scripts into ~/.local/bin.
+#    rm -f before writing: prevents cat > dst from following a leftover symlink
+#    and overwriting the pip-generated entry point inside the venv.
+mkdir -p "$BIN_DIR"
+
+declare -A ENTRY_POINTS=(
+    ["rabbitviewer"]="$VENV_DIR/bin/rabbitviewer"
+    ["rabbitviewer-daemon"]="$VENV_DIR/bin/rabbitviewer-daemon"
+)
+
+for script in "${SCRIPTS[@]}"; do
+    src="${ENTRY_POINTS[$script]}"
+    dst="$BIN_DIR/$script"
+
+    if [[ ! -f "$src" ]]; then
+        red "Entry point not found after install: $src"
+        exit 1
+    fi
+
+    rm -f "$dst"
+    cat > "$dst" <<WRAPPER
+#!/usr/bin/env bash
+export PYTHONPATH="${REPO_DIR}\${PYTHONPATH:+:\${PYTHONPATH}}"
+exec "${src}" "\$@"
+WRAPPER
+    chmod +x "$dst"
+    green "  $dst → $src"
+done
+
+# 5. Ensure ~/.local/bin is in PATH.
+echo
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+
+if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
+    green "$BIN_DIR is in PATH."
+else
+    yellow "$BIN_DIR is not in your current PATH."
+
+    RC_FILE="$(detect_shell_rc)"
+    if [[ -n "$RC_FILE" ]]; then
+        if grep -qF "$HOME/.local/bin" "$RC_FILE" 2>/dev/null; then
+            yellow "  PATH entry found in $RC_FILE but not active in this shell."
+            yellow "  Run: source $RC_FILE"
+        else
+            yellow "  Adding PATH entry to $RC_FILE …"
+            printf '\n# Added by RabbitViewer install.sh\n%s\n' "$PATH_LINE" >> "$RC_FILE"
+            green "  Done. Open a new terminal or run: source $RC_FILE"
+        fi
+    else
+        yellow "  Could not detect shell config file."
+        yellow "  Add this line to your shell's rc file manually:"
+        yellow ""
+        yellow "    $PATH_LINE"
+    fi
+fi
+
+echo
+bold "Installation complete."
+green "Run: rabbitviewer [directory]"

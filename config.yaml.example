@@ -1,0 +1,80 @@
+# Copy to ~/.config/rabbitviewer/config.yaml (or $XDG_CONFIG_HOME/rabbitviewer/config.yaml)
+cache_dir: ~/.rabbitviewer
+gui:
+  background_color: '#000000'
+  border_width: 1
+  hover_border_color: '#2d59b6'
+  placeholder_color: black
+  select_border_color: orange
+  spacing: 1
+  statusbar_font: monospace
+  statusbar_font_size: 10
+hotkeys:
+  close_or_quit:
+    description: Close picture view, then inspector views, then quit
+    sequence: q
+  escape_picture_view:
+    description: Return to thumbnail view
+    sequence: Esc
+  next_image:
+    description: Navigate to next image
+    extra_sequences:
+    - Right
+    sequence: D
+  open_filter:
+    description: Open filter dialog
+    sequence: Ctrl+F
+  open_inspector:
+    description: Open inspector window
+    sequence: I
+  previous_image:
+    description: Navigate to previous image
+    extra_sequences:
+    - Left
+    sequence: A
+  script:delete_selected:
+    description: Delete selected images
+    extra_sequences:
+    - R
+    sequence: Del
+  script:invert_selection:
+    description: Invert the current selection
+    sequence: Shift+I
+  script:select_all:
+    description: Select all images
+    sequence: Ctrl+A
+  script:set_rating_0:
+    description: Set rating to 0 stars
+    sequence: '0'
+  script:set_rating_1:
+    description: Set rating to 1 star
+    sequence: '1'
+  script:set_rating_2:
+    description: Set rating to 2 stars
+    sequence: '2'
+  script:set_rating_3:
+    description: Set rating to 3 stars
+    sequence: '3'
+  script:set_rating_4:
+    description: Set rating to 4 stars
+    sequence: '4'
+  start_range_selection:
+    description: Toggle range selection mode
+    sequence: S
+  zoom_in:
+    description: Zoom in
+    sequence: Ctrl++
+  zoom_out:
+    description: Zoom out
+    sequence: Ctrl+-
+ignore_patterns:
+- ._*
+inspector:
+  zoom_factor: 0.5
+logging_level: INFO
+min_file_size: 8192
+system:
+  socket_path: /tmp/rabbitviewer.sock
+thumbnail_size: 128
+watch_paths:
+- ~/Pictures
