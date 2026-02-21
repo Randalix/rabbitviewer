@@ -142,7 +142,7 @@ class StatusMessageEventData(EventData):
 
 @dataclass
 class SelectionChangedEventData(EventData):
-    selected_indices: FrozenSet[int]
+    selected_paths: FrozenSet[str]
 
 @dataclass
 class DaemonNotificationEventData(EventData):

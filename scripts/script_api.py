@@ -41,11 +41,7 @@ class ScriptAPI:
         if not (view and hasattr(view, 'all_files')):
             return set()
 
-        # Use the central selection state to get selected indices
-        selected_indices = self.main_window.selection_state.selected_indices
-        all_files = view.all_files
-        
-        selected_images = {all_files[i] for i in selected_indices if i < len(all_files)}
+        selected_images = set(self.main_window.selection_state.selected_paths)
         
         # If no images are selected, return the hovered image as a fallback.
         if not selected_images:
@@ -146,38 +142,34 @@ class ScriptAPI:
                 logging.warning("set_selected_images: Thumbnail view or files not available.")
                 return
 
-            # Normalize input paths to absolute paths
-            paths_to_select_abs = {str(Path(p).absolute()) for p in image_paths}
+            # Normalize input paths to absolute paths and filter to known files
+            paths_to_select = {str(Path(p).absolute()) for p in image_paths} & view._all_files_set
 
-            # Use the view's existing path→index map (indices into all_files)
-            file_to_index = view._path_to_idx
-            
-            indices_to_select = {file_to_index[p] for p in paths_to_select_abs if p in file_to_index}
-            
-            if not indices_to_select:
-                logging.debug("set_selected_images: No valid indices to select from provided paths.")
+            if not paths_to_select:
+                logging.debug("set_selected_images: No valid paths to select from provided paths.")
                 return
 
             # Use the selection command system
             selection_processor = self.main_window.selection_processor
-            
+
             if clear_existing:
-                command = ReplaceSelectionCommand(indices=indices_to_select, source="script", timestamp=time.time())
+                command = ReplaceSelectionCommand(paths=paths_to_select, source="script", timestamp=time.time())
             else:
-                command = AddToSelectionCommand(indices=indices_to_select, source="script", timestamp=time.time())
-            
+                command = AddToSelectionCommand(paths=paths_to_select, source="script", timestamp=time.time())
+
             selection_processor.process_command(command)
-            
-            # The UI should update automatically by listening to SelectionChangedEvent.
-            # Ensuring visibility is a good UX touch that can remain here for now.
-            if view and hasattr(view, 'ensure_visible') and indices_to_select:
-                first_selected = min(indices_to_select)
-                view.ensure_visible(first_selected, center=True)
-            
+
+            # Ensure the first selected image is visible
+            if view and hasattr(view, 'ensure_visible') and paths_to_select:
+                first_path = min(paths_to_select)
+                first_idx = view._path_to_idx.get(first_path)
+                if first_idx is not None:
+                    view.ensure_visible(first_idx, center=True)
+
             # Update benchmark stats and log
             self._last_operation_time = time.time() - start_time
             self._operation_stats['set_selection_time'] = self._last_operation_time
-            self._operation_stats['images_selected'] = len(indices_to_select)
+            self._operation_stats['images_selected'] = len(paths_to_select)
             logging.debug(f"set_selected_images: {len(indices_to_select)} images in {self._last_operation_time:.3f}s")
             
         except Exception as e:

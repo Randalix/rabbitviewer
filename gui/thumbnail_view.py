@@ -162,7 +162,7 @@ class ThumbnailViewWidget(QFrame):
         self._selection_mode: Optional[str] = None
         self._drag_start_index: int = -1
         self._drag_last_index: int = -1
-        self._current_selection: Set[int] = set()
+        self._current_selection: Set[str] = set()
 
         self._setupUI()
         self.viewport().installEventFilter(self)
@@ -368,7 +368,7 @@ class ThumbnailViewWidget(QFrame):
             start_index = self._get_thumbnail_at_pos(event.pos())
             if start_index is None:
                 # Click was on the background, clear selection
-                cmd = ReplaceSelectionCommand(indices=set(), source="thumbnail_view", timestamp=time.time())
+                cmd = ReplaceSelectionCommand(paths=set(), source="thumbnail_view", timestamp=time.time())
                 event_system.publish(cmd)
                 super().mousePressEvent(event)
                 return
@@ -435,12 +435,13 @@ class ThumbnailViewWidget(QFrame):
         This is the subscriber to the SELECTION_CHANGED event.
         """
         if event_data.event_type == EventType.SELECTION_CHANGED:
-            selected_indices = event_data.selected_indices
+            selected_paths = event_data.selected_paths
+            selected_indices = {self._path_to_idx[p] for p in selected_paths if p in self._path_to_idx}
             for idx, label in self.labels.items():
                 is_selected = idx in selected_indices
                 if label.selected != is_selected:
                     label.setSelected(is_selected)
-            self._current_selection = selected_indices
+            self._current_selection = selected_paths
 
     def _label_to_original_idx(self, label: ThumbnailLabel) -> Optional[int]:
         idx = label._original_idx
@@ -694,7 +695,7 @@ class ThumbnailViewWidget(QFrame):
             self.image_states = new_image_states
             self.labels = new_labels
 
-            cmd = ReplaceSelectionCommand(indices=set(), source="thumbnail_view", timestamp=time.time())
+            cmd = ReplaceSelectionCommand(paths=set(), source="thumbnail_view", timestamp=time.time())
             event_system.publish(cmd)
 
             self.reapply_filters()
@@ -798,7 +799,7 @@ class ThumbnailViewWidget(QFrame):
             self._grid_layout_manager.clear_layout()
 
         self.labels.clear()
-        cmd = ReplaceSelectionCommand(indices=set(), source="thumbnail_view", timestamp=time.time())
+        cmd = ReplaceSelectionCommand(paths=set(), source="thumbnail_view", timestamp=time.time())
         event_system.publish(cmd)
         self.selection_anchor_index = None
 
@@ -920,7 +921,7 @@ class ThumbnailViewWidget(QFrame):
             logging.warning(f"Clicked label {label.original_path} not found in self.labels.")
             return
 
-        indices_to_act_on = set()
+        paths_to_act_on = set()
         command = None
 
         if modifiers & Qt.ShiftModifier and self.selection_anchor_index is not None:
@@ -932,15 +933,15 @@ class ThumbnailViewWidget(QFrame):
                 for i in range(start, end + 1):
                     mapped_idx = self._visible_to_original_mapping.get(i)
                     if mapped_idx is not None:
-                        indices_to_act_on.add(mapped_idx)
-            command = AddToSelectionCommand(indices=indices_to_act_on, source="thumbnail_view", timestamp=time.time())
+                        paths_to_act_on.add(self.all_files[mapped_idx])
+            command = AddToSelectionCommand(paths=paths_to_act_on, source="thumbnail_view", timestamp=time.time())
         elif modifiers & Qt.ControlModifier:
-            indices_to_act_on = {original_idx}
-            command = ToggleSelectionCommand(indices=indices_to_act_on, source="thumbnail_view", timestamp=time.time())
+            paths_to_act_on = {self.all_files[original_idx]}
+            command = ToggleSelectionCommand(paths=paths_to_act_on, source="thumbnail_view", timestamp=time.time())
             self.selection_anchor_index = original_idx # Ctrl-click also updates anchor
         else:
-            indices_to_act_on = {original_idx}
-            command = ReplaceSelectionCommand(indices=indices_to_act_on, source="thumbnail_view", timestamp=time.time())
+            paths_to_act_on = {self.all_files[original_idx]}
+            command = ReplaceSelectionCommand(paths=paths_to_act_on, source="thumbnail_view", timestamp=time.time())
             self.selection_anchor_index = original_idx # Plain click sets the anchor
 
         if command:
@@ -962,12 +963,13 @@ class ThumbnailViewWidget(QFrame):
             end_idx = start_idx
 
         preview_indices = self._get_indices_in_range(start_idx, end_idx)
+        current_selected_indices = {self._path_to_idx[p] for p in self._current_selection if p in self._path_to_idx}
 
         for idx, label in self.labels.items():
             if not label.isVisible():
                 continue
 
-            in_current_selection = idx in self._current_selection
+            in_current_selection = idx in current_selected_indices
             in_preview_range = idx in preview_indices
 
             is_selected = False
@@ -983,15 +985,15 @@ class ThumbnailViewWidget(QFrame):
 
     def _commit_selection(self, start_idx: int, end_idx: int):
         """Publish the appropriate command to finalize the selection."""
-        indices_in_range = self._get_indices_in_range(start_idx, end_idx)
+        paths_in_range = self._get_paths_in_range(start_idx, end_idx)
         command = None
 
         if self._selection_mode == "replace":
-            command = ReplaceSelectionCommand(indices=indices_in_range, source="thumbnail_view", timestamp=time.time())
+            command = ReplaceSelectionCommand(paths=paths_in_range, source="thumbnail_view", timestamp=time.time())
         elif self._selection_mode == "add":
-            command = AddToSelectionCommand(indices=indices_in_range, source="thumbnail_view", timestamp=time.time())
+            command = AddToSelectionCommand(paths=paths_in_range, source="thumbnail_view", timestamp=time.time())
         elif self._selection_mode == "remove":
-            command = RemoveFromSelectionCommand(indices=indices_in_range, source="thumbnail_view", timestamp=time.time())
+            command = RemoveFromSelectionCommand(paths=paths_in_range, source="thumbnail_view", timestamp=time.time())
 
         if command:
             event_system.publish(command)
@@ -1005,6 +1007,10 @@ class ThumbnailViewWidget(QFrame):
 
         low, high = min(start_pos, end_pos), max(start_pos, end_pos)
         return {self._visible_original_indices[i] for i in range(low, high + 1)}
+
+    def _get_paths_in_range(self, start_idx: int, end_idx: int) -> Set[str]:
+        """Convert a range of original indices to file paths."""
+        return {self.all_files[idx] for idx in self._get_indices_in_range(start_idx, end_idx)}
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         """Handles mouse double-click events to open an image in PictureView."""
