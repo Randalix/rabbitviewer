@@ -38,12 +38,12 @@ class ScriptAPI:
             return {current_path} if current_path else set()
 
         view = self.main_window.thumbnail_view
-        if not (view and hasattr(view, 'current_files')):
+        if not (view and hasattr(view, 'all_files')):
             return set()
 
         # Use the central selection state to get selected indices
         selected_indices = self.main_window.selection_state.selected_indices
-        all_files = view.current_files
+        all_files = view.all_files
         
         selected_images = {all_files[i] for i in selected_indices if i < len(all_files)}
         
@@ -142,15 +142,15 @@ class ScriptAPI:
         
         try:
             view = self.main_window.thumbnail_view
-            if not view or not hasattr(view, 'current_files') or not view.current_files:
+            if not view or not hasattr(view, 'all_files') or not view.all_files:
                 logging.warning("set_selected_images: Thumbnail view or files not available.")
                 return
-            
+
             # Normalize input paths to absolute paths
             paths_to_select_abs = {str(Path(p).absolute()) for p in image_paths}
 
-            # Create a reverse map from absolute file path to index for quick lookups
-            file_to_index = {str(Path(path).absolute()): i for i, path in enumerate(view.current_files)}
+            # Use the view's existing path→index map (indices into all_files)
+            file_to_index = view._path_to_idx
             
             indices_to_select = {file_to_index[p] for p in paths_to_select_abs if p in file_to_index}
             
