@@ -89,9 +89,8 @@ class ToggleSelectionCommand(SelectionCommand):
         logging.debug(f"Executed ToggleSelection: {self.indices}")
 
     def undo(self, state: SelectionState) -> None:
-        # Symmetric difference is its own inverse.
-        state.selected_indices.symmetric_difference_update(self.indices)
-        logging.debug(f"Undid ToggleSelection: {self.indices}")
+        state.set_selection(self.previous_selection)
+        logging.debug(f"Undid ToggleSelection, restored: {self.previous_selection}")
 
 
 class SelectionProcessor:
@@ -114,7 +113,7 @@ class SelectionProcessor:
             command.execute(self.state)
 
         # Publish the final state change
-        final_selection = self.state.selected_indices.copy()
+        final_selection = frozenset(self.state.selected_indices)
         change_event = SelectionChangedEventData(
             event_type=EventType.SELECTION_CHANGED,
             source="SelectionProcessor",

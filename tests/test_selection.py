@@ -207,11 +207,22 @@ class TestToggleSelectionCommand:
         cmd.execute(state)
         assert state.selected_indices == {1, 3}
 
-    def test_undo_is_self_inverse(self, state):
+    def test_undo_restores_previous(self, state):
         state.set_selection({1, 2})
         cmd = _cmd(ToggleSelectionCommand, [2, 3])
         cmd.execute(state)
         assert state.selected_indices == {1, 3}
+        cmd.undo(state)
+        assert state.selected_indices == {1, 2}
+
+    def test_undo_robust_to_external_mutation(self, state):
+        """Toggle undo restores previous_selection even if state was externally modified."""
+        state.set_selection({1, 2})
+        cmd = _cmd(ToggleSelectionCommand, [2, 3])
+        cmd.execute(state)
+        assert state.selected_indices == {1, 3}
+        # External mutation between execute and undo
+        state.add_to_selection({99})
         cmd.undo(state)
         assert state.selected_indices == {1, 2}
 
@@ -260,7 +271,19 @@ class TestSelectionProcessor:
         fresh_event_system.publish(cmd)
         assert state.selected_indices == {42}
 
-    def test_published_indices_are_copy(self, processor, state, fresh_event_system):
+    def test_published_indices_are_frozenset(self, processor, state, fresh_event_system):
+        """Published selection must be a frozenset to prevent downstream aliasing."""
+        received = []
+        fresh_event_system.subscribe(
+            EventType.SELECTION_CHANGED,
+            lambda e: received.append(e),
+        )
+        cmd = _cmd(ReplaceSelectionCommand, [1, 2])
+        processor.process_command(cmd)
+        assert isinstance(received[0].selected_indices, frozenset)
+        assert received[0].selected_indices == frozenset({1, 2})
+
+    def test_published_indices_immutable_after_state_change(self, processor, state, fresh_event_system):
         """Mutating the state after publish must not affect delivered event data."""
         received = []
         fresh_event_system.subscribe(
@@ -271,7 +294,7 @@ class TestSelectionProcessor:
         processor.process_command(cmd)
         # Mutate state after publish
         state.set_selection(set())
-        assert received[0].selected_indices == {1, 2}
+        assert received[0].selected_indices == frozenset({1, 2})
 
 
 # ===================================================================
