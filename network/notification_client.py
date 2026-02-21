@@ -31,12 +31,29 @@ class NotificationListener(threading.Thread):
                     sock.settimeout(2.0)
                     while not self._stop_event.is_set():
                         try:
-                            length_data = recv_exactly(sock,4)
-                        except socket.timeout:
-                            continue
-                        if not length_data:
-                            logging.warning("Notification daemon disconnected.")
+                            length_data = recv_exactly(sock, 4)
+                        except ConnectionError:
+                            logging.warning("Notification daemon: partial read on length prefix.")
                             break
+                        if not length_data:
+                            # recv_exactly returns None on both clean timeout and peer close.
+                            # Use a non-blocking peek to distinguish them.
+                            try:
+                                sock.setblocking(False)
+                                peek = sock.recv(1, socket.MSG_PEEK)
+                                sock.settimeout(2.0)
+                                if not peek:
+                                    logging.warning("Notification daemon disconnected.")
+                                    break
+                                # Data available — fall through to re-read
+                                continue
+                            except BlockingIOError:
+                                # Nothing available — normal idle timeout
+                                sock.settimeout(2.0)
+                                continue
+                            except OSError:
+                                logging.warning("Notification daemon disconnected.")
+                                break
 
                         message_length = int.from_bytes(length_data, byteorder='big')
                         if message_length > MAX_MESSAGE_SIZE:
@@ -44,9 +61,10 @@ class NotificationListener(threading.Thread):
                             break
 
                         try:
-                            message_data = recv_exactly(sock,message_length)
-                        except socket.timeout:
-                            continue
+                            message_data = recv_exactly(sock, message_length)
+                        except ConnectionError:
+                            logging.warning("Notification daemon: partial read on message body.")
+                            break
                         if not message_data:
                             logging.warning("Notification daemon disconnected while reading message body.")
                             break
