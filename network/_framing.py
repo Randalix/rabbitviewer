@@ -1,12 +1,21 @@
 import socket
 from typing import Optional
 
+MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+
 
 def recv_exactly(sock: socket.socket, n: int) -> Optional[bytes]:
-    """Read exactly n bytes from sock. Returns None if the connection is closed."""
+    """Read exactly n bytes from sock. Returns None if the connection is closed
+    cleanly or a timeout occurs with no data read. Raises ConnectionError if a
+    timeout occurs after a partial read (the stream is now corrupted)."""
     data = bytearray()
     while len(data) < n:
-        packet = sock.recv(n - len(data))
+        try:
+            packet = sock.recv(n - len(data))
+        except socket.timeout:
+            if data:
+                raise ConnectionError(f"Timeout after reading {len(data)}/{n} bytes")
+            return None
         if not packet:
             return None
         data.extend(packet)

@@ -9,6 +9,8 @@ import json
 import socket
 from typing import List, Optional
 
+from ._framing import MAX_MESSAGE_SIZE
+
 
 class GuiClient:
     """One-shot client for interacting with a running RabbitViewer GUI."""
@@ -55,6 +57,8 @@ class GuiClient:
                 if not length_data:
                     return None
                 message_length = int.from_bytes(length_data, byteorder="big")
+                if message_length > MAX_MESSAGE_SIZE:
+                    raise ConnectionError(f"Message too large: {message_length} bytes")
                 message_data = self._recv_exactly(sock, message_length)
                 if not message_data:
                     return None
@@ -70,6 +74,8 @@ class GuiClient:
             try:
                 chunk = sock.recv(n - len(data))
             except socket.timeout:
+                if data:
+                    raise ConnectionError(f"Timeout after reading {len(data)}/{n} bytes")
                 return None
             if not chunk:
                 return None

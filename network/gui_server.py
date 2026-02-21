@@ -17,7 +17,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal, Qt
 
 from . import protocol
-from ._framing import recv_exactly
+from ._framing import recv_exactly, MAX_MESSAGE_SIZE
 
 GUI_SOCKET_PATH = "/tmp/rabbitviewer_gui.sock"
 
@@ -114,6 +114,8 @@ class GuiServer(QObject):
             if not length_data:
                 return
             message_length = int.from_bytes(length_data, byteorder="big")
+            if message_length > MAX_MESSAGE_SIZE:
+                raise ConnectionError(f"Message too large: {message_length} bytes")
             message_data = recv_exactly(conn, message_length)
             if not message_data:
                 return

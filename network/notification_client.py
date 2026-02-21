@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from core.event_system import EventSystem, EventType, DaemonNotificationEventData
-from ._framing import recv_exactly
+from ._framing import recv_exactly, MAX_MESSAGE_SIZE
 
 class NotificationListener(threading.Thread):
     def __init__(self, socket_path: str, event_system: EventSystem):
@@ -15,12 +15,14 @@ class NotificationListener(threading.Thread):
 
 
     def run(self):
+        retry_delay = 1.0  # Start at 1s, grow to max 30s
         while not self._stop_event.is_set():
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                     # why: intentional blocking recv in daemon thread; process exit terminates the thread
                     sock.connect(self.socket_path)
                     logging.info("Notification client connected to daemon.")
+                    retry_delay = 1.0  # Reset on successful connection
 
                     handshake = json.dumps({"type": "register_notifier"}).encode()
                     length_prefix = len(handshake).to_bytes(4, byteorder='big')
@@ -37,6 +39,9 @@ class NotificationListener(threading.Thread):
                             break
 
                         message_length = int.from_bytes(length_data, byteorder='big')
+                        if message_length > MAX_MESSAGE_SIZE:
+                            logging.error(f"Notification message too large: {message_length} bytes")
+                            break
 
                         try:
                             message_data = recv_exactly(sock,message_length)
@@ -66,11 +71,13 @@ class NotificationListener(threading.Thread):
                             logging.error(f"Failed to decode notification JSON. Raw data: {message_data!r}")
 
             except (ConnectionRefusedError, FileNotFoundError):
-                logging.debug("Could not connect to notification server. Retrying in 5s.")
-                time.sleep(5)
+                logging.debug(f"Could not connect to notification server. Retrying in {retry_delay:.0f}s.")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30.0)
             except Exception as e:  # why: any socket or deserialization error in the listener loop must not kill the thread
                 logging.error(f"Error in notification listener: {e}", exc_info=True)
-                time.sleep(5)
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30.0)
 
     def stop(self):
         self._stop_event.set()

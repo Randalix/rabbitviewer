@@ -9,7 +9,7 @@ import uuid
 from typing import List, Optional
 from pydantic import ValidationError
 from . import protocol
-from ._framing import recv_exactly
+from ._framing import recv_exactly, MAX_MESSAGE_SIZE
 
 class SocketConnection:
     """Represents a single socket connection with retry logic"""
@@ -60,6 +60,8 @@ class SocketConnection:
                         raise ConnectionError("Failed to read message length")
 
                     message_length = int.from_bytes(length_data, byteorder='big')
+                    if message_length > MAX_MESSAGE_SIZE:
+                        raise ConnectionError(f"Message too large: {message_length} bytes")
 
                     message_data = self._recv_exactly(message_length)
                     if not message_data:

@@ -10,6 +10,7 @@ import sys
 from core.directory_scanner import DirectoryScanner
 from core.rendermanager import Priority, TaskType, SourceJob
 from . import protocol
+from ._framing import MAX_MESSAGE_SIZE
 from pydantic import ValidationError
 import queue # Import for queue.Empty
 
@@ -144,6 +145,8 @@ class ThumbnailSocketServer:
                         break
 
                     message_length = int.from_bytes(length_data, byteorder='big')
+                    if message_length > MAX_MESSAGE_SIZE:
+                        raise ConnectionError(f"Message too large: {message_length} bytes")
 
                     message_data = self._recv_exactly(conn, message_length)
                     if not message_data:
