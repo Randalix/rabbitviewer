@@ -13,7 +13,7 @@ class SelectionState:
         self.selected_indices: Set[int] = set()
 
     def set_selection(self, indices: Set[int]):
-        self.selected_indices = indices
+        self.selected_indices = set(indices)
 
     def add_to_selection(self, indices: Set[int]):
         self.selected_indices.update(indices)
