@@ -152,10 +152,8 @@ class GuiServer(QObject):
 
     def _cmd_get_selection(self) -> str:
         mw = self._main_window
-        selected_indices = set(mw.selection_state.selected_indices)  # copy under GIL
-        all_files = list(mw.thumbnail_view.all_files)                 # copy under GIL
-        paths = [all_files[i] for i in sorted(selected_indices) if i < len(all_files)]
-        return protocol.GetSelectionResponse(paths=paths).model_dump_json()
+        selected_paths = list(mw.selection_state.selected_paths)
+        return protocol.GetSelectionResponse(paths=sorted(selected_paths)).model_dump_json()
 
     def _cmd_remove_images(self, paths: list) -> str:
         self._run_on_main_sync(lambda: self._main_window.remove_images(paths))
@@ -166,7 +164,7 @@ class GuiServer(QObject):
 
         def _do():
             cmd = ReplaceSelectionCommand(
-                indices=set(),
+                paths=set(),
                 source="gui_server",
                 timestamp=time.time(),
             )

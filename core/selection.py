@@ -7,28 +7,28 @@ from .event_system import EventData, EventType, SelectionChangedEventData, event
 
 
 class SelectionState:
-    """Holds the current set of selected item indices as the single source of truth."""
+    """Holds the current set of selected file paths as the single source of truth."""
 
     def __init__(self):
-        self.selected_indices: Set[int] = set()
+        self.selected_paths: Set[str] = set()
 
-    def set_selection(self, indices: Set[int]):
-        self.selected_indices = set(indices)
+    def set_selection(self, paths: Set[str]):
+        self.selected_paths = set(paths)
 
-    def add_to_selection(self, indices: Set[int]):
-        self.selected_indices.update(indices)
+    def add_to_selection(self, paths: Set[str]):
+        self.selected_paths.update(paths)
 
-    def remove_from_selection(self, indices: Set[int]):
-        self.selected_indices.difference_update(indices)
+    def remove_from_selection(self, paths: Set[str]):
+        self.selected_paths.difference_update(paths)
 
 
 class SelectionCommand(EventData, ABC):
     """Abstract base class for selection commands, inheriting from EventData to be publishable."""
 
-    def __init__(self, indices: Set[int], source: str, timestamp: float):
+    def __init__(self, paths: Set[str], source: str, timestamp: float):
         super().__init__(event_type=EventType.EXECUTE_SELECTION_COMMAND, source=source, timestamp=timestamp)
-        self.indices = indices
-        self.previous_selection: Set[int] = set()
+        self.paths = paths
+        self.previous_selection: Set[str] = set()
 
     @abstractmethod
     def execute(self, state: SelectionState) -> None:
@@ -45,9 +45,9 @@ class ReplaceSelectionCommand(SelectionCommand):
     """Command to replace the entire selection."""
 
     def execute(self, state: SelectionState) -> None:
-        self.previous_selection = state.selected_indices.copy()
-        state.set_selection(self.indices)
-        logging.debug(f"Executed ReplaceSelection: {self.indices}")
+        self.previous_selection = state.selected_paths.copy()
+        state.set_selection(self.paths)
+        logging.debug(f"Executed ReplaceSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
@@ -58,9 +58,9 @@ class AddToSelectionCommand(SelectionCommand):
     """Command to add items to the current selection."""
 
     def execute(self, state: SelectionState) -> None:
-        self.previous_selection = state.selected_indices.copy()
-        state.add_to_selection(self.indices)
-        logging.debug(f"Executed AddToSelection: {self.indices}")
+        self.previous_selection = state.selected_paths.copy()
+        state.add_to_selection(self.paths)
+        logging.debug(f"Executed AddToSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
@@ -71,9 +71,9 @@ class RemoveFromSelectionCommand(SelectionCommand):
     """Command to remove items from the current selection."""
 
     def execute(self, state: SelectionState) -> None:
-        self.previous_selection = state.selected_indices.copy()
-        state.remove_from_selection(self.indices)
-        logging.debug(f"Executed RemoveFromSelection: {self.indices}")
+        self.previous_selection = state.selected_paths.copy()
+        state.remove_from_selection(self.paths)
+        logging.debug(f"Executed RemoveFromSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
@@ -84,9 +84,9 @@ class ToggleSelectionCommand(SelectionCommand):
     """Command to toggle items in the selection (XOR operation)."""
 
     def execute(self, state: SelectionState) -> None:
-        self.previous_selection = state.selected_indices.copy()
-        state.selected_indices.symmetric_difference_update(self.indices)
-        logging.debug(f"Executed ToggleSelection: {self.indices}")
+        self.previous_selection = state.selected_paths.copy()
+        state.selected_paths.symmetric_difference_update(self.paths)
+        logging.debug(f"Executed ToggleSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
@@ -113,12 +113,12 @@ class SelectionProcessor:
             command.execute(self.state)
 
         # Publish the final state change
-        final_selection = frozenset(self.state.selected_indices)
+        final_selection = frozenset(self.state.selected_paths)
         change_event = SelectionChangedEventData(
             event_type=EventType.SELECTION_CHANGED,
             source="SelectionProcessor",
             timestamp=time.time(),
-            selected_indices=final_selection
+            selected_paths=final_selection
         )
         event_system.publish(change_event)
         logging.debug(f"Published SELECTION_CHANGED with {len(final_selection)} items.")
