@@ -100,7 +100,13 @@ class CR3Plugin(BasePlugin):
                             if eoi == -1:
                                 logger.debug("CR3 thumbnail EOI not in prefetch buffer; falling back to exiftool.")
                                 return None
-                            return buffer[soi: eoi + 2]
+                            candidate = buffer[soi: eoi + 2]
+                            try:
+                                Image.open(io.BytesIO(candidate)).verify()
+                                return candidate
+                            except Exception:
+                                logger.debug("CR3 buffer extraction: candidate bytes are not a valid JPEG; discarding.")
+                                return None
                         inner += isz
                     break   # moov processed; thumbnail not found
                 pos += box_size
@@ -229,7 +235,19 @@ class CR3Plugin(BasePlugin):
             if self.generate_thumbnail(image_path, thumbnail_bytes, orientation, thumbnail_path):
                 return thumbnail_path
 
-            # If embedded thumbnail fails or is too small, generate from the main view image.
+            # Buffer extraction may have returned invalid bytes (false-positive JPEG signature
+            # in the CTBO UUID box).  Retry with exiftool ThumbnailImage before escalating to
+            # the expensive JpgFromRaw path.
+            if thumbnail_bytes is not None:
+                logger.debug(
+                    f"Buffer-extracted bytes invalid for {os.path.basename(image_path)}; "
+                    "retrying with exiftool ThumbnailImage."
+                )
+                thumbnail_bytes = self._extract_thumbnail_to_memory(image_path)
+                if self.generate_thumbnail(image_path, thumbnail_bytes, orientation, thumbnail_path):
+                    return thumbnail_path
+
+            # Last resort: generate from the full view image (slow — JpgFromRaw).
             logger.debug(f"Generating thumbnail for {image_path} from its main preview image.")
             view_image_path = self.process_view_image(image_path, md5_hash) # This extracts the high-quality JPG
             if not view_image_path or not os.path.exists(view_image_path):
