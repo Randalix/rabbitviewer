@@ -69,7 +69,8 @@ class SocketConnection:
 
             except (ConnectionError, socket.error) as e:
                 logging.debug(f"Communication error (attempt {retries + 1}): {e}")
-                self.connected = False
+                with self.lock:
+                    self.connected = False
                 retries += 1
                 if retries <= max_retries:
                     time.sleep(0.1 * (2 ** retries))  # Exponential backoff: 0.2s, 0.4s

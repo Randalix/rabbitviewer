@@ -30,6 +30,7 @@ class ThumbnailSocketServer:
         self.notification_clients = []
         self.notification_lock = threading.Lock()
         self.active_gui_session_id: Optional[str] = None
+        self.session_lock = threading.Lock()
         self._fast_scan_cancel: Optional[threading.Event] = None
 
         self.directory_scanner = DirectoryScanner(thumbnail_manager, thumbnail_manager.config_manager)
@@ -56,7 +57,9 @@ class ThumbnailSocketServer:
                 notification = rm_queue.get(timeout=1)
 
                 # Filter notifications based on the active session ID.
-                if notification.session_id and notification.session_id != self.active_gui_session_id:
+                with self.session_lock:
+                    active_session = self.active_gui_session_id
+                if notification.session_id and notification.session_id != active_session:
                     logging.debug(f"Dropping stale notification for session {notification.session_id[:8]}...")
                     continue
 
@@ -81,7 +84,9 @@ class ThumbnailSocketServer:
         """
         rm = self.thumbnail_manager.render_manager
         for batch in self.directory_scanner.scan_incremental(path, recursive):
-            if cancel.is_set() or self.active_gui_session_id != session_id:
+            with self.session_lock:
+                current_session = self.active_gui_session_id
+            if cancel.is_set() or current_session != session_id:
                 logging.debug(f"Fast scan cancelled for session {session_id[:8]}")
                 return
             notification = protocol.Notification(
@@ -183,7 +188,8 @@ class ThumbnailSocketServer:
                     logging.info("Unregistered a notification client.")
 
                     # If a GUI client disconnects, cancel all jobs for its session.
-                    active_session = self.active_gui_session_id
+                    with self.session_lock:
+                        active_session = self.active_gui_session_id
                     if active_session:
                         render_manager = self.thumbnail_manager.render_manager
                         jobs_to_cancel = [
@@ -195,7 +201,8 @@ class ThumbnailSocketServer:
                             render_manager.cancel_job(job_id)
 
                         # Clear the active session, as the GUI is gone.
-                        self.active_gui_session_id = None
+                        with self.session_lock:
+                            self.active_gui_session_id = None
 
             conn.close()
 
@@ -218,7 +225,9 @@ class ThumbnailSocketServer:
                     return None
                 data.extend(packet)
             except socket.timeout:
-                    return None
+                if data:
+                    raise ConnectionError(f"Timeout after reading {len(data)}/{n} bytes")
+                return None
         return bytes(data)
 
     def handle_request(self, request_data: dict) -> str:
@@ -244,6 +253,8 @@ class ThumbnailSocketServer:
     
     def _dispatch_command(self, command: str, request_data: dict) -> protocol.Response:
         """Dispatches commands to the appropriate handler."""
+        with self.session_lock:
+            session_id_snapshot = self.active_gui_session_id
         if command == "request_previews":
             req = protocol.RequestPreviewsRequest.model_validate(request_data)
             logging.info(f"SocketServer: Received request_previews for {len(req.image_paths)} paths with priority {req.priority}.")
@@ -253,9 +264,9 @@ class ThumbnailSocketServer:
             # Directly call the priority upgrade logic instead of queueing a task to do it.
             for path in req.image_paths:
                 if self.thumbnail_manager.request_thumbnail(
-                        path, priority_level, self.active_gui_session_id):
+                        path, priority_level, session_id_snapshot):
                     success_count += 1
-            
+
             return protocol.RequestPreviewsResponse(count=success_count)
 
         elif command == "get_previews_status":
@@ -336,7 +347,7 @@ class ThumbnailSocketServer:
             success_count = 0
             for path in req.paths_to_upgrade:
                 if self.thumbnail_manager.request_thumbnail(
-                        path, Priority.GUI_REQUEST, self.active_gui_session_id):
+                        path, Priority.GUI_REQUEST, session_id_snapshot):
                     success_count += 1
 
             if req.paths_to_downgrade:
@@ -349,7 +360,7 @@ class ThumbnailSocketServer:
             req = protocol.RequestViewImageRequest.model_validate(request_data)
             logging.info(f"SocketServer: Received request_view_image for {req.image_path}")
             view_image_path = self.thumbnail_manager.request_view_image(
-                req.image_path, self.active_gui_session_id
+                req.image_path, session_id_snapshot
             )
             return protocol.RequestViewImageResponse(view_image_path=view_image_path)
 
@@ -368,8 +379,9 @@ class ThumbnailSocketServer:
             if not req.session_id:
                 return protocol.ErrorResponse(message="get_directory_files requires a non-empty session_id.")
             # A new directory load from the GUI defines the active session.
-            self.active_gui_session_id = req.session_id
-            logging.info(f"Set active GUI session to {self.active_gui_session_id[:8]} for path '{req.path}'")
+            with self.session_lock:
+                self.active_gui_session_id = req.session_id
+            logging.info(f"Set active GUI session to {req.session_id[:8]} for path '{req.path}'")
 
             # A new GUI load cancels any active watchdog initial scan.
             render_manager = self.thumbnail_manager.render_manager
