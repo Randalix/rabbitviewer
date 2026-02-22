@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
 
         self.last_known_directory = None
 
+        self.setAcceptDrops(True)
         self.setWindowTitle("Hey, RabbitViewer!")
         settings = QSettings("RabbitViewer", "MainWindow")
         geometry = settings.value("geometry")
@@ -275,6 +276,22 @@ class MainWindow(QMainWindow):
             except Exception as e:  # why: publish invokes arbitrary subscriber callbacks
                 logging.error(f"Error forcing inspector update: {e}", exc_info=True)
             
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        path = urls[0].toLocalFile()
+        if not path:
+            return
+        if os.path.isdir(path):
+            self.load_directory(path, recursive=False)
+        elif os.path.isfile(path):
+            self.load_directory(os.path.dirname(path), recursive=False)
+
     def closeEvent(self, event):
         """Handles the window close event."""
         logging.info("GUI close requested.")
