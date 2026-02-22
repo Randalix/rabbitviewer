@@ -1,7 +1,7 @@
 from typing import Optional, Set, List
 import threading
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QApplication, QFileDialog, QMessageBox
-from PySide6.QtCore import Qt, Slot, QPointF, QSize, QPoint, QTimer, QEvent, QObject, Signal
+from PySide6.QtCore import Qt, Slot, QPointF, QSize, QPoint, QTimer, QEvent, QObject, Signal, QSettings
 import logging
 import os
 import time
@@ -48,7 +48,12 @@ class MainWindow(QMainWindow):
         self.last_known_directory = None
 
         self.setWindowTitle("Hey, RabbitViewer!")
-        self.resize(800, 600)
+        settings = QSettings("RabbitViewer", "MainWindow")
+        geometry = settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+        else:
+            self.resize(800, 600)
 
         self.filter_dialog = None
         self._removed_images = []
@@ -283,6 +288,9 @@ class MainWindow(QMainWindow):
         for inspector in list(self.inspector_views):
             inspector.close()
         self.inspector_views.clear()  # safety net: closed signal may not fire for all inspectors
+        settings = QSettings("RabbitViewer", "MainWindow")
+        settings.setValue("geometry", self.saveGeometry())
+        settings.sync()
         event.accept()
         QApplication.instance().quit()
 
