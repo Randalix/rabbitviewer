@@ -41,7 +41,9 @@ class CustomStatusBar(QStatusBar):
 
         self._rating_label = QLabel()
         self._rating_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-        self._rating_label.setFixedWidth(75)
+        self._rating_label.setFixedWidth(110)
+        self._rating_label.setTextFormat(Qt.RichText)
+        self._rating_label.setStyleSheet("padding-bottom: 3px;")
         layout.addWidget(self._rating_label)
 
         self._process_label = QLabel()
@@ -59,8 +61,10 @@ class CustomStatusBar(QStatusBar):
                 font_family = "Arial"
                 font_size = 10
             font = QFont(font_family, font_size)
-            for label in (self._filepath_label, self._rating_label, self._process_label):
+            for label in (self._filepath_label, self._process_label):
                 label.setFont(font)
+            rating_font = QFont(font_family, font_size + 4)
+            self._rating_label.setFont(rating_font)
         except Exception as e:
             logging.warning(f"Could not apply status bar font settings: {e}")
 
@@ -102,7 +106,13 @@ class CustomStatusBar(QStatusBar):
         if rating is None:
             return "\u2014"  # em-dash: image hovered but no rating metadata
         filled = min(max(rating, 0), 5)
-        return "\u2605" * filled + "\u2606" * (5 - filled)
+        empty = 5 - filled
+        parts = []
+        if filled:
+            parts.append(f'<span style="color:#F5A623;">{"\u2605" * filled}</span>')
+        if empty:
+            parts.append(f'<span style="color:#555555;">{"\u2606" * empty}</span>')
+        return "".join(parts) if parts else ""
 
     def _refresh_elision(self):
         fm_fp = QFontMetrics(self._filepath_label.font())
