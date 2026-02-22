@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=RabbitViewer
+Comment=Daemon-powered image viewer
+Exec=rabbitviewer %F
+Icon=rabbitviewer
+Terminal=false
+Categories=Graphics;Viewer;Photography;
+MimeType=image/jpeg;image/png;image/tiff;image/webp;image/bmp;image/gif;
+Keywords=image;photo;viewer;thumbnail;raw;

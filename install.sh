@@ -128,6 +128,21 @@ if [[ "$MODE" == "--uninstall" ]]; then
             green "  removed $comp_file"
         fi
     done
+    # Remove desktop entry and icon (Linux only).
+    for desktop_file in \
+        "$HOME/.local/share/applications/rabbitviewer.desktop" \
+        "$HOME/.local/share/icons/hicolor/256x256/apps/rabbitviewer.png"; do
+        if [[ -f "$desktop_file" ]]; then
+            rm "$desktop_file"
+            green "  removed $desktop_file"
+        fi
+    done
+    # Remove .app bundle (macOS only).
+    APP_BUNDLE="$HOME/Applications/RabbitViewer.app"
+    if [[ -d "$APP_BUNDLE" ]]; then
+        rm -rf "$APP_BUNDLE"
+        green "  removed $APP_BUNDLE"
+    fi
     yellow "Done. The venv at $VENV_DIR was left intact."
     yellow "Note: any PATH entry added to your shell rc file was not removed."
     exit 0
@@ -303,6 +318,128 @@ if [[ -f "$RC_FILE_ZSH" ]]; then
         printf '\n# Added by RabbitViewer install.sh — rabbit completions\nfpath=(%s $fpath)\nautoload -Uz compinit && compinit\n' "$ZSH_FPATH_DIR" >> "$RC_FILE_ZSH"
         green "  Added fpath entry to $RC_FILE_ZSH"
     fi
+fi
+
+# 5d. Install .desktop entry and icon (Linux only).
+if [[ "$(uname)" == "Linux" ]]; then
+    DESKTOP_SRC="$REPO_DIR/rabbitviewer.desktop"
+    DESKTOP_DIR="$HOME/.local/share/applications"
+    ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
+    ICON_SRC="$REPO_DIR/logo/rabbitViewerLogo.png"
+
+    mkdir -p "$DESKTOP_DIR" "$ICON_DIR"
+
+    # Copy icon.
+    if [[ -f "$ICON_SRC" ]]; then
+        cp "$ICON_SRC" "$ICON_DIR/rabbitviewer.png"
+        green "  icon → $ICON_DIR/rabbitviewer.png"
+    else
+        yellow "  logo not found at $ICON_SRC — skipping icon install"
+    fi
+
+    # Install desktop entry.
+    if [[ -f "$DESKTOP_SRC" ]]; then
+        cp "$DESKTOP_SRC" "$DESKTOP_DIR/rabbitviewer.desktop"
+        green "  desktop entry → $DESKTOP_DIR/rabbitviewer.desktop"
+    else
+        yellow "  desktop file not found at $DESKTOP_SRC — skipping"
+    fi
+
+    # Update desktop database if available.
+    if command -v update-desktop-database &>/dev/null; then
+        update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+    fi
+fi
+
+# 5e. Build and install .app bundle (macOS only).
+if [[ "$(uname)" == "Darwin" ]]; then
+    APP_DIR="$HOME/Applications/RabbitViewer.app"
+    CONTENTS="$APP_DIR/Contents"
+    MACOS_DIR="$CONTENTS/MacOS"
+    RESOURCES="$CONTENTS/Resources"
+    ICON_SRC="$REPO_DIR/logo/rabbitViewerLogo.png"
+    RABBITVIEWER_EP="$(entry_point_for rabbitviewer)"
+
+    rm -rf "$APP_DIR"
+    mkdir -p "$MACOS_DIR" "$RESOURCES"
+
+    # -- PkgInfo --
+    printf 'APPL????' > "$CONTENTS/PkgInfo"
+
+    # -- Info.plist --
+    cat > "$CONTENTS/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>RabbitViewer</string>
+    <key>CFBundleDisplayName</key>
+    <string>RabbitViewer</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.rabbitviewer.app</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>RabbitViewer</string>
+    <key>CFBundleIconFile</key>
+    <string>appicon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
+PLIST
+
+    # -- Launcher script --
+    cat > "$MACOS_DIR/RabbitViewer" <<LAUNCHER
+#!/usr/bin/env bash
+export PYTHONPATH="${REPO_DIR}\${PYTHONPATH:+:\${PYTHONPATH}}"
+exec "${RABBITVIEWER_EP}" "\$@"
+LAUNCHER
+    chmod +x "$MACOS_DIR/RabbitViewer"
+
+    # -- Icon: convert PNG → icns using macOS built-ins --
+    if [[ -f "$ICON_SRC" ]]; then
+        ICONSET_DIR="$(mktemp -d)/appicon.iconset"
+        mkdir -p "$ICONSET_DIR"
+        for size in 16 32 64 128 256 512; do
+            sips -z "$size" "$size" "$ICON_SRC" --out "$ICONSET_DIR/icon_${size}x${size}.png" &>/dev/null
+            double=$((size * 2))
+            sips -z "$double" "$double" "$ICON_SRC" --out "$ICONSET_DIR/icon_${size}x${size}@2x.png" &>/dev/null
+        done
+        iconutil -c icns "$ICONSET_DIR" -o "$RESOURCES/appicon.icns" 2>/dev/null \
+            && green "  icon → $RESOURCES/appicon.icns" \
+            || yellow "  iconutil failed — app will use default icon"
+        rm -rf "$(dirname "$ICONSET_DIR")"
+    else
+        yellow "  logo not found at $ICON_SRC — app will use default icon"
+    fi
+
+    # Register with Launch Services so Spotlight indexes the app immediately.
+    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    if [[ -x "$LSREGISTER" ]]; then
+        "$LSREGISTER" -f "$APP_DIR" 2>/dev/null || true
+    fi
+
+    green "  app bundle → $APP_DIR"
 fi
 
 # 6. Ensure ~/.local/bin is in PATH.
