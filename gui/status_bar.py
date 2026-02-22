@@ -66,7 +66,7 @@ class CustomStatusBar(QStatusBar):
                 label.setFont(font)
             rating_font = QFont(font_family, font_size + 4)
             self._rating_label.setFont(rating_font)
-        except Exception as e:
+        except Exception as e:  # why: config_manager is user-supplied; malformed config must not crash the status bar at startup
             logging.warning(f"Could not apply status bar font settings: {e}")
 
     # ------------------------------------------------------------------
@@ -83,7 +83,6 @@ class CustomStatusBar(QStatusBar):
         self._refresh_elision()
 
     def clearRating(self):
-        """Clear the rating section to blank — call when no image is hovered."""
         self._raw_rating = _CLEARED
         self._rating_label.setText("")
 
@@ -121,7 +120,7 @@ class CustomStatusBar(QStatusBar):
 
         if self._raw_rating is not _CLEARED:
             self._rating_label.setText(self._rating_text(self._raw_rating))  # type: ignore[arg-type]
-        # else: leave the label as "" (clearRating already set it)
+        # why: clearRating set "" directly; refreshing here would re-render an unwanted em-dash
 
         fm_pr = QFontMetrics(self._process_label.font())
         available_pr = self._process_label.width()

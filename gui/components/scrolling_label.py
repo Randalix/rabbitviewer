@@ -39,9 +39,6 @@ class ScrollingLabel(QWidget):
     def text(self) -> str:
         return self._text
 
-    def setToolTip(self, tip: str):
-        super().setToolTip(tip)
-
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -97,7 +94,7 @@ class ScrollingLabel(QWidget):
         painter.setPen(self.palette().windowText().color())
 
         fm = QFontMetrics(self.font())
-        # Baseline y that vertically centres the text within the widget
+        # why: Qt text origin is baseline, not cap-height; ascent - descent recenters within the widget rect
         y = (self.height() + fm.ascent() - fm.descent()) // 2
         painter.drawText(-self._offset, y, self._text)
 
