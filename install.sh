@@ -3,6 +3,7 @@
 #
 # Usage:
 #   ./install.sh             # install / reinstall
+#   ./install.sh --update    # pull latest changes, then reinstall
 #   ./install.sh --clean     # wipe the venv and reinstall from scratch
 #   ./install.sh --uninstall # remove CLI wrappers from ~/.local/bin
 #
@@ -14,6 +15,8 @@
 #      PYTHONPATH before invoking the venv entry point.  This guarantees the
 #      project's own packages (e.g. utils/) win over same-named modules that may
 #      exist elsewhere on the user's PYTHONPATH.
+#      Note: wrappers embed the absolute path to the venv; moving the repo requires
+#      re-running install.sh.
 #   4. Ensures ~/.local/bin is in PATH, patching the user's shell rc if needed.
 #
 # Requirements: Python 3.10–3.13
@@ -24,6 +27,14 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$REPO_DIR/venv"
 BIN_DIR="$HOME/.local/bin"
 SCRIPTS=("rabbitviewer" "rabbitviewer-daemon")
+MODE="${1:-}"
+
+# ── argument validation ────────────────────────────────────────────────────────
+
+case "$MODE" in
+    ""|--clean|--uninstall|--update) ;;
+    *) printf 'Unknown argument: %s\nUsage: %s [--clean|--uninstall|--update]\n' "$MODE" "$0" >&2; exit 1 ;;
+esac
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -36,15 +47,10 @@ bold()   { printf '\033[1m%s\033[0m\n'  "$*"; }
 # PySide6 6.x requires Python < 3.14, so we try specific minor versions first,
 # then fall back to the generic python3 only if it is in the supported range.
 require_python() {
-    local ver ok
-    # Prefer explicit minor-version binaries in compatible order.
+    local ok
     for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
         if command -v "$candidate" &>/dev/null; then
-            ok=$("$candidate" -c "
-import sys
-v = sys.version_info
-print('ok' if (3,10) <= v < (3,14) else 'no')
-" 2>/dev/null || echo no)
+            ok=$(python_version_ok "$candidate")
             if [[ "$ok" == "ok" ]]; then
                 echo "$candidate"
                 return
@@ -53,6 +59,15 @@ print('ok' if (3,10) <= v < (3,14) else 'no')
     done
     red "No compatible Python found (need 3.10–3.13; PySide6 does not support 3.14+)."
     exit 1
+}
+
+# Check whether a given Python executable is in the supported version range.
+python_version_ok() {
+    "$1" -c "
+import sys
+v = sys.version_info
+print('ok' if (3,10) <= v < (3,14) else 'no')
+" 2>/dev/null || echo no
 }
 
 # Returns the path of the user's shell rc file, or empty string if unknown.
@@ -73,9 +88,18 @@ detect_shell_rc() {
     esac
 }
 
+# Map a script name to its venv entry point path.
+entry_point_for() {
+    case "$1" in
+        rabbitviewer)        echo "$VENV_DIR/bin/rabbitviewer" ;;
+        rabbitviewer-daemon) echo "$VENV_DIR/bin/rabbitviewer-daemon" ;;
+        *) red "Unknown script: $1"; exit 1 ;;
+    esac
+}
+
 # ── uninstall ─────────────────────────────────────────────────────────────────
 
-if [[ "${1:-}" == "--uninstall" ]]; then
+if [[ "$MODE" == "--uninstall" ]]; then
     yellow "Removing wrappers from $BIN_DIR …"
     for script in "${SCRIPTS[@]}"; do
         target="$BIN_DIR/$script"
@@ -87,6 +111,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
         fi
     done
     yellow "Done. The venv at $VENV_DIR was left intact."
+    yellow "Note: any PATH entry added to your shell rc file was not removed."
     exit 0
 fi
 
@@ -95,7 +120,7 @@ fi
 # When --clean is requested: record the venv's Python path before wiping so we
 # can recreate the venv with the same interpreter.
 SAVED_PYTHON=""
-if [[ "${1:-}" == "--clean" ]]; then
+if [[ "$MODE" == "--clean" ]]; then
     if [[ -d "$VENV_DIR" && -x "$VENV_DIR/bin/python" ]]; then
         # Resolve to the real system executable before the venv is deleted.
         # The venv's python is a symlink; we follow it so the path survives rm -rf.
@@ -115,20 +140,23 @@ if [[ "${1:-}" == "--clean" ]]; then
     rm -rf "$REPO_DIR"/rabbitviewer.egg-info
 fi
 
-# ── update ────────────────────────────────────────────────────────────────────
+# ── optional update ───────────────────────────────────────────────────────────
 
-yellow "Pulling latest changes …"
-if git -C "$REPO_DIR" pull --ff-only 2>&1; then
-    green "Repository up to date."
-else
-    yellow "Could not fast-forward (local changes or detached HEAD) — skipping pull."
+if [[ "$MODE" == "--update" ]]; then
+    yellow "Pulling latest changes …"
+    if git -C "$REPO_DIR" pull --ff-only 2>&1; then
+        green "Repository up to date."
+    else
+        yellow "Could not fast-forward (local changes or detached HEAD) — skipping pull."
+    fi
 fi
 
 # ── install ───────────────────────────────────────────────────────────────────
 
 # 1. Choose the Python interpreter.
 #    Priority: venv's own Python (for --clean rebuilds) > system search.
-if [[ -n "$SAVED_PYTHON" && -x "$SAVED_PYTHON" ]]; then
+#    Re-validate the saved path in case a system upgrade pushed it out of range.
+if [[ -n "$SAVED_PYTHON" && -x "$SAVED_PYTHON" && "$(python_version_ok "$SAVED_PYTHON")" == "ok" ]]; then
     PYTHON="$SAVED_PYTHON"
     green "Using saved venv Python: $("$PYTHON" --version)"
 else
@@ -171,18 +199,15 @@ yellow "Installing RabbitViewer (editable) …"
 "$VENV_PIP" install -e "$REPO_DIR"
 green "Package installed."
 
-# 4. Write wrapper scripts into ~/.local/bin.
+# 5. Write wrapper scripts into ~/.local/bin.
+#    Wrappers embed the absolute venv path set at install time; re-run install.sh
+#    if the repo is moved.
 #    rm -f before writing: prevents cat > dst from following a leftover symlink
 #    and overwriting the pip-generated entry point inside the venv.
 mkdir -p "$BIN_DIR"
 
-declare -A ENTRY_POINTS=(
-    ["rabbitviewer"]="$VENV_DIR/bin/rabbitviewer"
-    ["rabbitviewer-daemon"]="$VENV_DIR/bin/rabbitviewer-daemon"
-)
-
 for script in "${SCRIPTS[@]}"; do
-    src="${ENTRY_POINTS[$script]}"
+    src="$(entry_point_for "$script")"
     dst="$BIN_DIR/$script"
 
     if [[ ! -f "$src" ]]; then
@@ -200,9 +225,14 @@ WRAPPER
     green "  $dst → $src"
 done
 
-# 5. Ensure ~/.local/bin is in PATH.
+# 6. Ensure ~/.local/bin is in PATH.
 echo
-PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+shell_name="$(basename "${SHELL:-}")"
+if [[ "$shell_name" == "fish" ]]; then
+    PATH_LINE='fish_add_path $HOME/.local/bin'
+else
+    PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+fi
 
 if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
     green "$BIN_DIR is in PATH."
