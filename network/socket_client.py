@@ -15,7 +15,18 @@ except ImportError:
         pass
 from ._framing import recv_exactly, MAX_MESSAGE_SIZE
 if TYPE_CHECKING:
-    from . import protocol
+    from . import protocol as protocol
+
+# Lazy singleton so public methods can reference `protocol` without
+# repeating `from . import protocol` in every function body.
+_protocol_module = None
+
+def _lazy_protocol():
+    global _protocol_module
+    if _protocol_module is None:
+        from . import protocol
+        _protocol_module = protocol
+    return _protocol_module
 
 class SocketConnection:
     """Represents a single socket connection with retry logic"""
@@ -149,7 +160,7 @@ class ThumbnailSocketClient:
 
     def _send_request(self, request: protocol.Request, response_model: type[protocol.Response]) -> Optional[protocol.Response]:
         """Send a request using a connection from the pool and validate the response."""
-        from . import protocol
+        protocol = _lazy_protocol()
         conn = self.connection_pool.get_connection()
         if not conn:
             return None
@@ -176,11 +187,13 @@ class ThumbnailSocketClient:
                 
     def get_directory_files(self, path: str, recursive: bool = True) -> Optional[protocol.GetDirectoryFilesResponse]:
         """Ask the daemon for the definitive list of files in a directory from its database."""
+        protocol = _lazy_protocol()
         request = protocol.GetDirectoryFilesRequest(path=path, recursive=recursive)
         return self._send_request(request, protocol.GetDirectoryFilesResponse)
 
     def request_previews(self, image_paths: List[str], priority: int = 50) -> Optional[protocol.RequestPreviewsResponse]:
         """Asynchronously requests the generation of previews for a list of images."""
+        protocol = _lazy_protocol()
         logging.debug(f"SocketClient: Requesting previews for {len(image_paths)} paths with priority {priority}.")
         request = protocol.RequestPreviewsRequest(image_paths=image_paths, priority=priority)
         return self._send_request(request, protocol.RequestPreviewsResponse)
@@ -188,6 +201,7 @@ class ThumbnailSocketClient:
     def update_viewport(self, paths_to_upgrade: List[str],
                         paths_to_downgrade: List[str]) -> Optional[protocol.RequestPreviewsResponse]:
         """Upgrades visible thumbnails to GUI_REQUEST and downgrades scrolled-away ones."""
+        protocol = _lazy_protocol()
         request = protocol.UpdateViewportRequest(
             paths_to_upgrade=paths_to_upgrade,
             paths_to_downgrade=paths_to_downgrade,
@@ -199,26 +213,31 @@ class ThumbnailSocketClient:
 
         Returns the response immediately. `response.view_image_path` is set when
         the view image was already cached; None means generation has been queued."""
+        protocol = _lazy_protocol()
         request = protocol.RequestViewImageRequest(image_path=image_path)
         return self._send_request(request, protocol.RequestViewImageResponse)
 
     def get_previews_status(self, image_paths: List[str]) -> Optional[protocol.GetPreviewsStatusResponse]:
         """Checks the generation status for a list of image paths."""
+        protocol = _lazy_protocol()
         request = protocol.GetPreviewsStatusRequest(image_paths=image_paths)
         return self._send_request(request, protocol.GetPreviewsStatusResponse)
 
     def set_rating(self, image_paths: List[str], rating: int) -> Optional[protocol.Response]:
         """Sets the star rating for a list of images."""
+        protocol = _lazy_protocol()
         request = protocol.SetRatingRequest(image_paths=image_paths, rating=rating)
         return self._send_request(request, protocol.Response)
 
     def get_metadata_batch(self, image_paths: List[str], priority: bool = False) -> Optional[protocol.GetMetadataBatchResponse]:
         """Retrieves all known metadata for a list of images."""
+        protocol = _lazy_protocol()
         request = protocol.GetMetadataBatchRequest(image_paths=image_paths, priority=priority)
         return self._send_request(request, protocol.GetMetadataBatchResponse)
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool]) -> Optional[protocol.GetFilteredFilePathsResponse]:
         """Ask the daemon to return a filtered set of file paths."""
+        protocol = _lazy_protocol()
         request = protocol.GetFilteredFilePathsRequest(
             text_filter=text_filter, 
             star_states=star_states
@@ -227,6 +246,7 @@ class ThumbnailSocketClient:
 
     def move_records(self, moves: List[protocol.MoveRecord]) -> Optional[protocol.MoveRecordsResponse]:
         """Tell the daemon to update file_path entries for a batch of moved files."""
+        protocol = _lazy_protocol()
         request = protocol.MoveRecordsRequest(moves=moves)
         return self._send_request(request, protocol.MoveRecordsResponse)
 
@@ -237,7 +257,7 @@ class ThumbnailSocketClient:
 
     def _send_simple_command(self, command: str) -> bool:
         """Helper for simple, non-Pydantic commands."""
-        from . import protocol
+        protocol = _lazy_protocol()
         conn = self.connection_pool.get_connection()
         if not conn: return False
         try:
