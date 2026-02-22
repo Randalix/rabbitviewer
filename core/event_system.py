@@ -150,6 +150,11 @@ class DaemonNotificationEventData(EventData):
     data: dict  # intentional: loose contract — daemon payloads vary by notification_type
 
 
+# High-frequency events that are not appended to history to avoid evicting
+# genuinely useful events and to reduce lock hold time.
+_EPHEMERAL_EVENT_TYPES: frozenset = frozenset({EventType.INSPECTOR_UPDATE})
+
+
 class EventSystem(QObject):
     def __init__(self):
         super().__init__()
@@ -175,9 +180,10 @@ class EventSystem(QObject):
 
     def publish(self, event_data: EventData):
         with self._lock:
-            self._event_history.append(event_data)
-            # Snapshot the subscriber list so callbacks can safely call subscribe/unsubscribe.
             event_type = event_data.event_type
+            if event_type not in _EPHEMERAL_EVENT_TYPES:
+                self._event_history.append(event_data)
+            # Snapshot the subscriber list so callbacks can safely call subscribe/unsubscribe.
             callbacks = list(self._subscribers.get(event_type, []))
 
         for callback in callbacks:
@@ -187,7 +193,7 @@ class EventSystem(QObject):
                 # why: isolate handler crashes so one broken subscriber can't block others
                 logging.error(f"Error in event callback for {event_type.value}: {e}", exc_info=True)
 
-        logging.debug(f"Published event: {event_type.value} from {event_data.source}")
+        logging.debug("Published event: %s from %s", event_type.value, event_data.source)
         
     def get_event_history(self, event_type: Optional[EventType] = None) -> List[EventData]:
         if event_type:

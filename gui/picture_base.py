@@ -40,7 +40,10 @@ class PictureBase(QObject):
         self._drag_zoom_anchor = QPointF()
         self._drag_zoom_start_pos = QPointF()
         self._drag_zoom_initial_zoom = 1.0
-        
+
+        self._cached_transform: Optional[QTransform] = None
+        self._transform_dirty = True
+
         self._setup_event_subscriptions()
 
     def _setup_event_subscriptions(self):
@@ -140,26 +143,23 @@ class PictureBase(QObject):
         return self._image if self.has_image() else None
 
     def setImage(self, image: QImage) -> None:
-        """Set the image and initialize view state."""
         self._image = image
         if image and not image.isNull():
             self._updatePaddingRect()
             self.imageLoaded.emit()
             
     def loadImageFromPath(self, path_to_load: str) -> bool:
-        """Load image from the specified path."""
         image = QImage(path_to_load)
         if not image.isNull():
             self.setImage(image)
-            logging.debug(f"Loaded image: {path_to_load}")
+            logging.debug("Loaded image: %s", path_to_load)
             return True
         return False
             
     def _updatePaddingRect(self) -> None:
-        """Calculate the padding required to make the image space square."""
         if not self._image:
             return
-            
+
         img_width = self._image.width()
         img_height = self._image.height()
         square_size = max(img_width, img_height)
@@ -169,6 +169,7 @@ class PictureBase(QObject):
             -x_padding, -y_padding,
             square_size, square_size
         )
+        self._transform_dirty = True
         
     
     def screenToNormalized(self, screen_pos: QPointF) -> QPointF:
@@ -184,10 +185,10 @@ class PictureBase(QObject):
         norm_x = (padded_space_pos.x() - self._padding_rect.left()) / self._padding_rect.width()
         # why: Y is flipped to match normalizedToScreen's (1.0 - norm_pos.y()) convention
         norm_y = 1.0 - ((padded_space_pos.y() - self._padding_rect.top()) / self._padding_rect.height())
-    
+
         result = QPointF(norm_x, norm_y)
-    
-        logging.debug(f"screen coordinates: {screen_pos} -> padded_space_pos: {padded_space_pos} -> normalized: {result}")
+
+        logging.debug("screen coordinates: %s -> padded_space_pos: %s -> normalized: %s", screen_pos, padded_space_pos, result)
         return result
             
     def normalizedToScreen(self, norm_pos: QPointF) -> QPointF:
@@ -202,40 +203,52 @@ class PictureBase(QObject):
         return self.calculateTransform().map(padded_pos)
 
     def calculateTransform(self) -> QTransform:
-        """Calculate the transform from image space to screen space."""
+        """Return the transform from image space to screen space (cached)."""
+        if not self._transform_dirty and self._cached_transform is not None:
+            return self._cached_transform
+
         transform = QTransform()
-        
+
         if not self._image or self.viewportSize().isEmpty():
+            self._cached_transform = transform
+            self._transform_dirty = False
             return transform
-            
+
         viewport = self.viewportSize()
         transform.translate(viewport.width() / 2, viewport.height() / 2)
         transform.scale(self._view_state.zoom, self._view_state.zoom)
         center_x = self._padding_rect.left() + self._view_state.center.x() * self._padding_rect.width()
         center_y = self._padding_rect.top() + (1.0 - self._view_state.center.y()) * self._padding_rect.height()
         transform.translate(-center_x, -center_y)
-        
+
+        self._cached_transform = transform
+        self._transform_dirty = False
         return transform
         
     def setZoom(self, zoom: float, center: Optional[QPointF] = None) -> None:
         """Set the zoom level and optionally the center point."""
         if zoom <= 0:
             return
-            
+
         zoom = max(self._MIN_ZOOM, min(self._MAX_ZOOM, zoom))
         self._view_state.zoom = zoom
         if center is not None:
             self._view_state.center = center
         self._view_state.fit_mode = False
-            
+        self._transform_dirty = True
+
         self.viewStateChanged.emit(self._view_state)
-        
+
     def setCenter(self, center: QPointF) -> None:
         """Set the center point in normalized coordinates."""
+        current = self._view_state.center
+        if center.x() == current.x() and center.y() == current.y():
+            return
         self._view_state.center = center
         self._view_state.fit_mode = False
+        self._transform_dirty = True
         self.viewStateChanged.emit(self._view_state)
-        
+
     def setViewportSize(self, size: QSizeF) -> None:
         """Update the viewport size."""
         if size != self._view_state.viewport_size:
@@ -243,6 +256,7 @@ class PictureBase(QObject):
             if self._view_state.fit_mode:
                 self._view_state.zoom = self.calculateFitZoom()
                 self._view_state.center = QPointF(0.5, 0.5)
+            self._transform_dirty = True
             self.viewStateChanged.emit(self._view_state)
             
     def viewState(self) -> ViewState:
@@ -271,7 +285,6 @@ class PictureBase(QObject):
             
         viewport = self.viewportSize()
         
-        # Calculate zoom to fit the actual image dimensions
         zoom_x = viewport.width() / self._image.width()
         zoom_y = viewport.height() / self._image.height()
         
@@ -283,6 +296,7 @@ class PictureBase(QObject):
         if fit_mode:
             self._view_state.zoom = self.calculateFitZoom()
             self._view_state.center = QPointF(0.5, 0.5)
+        self._transform_dirty = True
         self.viewStateChanged.emit(self._view_state)
     
     def isFitMode(self) -> bool:

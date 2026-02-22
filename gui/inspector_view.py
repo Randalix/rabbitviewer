@@ -2,9 +2,10 @@
 
 import enum
 import logging
+import threading
 from typing import Optional
-from PySide6.QtWidgets import QWidget, QVBoxLayout
-from PySide6.QtCore import Qt, QPointF, QSize, QSettings, QPoint, Signal, QTimer
+from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import Qt, QPointF, QSettings, QPoint, Signal, Slot
 from PySide6.QtGui import QPainter, QImage
 from .picture_base import PictureBase
 from core.event_system import event_system, EventType, InspectorEventData, DaemonNotificationEventData
@@ -22,6 +23,11 @@ class _ViewMode(enum.Enum):
 class InspectorView(QWidget):
 
     closed = Signal()
+    # Delivers background-thread socket results back to the GUI thread.
+    # Args: (image_path, view_image_path_or_empty, normalized_position)
+    _preview_status_ready = Signal(str, str, QPointF)
+    # Bridges DAEMON_NOTIFICATION from the NotificationClient thread to the GUI thread.
+    _daemon_notification_received = Signal(object)
 
     def __init__(self, config_manager=None, inspector_index: int = 0):
         super().__init__(None, Qt.Window)
@@ -32,6 +38,13 @@ class InspectorView(QWidget):
         self._view_image_ready = False
         self._is_panning = False
         self._last_mouse_pos = QPoint()
+
+        # Background-fetch tracking: only one socket fetch in flight at a time.
+        self._desired_image_path: Optional[str] = None
+        self._fetch_in_flight: Optional[str] = None
+        # why: CPython GIL makes single bool read/write atomic; the worst case is
+        # one extra signal emission after closeEvent, which Qt discards safely.
+        self._fetch_cancelled = False
 
         self.setWindowTitle("Inspector")
         self.setMinimumSize(200, 200)
@@ -57,14 +70,22 @@ class InspectorView(QWidget):
         self._update_window_title()
 
         self._picture_base.viewStateChanged.connect(self.update)
+        self._preview_status_ready.connect(self._on_preview_status_ready)
+        self._daemon_notification_received.connect(self._on_daemon_notification)
 
         self._picture_base.setZoom(self._zoom_factor)
 
         event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
-        event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._on_daemon_notification)
+        event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._daemon_notification_from_thread)
 
         self.socket_client: Optional[ThumbnailSocketClient] = None
 
+    def _daemon_notification_from_thread(self, event_data: DaemonNotificationEventData):
+        # why: DAEMON_NOTIFICATION callbacks fire on the NotificationClient thread;
+        # emit a signal so _on_daemon_notification runs on the GUI thread.
+        self._daemon_notification_received.emit(event_data)
+
+    @Slot(object)
     def _on_daemon_notification(self, event_data: DaemonNotificationEventData):
         if event_data.notification_type == "previews_ready":
             try:
@@ -77,54 +98,89 @@ class InspectorView(QWidget):
             # why: ValidationError covers malformed daemon payload; OSError covers
             # loadImageFromPath on a path deleted between previews_ready and load
             except (ValidationError, OSError) as e:
-                logging.error(f"Error processing 'previews_ready' in InspectorView: {e}", exc_info=True)
+                logging.error("Error processing 'previews_ready' in InspectorView: %s", e, exc_info=True)
 
     def _handle_inspector_update(self, event_data: InspectorEventData):
         if not self.isVisible():
             return
 
-        logging.debug(f"Inspector received update event for: {event_data.image_path} at position ({event_data.normalized_position.x():.3f}, {event_data.normalized_position.y():.3f})")
+        logging.debug("Inspector update: %s at (%.3f, %.3f)",
+                      event_data.image_path,
+                      event_data.normalized_position.x(),
+                      event_data.normalized_position.y())
 
-        if not self.socket_client:
-            logging.warning("InspectorView: Socket client not set, cannot get view image path.")
-            return
+        self._desired_image_path = event_data.image_path
 
         same_image = event_data.image_path == self._current_image_path
-
-        # If the image changed, reset the ready flag.
         if not same_image:
             self._view_image_ready = False
 
-        # Fast path: image is already loaded — skip the blocking socket call.
-        # Known limitation: if the view image file is deleted from disk while the
-        # inspector is open, this flag stays True and set_center() operates on stale
-        # PictureBase data until the user moves to a different image.
+        # why: skip socket if image already loaded; _view_image_ready stays True
+        # until a different image is hovered (stale only if view file is deleted).
         if same_image and self._view_image_ready:
             if self._view_mode == _ViewMode.TRACKING:
                 self.set_center(event_data.normalized_position)
             return
 
-        # why: daemon caches preview status in memory; this call is typically sub-millisecond
-        response = self.socket_client.get_previews_status([event_data.image_path])
-        view_image_path = None
-        if response and response.status == "success":
-            status = response.statuses.get(event_data.image_path)
-            if status and status.view_image_ready and status.view_image_path:
-                view_image_path = status.view_image_path
+        if not self.socket_client:
+            return
+
+        # If a fetch is already in flight for this exact path, skip — the result
+        # will arrive via _on_preview_status_ready when the thread finishes.
+        if self._fetch_in_flight == event_data.image_path:
+            return
+
+        # Clear the display immediately when switching to a new image.
+        if not same_image and self._current_image_path is not None:
+            self._picture_base.setImage(QImage())
+
+        self._fetch_in_flight = event_data.image_path
+        threading.Thread(
+            target=self._fetch_preview_status,
+            args=(event_data.image_path, event_data.normalized_position),
+            daemon=True,
+            name="inspector-fetch",
+        ).start()
+
+    def _fetch_preview_status(self, image_path: str, norm_pos: QPointF):
+        try:
+            response = self.socket_client.get_previews_status([image_path])
+            view_image_path = ""
+            if response and response.status == "success":
+                status = response.statuses.get(image_path)
+                if status and status.view_image_ready and status.view_image_path:
+                    view_image_path = status.view_image_path
+
+            if not view_image_path:
+                # Request generation; result will arrive via previews_ready daemon notification.
+                self.socket_client.request_previews([image_path])
+        except Exception as e:
+            # why: socket calls can raise ConnectionError/OSError/TimeoutError on
+            # NAS drop or pool exhaustion; log and emit empty path to unblock GUI.
+            logging.error("Inspector: error fetching preview status for %s: %s", image_path, e)
+            view_image_path = ""
+
+        if not self._fetch_cancelled:
+            self._preview_status_ready.emit(image_path, view_image_path, norm_pos)
+
+    @Slot(str, str, QPointF)
+    def _on_preview_status_ready(self, image_path: str, view_image_path: str, norm_pos: QPointF):
+        if self._fetch_in_flight == image_path:
+            self._fetch_in_flight = None
+
+        # Discard stale results if the user has already moved to a different image.
+        if image_path != self._desired_image_path:
+            return
 
         if not view_image_path:
-            # If image is not ready, request generation and clear view while waiting
-            if not same_image:
-                self._picture_base.setImage(QImage())
-                self._current_image_path = event_data.image_path
-            self.socket_client.request_previews([event_data.image_path])
+            # Not ready yet; request was already sent in the background thread.
             return
 
         if self._view_mode != _ViewMode.TRACKING:
-            if not same_image:
-                self.update_view(event_data.image_path, view_image_path, QPointF(0.5, 0.5))
+            if image_path != self._current_image_path:
+                self.update_view(image_path, view_image_path, QPointF(0.5, 0.5))
         else:
-            self.update_view(event_data.image_path, view_image_path, event_data.normalized_position)
+            self.update_view(image_path, view_image_path, norm_pos)
 
     def update_view(self, original_image_path: str, view_image_path: str, norm_pos: QPointF):
         if not original_image_path:
@@ -136,7 +192,7 @@ class InspectorView(QWidget):
             if success:
                 self._current_image_path = original_image_path
                 self._view_image_ready = True
-                logging.info(f"Inspector displaying image: {original_image_path}")
+                logging.info("Inspector displaying image: %s", original_image_path)
                 self._picture_base.setViewportSize(self.size())
                 if self._view_mode == _ViewMode.FIT:
                     self._picture_base.setFitMode(True)
@@ -144,7 +200,7 @@ class InspectorView(QWidget):
                     self._picture_base.setZoom(self._zoom_factor)
             else:
                 self._current_image_path = None
-                logging.warning(f"Inspector failed to load image: {original_image_path}")
+                logging.warning("Inspector failed to load image: %s", original_image_path)
                 return
 
         if self._view_mode == _ViewMode.TRACKING:
@@ -152,8 +208,8 @@ class InspectorView(QWidget):
 
     def set_center(self, norm_pos: QPointF):
         if self._current_image_path:
+            # why: setCenter emits viewStateChanged → self.update; explicit update() is redundant.
             self._picture_base.setCenter(norm_pos)
-            self.update()
 
     def set_zoom_factor(self, zoom: float):
         self._zoom_factor = max(0.1, min(zoom, 20.0))
@@ -187,13 +243,18 @@ class InspectorView(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.fillRect(self.rect(), Qt.black)
-        current_size = self.size()
-        if self._picture_base.viewportSize() != current_size:
-            self._picture_base.setViewportSize(current_size)
+        # why: viewport size is kept current by resizeEvent; no need to sync here
+        # (doing so inside paintEvent emits viewStateChanged → schedules a second repaint)
         transform = self._picture_base.calculateTransform()
         painter.setTransform(transform)
         image_rect = self._picture_base.imageRect()
         painter.drawImage(image_rect, self._picture_base.get_image())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # why: _fetch_cancelled is set True in closeEvent; reset here so fetches
+        # work again when the window is re-opened in the same session.
+        self._fetch_cancelled = False
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -277,6 +338,8 @@ class InspectorView(QWidget):
         self.socket_client = socket_client
 
     def closeEvent(self, event):
+        # Signal any in-flight background fetch to discard its result.
+        self._fetch_cancelled = True
         settings = QSettings("RabbitViewer", "Inspector")
         settings.setValue(f"geometry_{self._inspector_index}", self.saveGeometry())
         settings.setValue(f"view_mode_{self._inspector_index}", self._view_mode.value)
@@ -284,7 +347,7 @@ class InspectorView(QWidget):
         if self.config_manager:
             self.config_manager.set("inspector.zoom_factor", self._zoom_factor)
         event_system.unsubscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
-        event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._on_daemon_notification)
+        event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._daemon_notification_from_thread)
         super().closeEvent(event)
         if event.isAccepted():
             self.closed.emit()

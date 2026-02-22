@@ -47,6 +47,14 @@ class ThumbnailLabel(QLabel):
         self.setStyleSheet(self._makeStyleSheet())
         self.setMouseTracking(True)
 
+        # Throttle inspector events to ~60 fps so rapid mouse movement does not
+        # flood the event system and block the GUI thread with socket calls.
+        self._pending_norm_pos: Optional[QPointF] = None
+        self._inspector_timer = QTimer(self)
+        self._inspector_timer.setSingleShot(True)
+        self._inspector_timer.setInterval(16)  # ~60 fps
+        self._inspector_timer.timeout.connect(self._flushInspectorEvent)
+
     def _makeStyleSheet(self) -> str:
         border_width = self.config.get("border_width", 1)
         border_color = self.config.get(
@@ -84,28 +92,38 @@ class ThumbnailLabel(QLabel):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        self._publishInspectorEvent(event.position())
+        self._queueInspectorEvent(event.position())
         super().mouseMoveEvent(event)
 
-    def _publishInspectorEvent(self, pos: QPointF):
+    def _queueInspectorEvent(self, pos: QPointF):
+        """Coalesce rapid mouse-move events; publish at most once per 16 ms."""
         try:
             widget_rect = self.rect()
             if widget_rect.width() > 0 and widget_rect.height() > 0:
                 norm_x = max(0.0, min(1.0, pos.x() / widget_rect.width()))
-                # Invert Y coordinate: Qt has (0,0) at top-left, but we want (0,0) at bottom-left
+                # Invert Y: Qt has (0,0) at top-left, we want (0,0) at bottom-left
                 norm_y = max(0.0, min(1.0, 1.0 - (pos.y() / widget_rect.height())))
-
-                event_data = InspectorEventData(
-                    event_type=EventType.INSPECTOR_UPDATE,
-                    source="thumbnail_view",
-                    timestamp=time.time(),
-                    image_path=self.original_path,
-                    normalized_position=QPointF(norm_x, norm_y),
-                )
-                event_system.publish(event_data)
-
+                self._pending_norm_pos = QPointF(norm_x, norm_y)
+                if not self._inspector_timer.isActive():
+                    self._inspector_timer.start()
         except (AttributeError, TypeError) as e:
-            logging.error(f"Error publishing inspector event from thumbnail: {e}", exc_info=True)
+            # why: rect() can return garbage dimensions during widget teardown if a
+            # mouse event fires after hide() but before deletion.
+            logging.error("Error queuing inspector event from thumbnail: %s", e, exc_info=True)
+
+    def _flushInspectorEvent(self):
+        pos = self._pending_norm_pos
+        if pos is None:
+            return
+        self._pending_norm_pos = None
+        event_data = InspectorEventData(
+            event_type=EventType.INSPECTOR_UPDATE,
+            source="thumbnail_view",
+            timestamp=time.time(),
+            image_path=self.original_path,
+            normalized_position=pos,
+        )
+        event_system.publish(event_data)
 
     def setSelected(self, selected: bool):
         if self.selected != selected:
@@ -297,6 +315,10 @@ class ThumbnailViewWidget(QFrame):
             label.loaded = False
             label.selected = False
             label._original_idx = -1
+            # why: cancel any pending inspector-throttle tick so the recycled label
+            # cannot emit a stale INSPECTOR_UPDATE after being reassigned a new path.
+            label._inspector_timer.stop()
+            label._pending_norm_pos = None
             label.setParent(self._grid_container)
             self._widget_pool.append(label)
         else:
@@ -704,6 +726,8 @@ class ThumbnailViewWidget(QFrame):
             self.benchmarkComplete.emit("Redraw", self._last_redraw_time)
 
         except (KeyError, IndexError) as e:
+            # why: index/path maps can desync if a watchdog removal races with an
+            # in-progress remove_images call on the same set of paths.
             logging.error(f"Error removing images: {e}", exc_info=True)
 
     def ensure_visible(self, original_idx: int, center: bool = False):
@@ -1042,6 +1066,8 @@ class ThumbnailViewWidget(QFrame):
                 logging.debug(f"Image {image_path} (original index {original_idx}) not currently visible.")
 
         except (AttributeError, RuntimeError) as e:
+            # why: label or scroll bar can be partially torn down if a directory
+            # reload races with the highlight timer firing.
             logging.error(f"Error highlighting thumbnail: {e}", exc_info=True)
 
     def _get_thumbnail_at_pos(self, pos: QPoint) -> Optional[int]:
