@@ -27,6 +27,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$REPO_DIR/venv"
 BIN_DIR="$HOME/.local/bin"
 SCRIPTS=("rabbitviewer" "rabbitviewer-daemon")
+CLI_DIR="$REPO_DIR/cli"    # used by rabbit dispatcher wrapper
 MODE="${1:-}"
 
 # ── argument validation ────────────────────────────────────────────────────────
@@ -108,6 +109,23 @@ if [[ "$MODE" == "--uninstall" ]]; then
             green "  removed $target"
         else
             yellow "  $target not found, skipping"
+        fi
+    done
+    # Remove rabbit CLI dispatcher.
+    target="$BIN_DIR/rabbit"
+    if [[ -f "$target" || -L "$target" ]]; then
+        rm "$target"
+        green "  removed $target"
+    else
+        yellow "  $target not found, skipping"
+    fi
+    # Remove shell completions.
+    for comp_file in \
+        "$HOME/.local/share/bash-completion/completions/rabbit" \
+        "$HOME/.local/share/zsh/site-functions/_rabbit"; do
+        if [[ -f "$comp_file" ]]; then
+            rm "$comp_file"
+            green "  removed $comp_file"
         fi
     done
     yellow "Done. The venv at $VENV_DIR was left intact."
@@ -225,6 +243,68 @@ WRAPPER
     green "  $dst → $src"
 done
 
+# 5b. Write wrapper for `rabbit` CLI dispatcher.
+RABBIT_SRC="$CLI_DIR/rabbit.py"
+RABBIT_DST="$BIN_DIR/rabbit"
+rm -f "$RABBIT_DST"
+cat > "$RABBIT_DST" <<WRAPPER
+#!/usr/bin/env bash
+export PYTHONPATH="${REPO_DIR}\${PYTHONPATH:+:\${PYTHONPATH}}"
+exec "${VENV_PYTHON}" "${RABBIT_SRC}" "\$@"
+WRAPPER
+chmod +x "$RABBIT_DST"
+green "  $RABBIT_DST → $RABBIT_SRC"
+
+# 5c. Install shell completions for `rabbit`.
+install_bash_completion() {
+    local dir="$HOME/.local/share/bash-completion/completions"
+    mkdir -p "$dir"
+    cat > "$dir/rabbit" <<'COMP'
+_rabbit() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "$COMP_CWORD" -eq 1 ]]; then
+        local cmds
+        cmds="$(rabbit --complete 2>/dev/null)"
+        COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
+    fi
+}
+complete -F _rabbit rabbit
+COMP
+    green "  bash completions → $dir/rabbit"
+}
+
+install_zsh_completion() {
+    local dir="$HOME/.local/share/zsh/site-functions"
+    mkdir -p "$dir"
+    cat > "$dir/_rabbit" <<'COMP'
+#compdef rabbit
+_rabbit() {
+    local -a commands
+    if (( CURRENT == 2 )); then
+        commands=("${(@f)$(rabbit --complete 2>/dev/null)}")
+        _describe 'command' commands
+    else
+        _files
+    fi
+}
+_rabbit "$@"
+COMP
+    green "  zsh completions  → $dir/_rabbit"
+}
+
+install_bash_completion
+install_zsh_completion
+
+# Ensure zsh picks up the custom completions directory.
+ZSH_FPATH_DIR="$HOME/.local/share/zsh/site-functions"
+RC_FILE_ZSH="$HOME/.zshrc"
+if [[ -f "$RC_FILE_ZSH" ]]; then
+    if ! grep -qF "$ZSH_FPATH_DIR" "$RC_FILE_ZSH" 2>/dev/null; then
+        printf '\n# Added by RabbitViewer install.sh — rabbit completions\nfpath=(%s $fpath)\nautoload -Uz compinit && compinit\n' "$ZSH_FPATH_DIR" >> "$RC_FILE_ZSH"
+        green "  Added fpath entry to $RC_FILE_ZSH"
+    fi
+fi
+
 # 6. Ensure ~/.local/bin is in PATH.
 echo
 shell_name="$(basename "${SHELL:-}")"
@@ -260,3 +340,4 @@ fi
 echo
 bold "Installation complete."
 green "Run: rabbitviewer [directory]"
+green "CLI: rabbit --help"

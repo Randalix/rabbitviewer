@@ -1,3 +1,5 @@
+"""Send a graceful shutdown signal to the RabbitViewer daemon."""
+
 import sys
 import os
 import logging

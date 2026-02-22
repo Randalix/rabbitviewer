@@ -206,11 +206,12 @@ cd RabbitViewer
 
 The install script:
 
-* Pulls the latest changes from the repo (acts as an updater when re-run)
 * Creates a virtualenv inside the repo using a compatible Python (3.10–3.13)
 * Checks that ExifTool is installed and prints install instructions if not
 * Installs the package in editable mode (source changes take effect immediately)
 * Writes `rabbitviewer` and `rabbitviewer-daemon` wrappers into `~/.local/bin/`
+* Installs the `rabbit` CLI dispatcher (see [CLI Tools](#cli-tools) below)
+* Sets up shell completions for `rabbit` (bash and zsh)
 * Adds `~/.local/bin` to your shell's PATH automatically if it isn't there already
 
 **To update**, just re-run the script from the repo directory:
@@ -257,6 +258,22 @@ rabbitviewer /path/to/photos --restart-daemon  # force a fresh daemon
 ```
 
 Logs are written to `~/.rabbitviewer/rabbitviewer.log`.
+
+---
+
+## CLI Tools
+
+The `rabbit` command provides access to standalone CLI utilities:
+
+```
+rabbit --help              # list available commands
+rabbit move-selected /dst  # move the current GUI selection to a directory
+rabbit send-stop-signal    # gracefully shut down the daemon
+```
+
+Tab completion works in both bash and zsh after running `install.sh`.
+
+New tools are added by dropping a `.py` file into `cli/` — they are discovered automatically as subcommands (underscores become hyphens, e.g. `my_tool.py` → `rabbit my-tool`).
 
 ---
 
