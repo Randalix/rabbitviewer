@@ -2,6 +2,7 @@
 
 import enum
 import logging
+import os
 import threading
 from typing import Optional
 from PySide6.QtWidgets import QWidget
@@ -12,6 +13,14 @@ from core.event_system import event_system, EventType, InspectorEventData, Daemo
 from network.socket_client import ThumbnailSocketClient
 from network import protocol
 from pydantic import ValidationError
+from plugins.video_plugin import VIDEO_EXTENSIONS
+
+_VIDEO_EXTENSIONS = frozenset(VIDEO_EXTENSIONS)
+
+
+def _is_video(path: str) -> bool:
+    _, ext = os.path.splitext(path)
+    return ext.lower() in _VIDEO_EXTENSIONS
 
 
 class _ViewMode(enum.Enum):
@@ -28,6 +37,8 @@ class InspectorView(QWidget):
     _preview_status_ready = Signal(str, str, QPointF)
     # Bridges DAEMON_NOTIFICATION from the NotificationClient thread to the GUI thread.
     _daemon_notification_received = Signal(object)
+    # Delivers a video frame grabbed on a background thread to the GUI thread.
+    _video_frame_ready = Signal(QImage)
 
     def __init__(self, config_manager=None, inspector_index: int = 0):
         super().__init__(None, Qt.Window)
@@ -45,6 +56,18 @@ class InspectorView(QWidget):
         # why: CPython GIL makes single bool read/write atomic; the worst case is
         # one extra signal emission after closeEvent, which Qt discards safely.
         self._fetch_cancelled = False
+
+        # Video scrub state
+        self._scrub_player = None       # headless mpv for frame extraction
+        self._scrub_video_path: str | None = None
+        self._scrub_duration: float = 0.0
+        self._is_video_mode: bool = False
+        # Persistent scrub worker: only one thread, processes latest request.
+        self._scrub_request: Optional[tuple] = None  # (video_path, norm_x)
+        self._scrub_lock = threading.Lock()
+        self._scrub_event = threading.Event()
+        self._scrub_thread: Optional[threading.Thread] = None
+        self._scrub_stop = False
 
         self.setWindowTitle("Inspector")
         self.setMinimumSize(200, 200)
@@ -72,6 +95,7 @@ class InspectorView(QWidget):
         self._picture_base.viewStateChanged.connect(self.update)
         self._preview_status_ready.connect(self._on_preview_status_ready)
         self._daemon_notification_received.connect(self._on_daemon_notification)
+        self._video_frame_ready.connect(self._on_video_frame_ready)
 
         self._picture_base.setZoom(self._zoom_factor)
 
@@ -109,9 +133,30 @@ class InspectorView(QWidget):
                       event_data.normalized_position.x(),
                       event_data.normalized_position.y())
 
-        self._desired_image_path = event_data.image_path
+        image_path = event_data.image_path
+        norm_pos = event_data.normalized_position
 
-        same_image = event_data.image_path == self._current_image_path
+        # ------ VIDEO PATH ------
+        if _is_video(image_path):
+            self._is_video_mode = True
+            self._desired_image_path = image_path
+            self._current_image_path = image_path
+            self._view_image_ready = True
+
+            if self._view_mode in (_ViewMode.TRACKING, _ViewMode.FIT):
+                self._request_video_frame(image_path, norm_pos.x())
+            # MANUAL: user controls scrub via mouse drag in inspector
+            self._update_window_title()
+            return
+
+        # ------ IMAGE PATH (existing logic) ------
+        if self._is_video_mode:
+            self._is_video_mode = False
+            self._update_window_title()
+
+        self._desired_image_path = image_path
+
+        same_image = image_path == self._current_image_path
         if not same_image:
             self._view_image_ready = False
 
@@ -119,7 +164,7 @@ class InspectorView(QWidget):
         # until a different image is hovered (stale only if view file is deleted).
         if same_image and self._view_image_ready:
             if self._view_mode == _ViewMode.TRACKING:
-                self.set_center(event_data.normalized_position)
+                self.set_center(norm_pos)
             return
 
         if not self.socket_client:
@@ -127,17 +172,17 @@ class InspectorView(QWidget):
 
         # If a fetch is already in flight for this exact path, skip — the result
         # will arrive via _on_preview_status_ready when the thread finishes.
-        if self._fetch_in_flight == event_data.image_path:
+        if self._fetch_in_flight == image_path:
             return
 
         # Clear the display immediately when switching to a new image.
         if not same_image and self._current_image_path is not None:
             self._picture_base.setImage(QImage())
 
-        self._fetch_in_flight = event_data.image_path
+        self._fetch_in_flight = image_path
         threading.Thread(
             target=self._fetch_preview_status,
-            args=(event_data.image_path, event_data.normalized_position),
+            args=(image_path, norm_pos),
             daemon=True,
             name="inspector-fetch",
         ).start()
@@ -229,12 +274,20 @@ class InspectorView(QWidget):
             self._update_window_title()
 
     def _update_window_title(self):
-        if self._view_mode == _ViewMode.FIT:
-            self.setWindowTitle("Inspector - Fit Mode")
-        elif self._view_mode == _ViewMode.MANUAL:
-            self.setWindowTitle(f"Inspector - Locked ({self._zoom_factor:.1f}x Zoom)")
+        if self._is_video_mode:
+            if self._view_mode == _ViewMode.FIT:
+                self.setWindowTitle("Inspector - Video Fit")
+            elif self._view_mode == _ViewMode.MANUAL:
+                self.setWindowTitle("Inspector - Video Scrub (Manual)")
+            else:
+                self.setWindowTitle("Inspector - Video Scrub (Tracking)")
         else:
-            self.setWindowTitle(f"Inspector - Tracking ({self._zoom_factor:.1f}x Zoom)")
+            if self._view_mode == _ViewMode.FIT:
+                self.setWindowTitle("Inspector - Fit Mode")
+            elif self._view_mode == _ViewMode.MANUAL:
+                self.setWindowTitle(f"Inspector - Locked ({self._zoom_factor:.1f}x Zoom)")
+            else:
+                self.setWindowTitle(f"Inspector - Tracking ({self._zoom_factor:.1f}x Zoom)")
 
     def paintEvent(self, event):
         if not self._current_image_path or not self._picture_base.has_image():
@@ -289,6 +342,14 @@ class InspectorView(QWidget):
     def mouseMoveEvent(self, event):
         if self._view_mode == _ViewMode.FIT:
             return
+
+        # Video manual scrub: mouse X maps to timeline position.
+        if self._is_video_mode and self._view_mode == _ViewMode.MANUAL:
+            if self._is_panning and self.width() > 0 and self._current_image_path:
+                norm_x = max(0.0, min(1.0, event.position().x() / self.width()))
+                self._request_video_frame(self._current_image_path, norm_x)
+            return
+
         if self._is_panning:
             delta = event.position().toPoint() - self._last_mouse_pos
             self._last_mouse_pos = event.position().toPoint()
@@ -337,9 +398,119 @@ class InspectorView(QWidget):
     def set_socket_client(self, socket_client: ThumbnailSocketClient):
         self.socket_client = socket_client
 
+    # --------------------------------------------------------- video scrub player
+
+    def _request_video_frame(self, video_path: str, norm_x: float):
+        """Post the latest scrub request; the persistent worker picks it up."""
+        with self._scrub_lock:
+            self._scrub_request = (video_path, norm_x)
+        self._scrub_event.set()
+        # Start the worker thread on first request.
+        if self._scrub_thread is None or not self._scrub_thread.is_alive():
+            self._scrub_stop = False
+            self._scrub_thread = threading.Thread(
+                target=self._scrub_worker,
+                daemon=True,
+                name="inspector-scrub-worker",
+            )
+            self._scrub_thread.start()
+
+    def _scrub_worker(self):
+        """Persistent background thread: processes the latest scrub request."""
+        try:
+            import mpv as _mpv
+        except Exception as e:
+            logging.error("Failed to import mpv for scrub worker: %s", e)
+            return
+
+        player = None
+        loaded_path: str | None = None
+        duration: float = 0.0
+
+        try:
+            player = _mpv.MPV(vo="null", ao="null", aid="no", hwdec="auto-safe")
+        except Exception as e:
+            logging.error("Failed to create scrub player: %s", e)
+            return
+
+        import time as _time
+
+        while not self._scrub_stop:
+            self._scrub_event.wait(timeout=5.0)
+            if self._scrub_stop:
+                break
+            self._scrub_event.clear()
+
+            # Drain to latest request.
+            with self._scrub_lock:
+                req = self._scrub_request
+                self._scrub_request = None
+            if req is None:
+                continue
+
+            video_path, norm_x = req
+
+            try:
+                # Load video if changed.
+                if loaded_path != video_path:
+                    player.play(video_path)
+                    for _ in range(50):
+                        _time.sleep(0.02)
+                        dur = player.duration
+                        if dur and dur > 0:
+                            break
+                    duration = player.duration or 0.0
+                    loaded_path = video_path
+                    player.pause = True
+
+                if duration <= 0:
+                    continue
+
+                target = max(0.0, min(norm_x * duration, duration))
+                player.seek(target, reference="absolute")
+                player.frame_step()
+
+                raw = player.screenshot_raw()
+                if hasattr(raw, 'tobytes'):
+                    if raw.mode != 'RGBA':
+                        raw = raw.convert('RGBA')
+                    w, h = raw.size
+                    data = raw.tobytes()
+                    qimg = QImage(data, w, h, QImage.Format_RGBA8888).copy()
+                    if not self._scrub_stop:
+                        self._video_frame_ready.emit(qimg)
+            except Exception as e:
+                logging.debug("Scrub worker frame grab failed: %s", e)
+
+        # Cleanup.
+        try:
+            player.terminate()
+        except Exception:
+            pass
+
+    @Slot(QImage)
+    def _on_video_frame_ready(self, frame: QImage):
+        """Receive a grabbed frame on the GUI thread and display it."""
+        if not self._is_video_mode:
+            return
+        if frame and not frame.isNull():
+            self._picture_base.setImage(frame)
+            self._picture_base.setViewportSize(self.size())
+            self._picture_base.setFitMode(True)
+
+    def _destroy_scrub_player(self):
+        self._scrub_stop = True
+        self._scrub_event.set()
+        if self._scrub_thread and self._scrub_thread.is_alive():
+            self._scrub_thread.join(timeout=2)
+        self._scrub_thread = None
+        self._scrub_video_path = None
+        self._scrub_duration = 0.0
+
     def closeEvent(self, event):
         # Signal any in-flight background fetch to discard its result.
         self._fetch_cancelled = True
+        self._destroy_scrub_player()
         settings = QSettings("RabbitViewer", "Inspector")
         settings.setValue(f"geometry_{self._inspector_index}", self.saveGeometry())
         settings.setValue(f"view_mode_{self._inspector_index}", self._view_mode.value)

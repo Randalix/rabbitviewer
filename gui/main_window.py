@@ -17,6 +17,14 @@ from core.event_system import event_system, EventType, InspectorEventData, Mouse
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
 from network.socket_client import ThumbnailSocketClient
 from network.gui_server import GuiServer
+from plugins.video_plugin import VIDEO_EXTENSIONS
+
+_VIDEO_EXTENSIONS = frozenset(VIDEO_EXTENSIONS)
+
+
+def _is_video(path: str) -> bool:
+    _, ext = os.path.splitext(path)
+    return ext.lower() in _VIDEO_EXTENSIONS
 
 class MainWindow(QMainWindow):
     _hover_rating_ready = Signal(str, int)  # (path, rating)
@@ -39,6 +47,7 @@ class MainWindow(QMainWindow):
 
         self.thumbnail_view = None
         self.picture_view = None
+        self.video_view = None
         self.current_hovered_image = None
         self.inspector_views: List[InspectorView] = []
         self._inspector_slot = 0
@@ -102,8 +111,13 @@ class MainWindow(QMainWindow):
     def _handle_benchmark_result(self, operation: str, time: float):
         logging.info(f"Benchmark - {operation}: {time:.3f} seconds")
 
+    def _is_detail_view_active(self) -> bool:
+        """Return True if either picture view or video view is the active widget."""
+        current = self.stacked_widget.currentWidget()
+        return current is self.picture_view or current is self.video_view
+
     def _on_thumbnail_hovered(self, path: str):
-        if self.stacked_widget.currentWidget() is self.picture_view:
+        if self._is_detail_view_active():
             return
         # Cancel any pending clear — cursor moved to another thumbnail
         self._hover_clear_timer.stop()
@@ -120,7 +134,7 @@ class MainWindow(QMainWindow):
         self._hover_prefetch_timer.start()
 
     def _on_thumbnail_left(self):
-        if self.stacked_widget.currentWidget() is self.picture_view:
+        if self._is_detail_view_active():
             return
         # Defer clear: if cursor enters another thumbnail within 100 ms the
         # timer is cancelled in _on_thumbnail_hovered, avoiding flicker.
@@ -180,7 +194,9 @@ class MainWindow(QMainWindow):
             return
         n = len(files)
         for neighbor_idx in {(idx - 1) % n, (idx + 1) % n} - {idx}:
-            self._prefetch_view_image_async(files[neighbor_idx])
+            neighbor = files[neighbor_idx]
+            if not _is_video(neighbor):
+                self._prefetch_view_image_async(neighbor)
 
     def _open_inspector_window(self):
         """Create and show a new inspector window."""
@@ -236,20 +252,28 @@ class MainWindow(QMainWindow):
             logging.warning("Stars changed but no thumbnail_view available")
 
     def _on_filters_applied(self):
-        """After filter re-applies, refresh UI state for the currently active image."""
-        # Case 1: picture_view is open — navigate away if its current image is now filtered out
+        """After filter re-applies, refresh UI state for the currently active media."""
+        # Case 1: detail view is open — navigate away if current media is now filtered out
+        current_path = None
+        active_view = None
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+            active_view = "picture"
             current_path = self.picture_view.current_path
-            visible = set(self.thumbnail_view.current_files)  # O(1) lookup
-            if current_path and current_path not in visible:
+        elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
+            active_view = "video"
+            current_path = self.video_view.current_path
+
+        if active_view and current_path:
+            visible = set(self.thumbnail_view.current_files)
+            if current_path not in visible:
                 if visible:
                     first = self.thumbnail_view.current_files[0]
-                    self.picture_view.loadImage(first)
-                    self._prefetch_neighbors(first)
+                    self._open_media_view(first)
                 else:
-                    # All images filtered out — return to thumbnail grid rather than
-                    # leaving picture_view stranded showing a now-hidden image.
-                    self.stacked_widget.setCurrentWidget(self.thumbnail_view)
+                    if active_view == "picture":
+                        self.close_picture_view()
+                    else:
+                        self.close_video_view()
             return
 
         # Case 2: thumbnail_view is active — re-emit hover so inspector/status bar refresh
@@ -298,6 +322,10 @@ class MainWindow(QMainWindow):
         self._hover_clear_timer.stop()
         self._hover_prefetch_timer.stop()
 
+        if self.video_view:
+            self.video_view.close()
+            self.video_view = None
+
         if hasattr(self, '_gui_server'):
             self._gui_server.stop()
 
@@ -343,7 +371,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager = HotkeyManager(self, hotkeys_config)
         
         self.hotkey_manager.add_action("toggle_inspector", self._open_inspector_window)
-        self.hotkey_manager.add_action("escape_picture_view", self.close_picture_view)
+        self.hotkey_manager.add_action("escape_picture_view", self._close_active_media_view)
         self.hotkey_manager.add_action("close_or_quit", self._handle_close_or_quit)
         self.hotkey_manager.add_action("next_image", lambda: self.navigate_to_image("next"))
         self.hotkey_manager.add_action("previous_image", lambda: self.navigate_to_image("previous"))
@@ -372,16 +400,50 @@ class MainWindow(QMainWindow):
         
     @Slot()
     def _handle_thumbnail_double_click(self):
-        """Handle double-click on thumbnail by opening the currently hovered image."""
+        """Handle double-click on thumbnail by opening the currently hovered media."""
         target_image = self.current_hovered_image
         if not target_image:
             return
-        self._open_picture_view(target_image)
-        
+        self._open_media_view(target_image)
+
+    def _open_media_view(self, file_path: str):
+        """Route to PictureView or VideoView based on file type."""
+        if not os.path.exists(file_path):
+            logging.error(f"File does not exist: {file_path}")
+            return
+        if _is_video(file_path):
+            self._open_video_view(file_path)
+        else:
+            self._open_picture_view(file_path)
+
+    def _open_video_view(self, video_path: str):
+        """Open a video in the embedded mpv player."""
+        # Close picture view if it's open (switching media types).
+        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+            self.picture_view.close()
+            self.picture_view = None
+        try:
+            if not self.video_view:
+                from gui.video_view import VideoView
+                self.video_view = VideoView()
+                self.video_view.escapePressed.connect(self.close_video_view)
+                self.video_view.set_socket_client(self.socket_client)
+                self.stacked_widget.addWidget(self.video_view)
+            self.video_view.loadVideo(video_path)
+            self._hover_clear_timer.stop()
+            self.stacked_widget.setCurrentWidget(self.video_view)
+            self.video_view.setFocus()
+        except Exception as e:
+            logging.error(f"Failed to open video view: {e}", exc_info=True)
+
     def _open_picture_view(self, image_path: str):
         if not os.path.exists(image_path):
             logging.error(f"Original file does not exist: {image_path}")
             return
+        # Close video view if switching from video to image.
+        if self.video_view and self.stacked_widget.currentWidget() is self.video_view:
+            self.video_view.close()
+            self.video_view = None
         try:
             if not self.picture_view:
                 self.picture_view = PictureView()
@@ -397,13 +459,22 @@ class MainWindow(QMainWindow):
             logging.error(f"Exception when opening Picture View: {e}", exc_info=True)
             
     def _handle_close_or_quit(self):
-        """Cascade: close picture view → close last inspector → quit."""
+        """Cascade: close media view → close last inspector → quit."""
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             self.close_picture_view()
+        elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
+            self.close_video_view()
         elif self.inspector_views:
             self.inspector_views[-1].close()
         else:
             self.close()
+
+    def _close_active_media_view(self):
+        """Close whichever media view is active."""
+        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+            self.close_picture_view()
+        elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
+            self.close_video_view()
 
     def close_picture_view(self):
         """Close picture view and return to thumbnail view."""
@@ -423,17 +494,37 @@ class MainWindow(QMainWindow):
         except RuntimeError as e:
             logging.error(f"Error closing picture view: {e}", exc_info=True)
 
-    def navigate_to_image(self, direction: str):
-        """Navigate to next/previous image in picture view using visible images only."""
-        if not self.picture_view or not self.picture_view.current_path:
-            return
-            
+    def close_video_view(self):
+        """Close video view and return to thumbnail view."""
+        logging.debug("Closing video view")
         try:
+            if self.video_view:
+                current_path = self.video_view.current_path
+                self.stacked_widget.setCurrentWidget(self.thumbnail_view)
+                if current_path:
+                    self.thumbnail_view.setHighlightedThumbnail(current_path)
+                self.video_view.close()
+                self.video_view = None
+        except RuntimeError as e:
+            logging.error(f"Error closing video view: {e}", exc_info=True)
+
+    def navigate_to_image(self, direction: str):
+        """Navigate to next/previous media in the current view."""
+        # Get current path from whichever view is active.
+        current_path = None
+        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             current_path = self.picture_view.current_path
+        elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
+            current_path = self.video_view.current_path
+
+        if not current_path:
+            return
+
+        try:
             try:
                 current_idx = self.thumbnail_view.current_files.index(current_path)
             except ValueError:
-                logging.warning(f"Current image {current_path} not found in visible files")
+                logging.warning(f"Current media {current_path} not found in visible files")
                 return
             num_visible = len(self.thumbnail_view.current_files)
             if num_visible == 0:
@@ -445,7 +536,6 @@ class MainWindow(QMainWindow):
             else:
                 return
             new_path = self.thumbnail_view.current_files[new_idx]
-            self.picture_view.loadImage(new_path)
-            self._prefetch_neighbors(new_path)
+            self._open_media_view(new_path)
         except Exception as e:  # why: loadImage delegates to format plugins which may raise arbitrarily
-            logging.error(f"Error navigating to {direction} image: {e}", exc_info=True)
+            logging.error(f"Error navigating to {direction} media: {e}", exc_info=True)
