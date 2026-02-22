@@ -3,11 +3,90 @@ Shared pytest fixtures for RabbitViewer tests.
 """
 import os
 import sys
-import pytest
-from PIL import Image
+import types
 
 # Ensure project root is on path for all tests
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# ---------------------------------------------------------------------------
+# pydantic stub — allow network/protocol.py to be imported without pydantic.
+# Only installed when pydantic is absent; a real installation takes precedence.
+# ---------------------------------------------------------------------------
+if 'pydantic' not in sys.modules:
+    _REQUIRED = object()  # sentinel for required fields with no default
+
+    def _field_stub(*args, **kwargs):
+        # why: Field(default_factory=...) passes no positional arg; return None so
+        # _BaseModel.__init__ doesn't propagate _REQUIRED sentinel into instances.
+        if args and args[0] is not ...:
+            return args[0]
+        if 'default' in kwargs:
+            return kwargs['default']
+        return _REQUIRED if not kwargs else None
+
+    class _BaseModel:
+        """Minimal pydantic.BaseModel stub for test environments."""
+        def __init__(self, **kwargs):
+            for klass in reversed(type(self).__mro__):
+                for name, val in vars(klass).items():
+                    if not name.startswith('_') and val is not _REQUIRED:
+                        object.__setattr__(self, name, val)
+            for k, v in kwargs.items():
+                object.__setattr__(self, k, v)
+
+        @classmethod
+        def model_validate(cls, data: dict):
+            return cls(**data)
+
+        def model_dump(self) -> dict:
+            return dict(self.__dict__)
+
+    class _ValidationError(Exception):
+        pass
+
+    _pydantic = types.ModuleType('pydantic')
+    _pydantic.BaseModel = _BaseModel          # type: ignore[attr-defined]
+    _pydantic.Field = _field_stub             # type: ignore[attr-defined]
+    _pydantic.ValidationError = _ValidationError  # type: ignore[attr-defined]
+    sys.modules['pydantic'] = _pydantic
+
+# ---------------------------------------------------------------------------
+# PySide6 stubs — allow daemon/core modules to be imported without Qt installed.
+# Only installed when PySide6 is absent; a real installation takes precedence.
+# ---------------------------------------------------------------------------
+if 'PySide6' not in sys.modules:
+    class _Signal:
+        """No-op descriptor mirroring the PySide6.QtCore.Signal API."""
+        def __init__(self, *args): pass
+        def __get__(self, obj, type=None): return self
+        def emit(self, *args): pass
+        def connect(self, *args): pass
+        def disconnect(self, *args): pass
+
+    class _QObject:
+        def __init__(self, parent=None): pass
+
+    class _QPointF:
+        # why: RabbitViewer reads .x/.y as attributes; real QPointF exposes .x()/.y()
+        # as methods. Extend to callables if method-call form is ever exercised in tests.
+        def __init__(self, x=0.0, y=0.0): self.x = x; self.y = y
+
+    class _Qt:
+        pass
+
+    _qtcore = types.ModuleType('PySide6.QtCore')
+    _qtcore.QObject = _QObject        # type: ignore[attr-defined]
+    _qtcore.Signal = _Signal          # type: ignore[attr-defined]
+    _qtcore.QPointF = _QPointF        # type: ignore[attr-defined]
+    _qtcore.Qt = _Qt                  # type: ignore[attr-defined]
+
+    _pyside6 = types.ModuleType('PySide6')
+    _pyside6.QtCore = _qtcore         # type: ignore[attr-defined]
+    sys.modules['PySide6'] = _pyside6
+    sys.modules['PySide6.QtCore'] = _qtcore
+
+import pytest
+from PIL import Image
 
 import core.metadata_database as _mdb_module
 from core.metadata_database import MetadataDatabase

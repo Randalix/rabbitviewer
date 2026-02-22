@@ -193,7 +193,7 @@ class TestFilterAffectsRating:
 class TestStarDragContext:
 
     def test_defaults(self):
-        from gui.components.star_button import StarDragContext
+        from gui.components.star_drag_context import StarDragContext
 
         ctx = StarDragContext()
         assert ctx.is_active is False
@@ -201,7 +201,7 @@ class TestStarDragContext:
         assert ctx.last_button is None
 
     def test_independent_instances(self):
-        from gui.components.star_button import StarDragContext
+        from gui.components.star_drag_context import StarDragContext
 
         a, b = StarDragContext(), StarDragContext()
         a.is_active = True

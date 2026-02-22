@@ -1,15 +1,7 @@
 from PySide6.QtWidgets import QPushButton, QApplication
 from PySide6.QtCore import Qt, Signal, QPoint
 import logging
-
-
-class StarDragContext:
-    """Shared mutable state for a group of StarButtons that drag together."""
-
-    def __init__(self):
-        self.is_active = False
-        self.initial_state = False
-        self.last_button = None
+from gui.components.star_drag_context import StarDragContext
 
 
 class StarButton(QPushButton):

@@ -8,11 +8,7 @@ from datetime import datetime
 
 import pytest
 
-# Import from repo root
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from bench_sessions import parse_gui_log, annotate_dropped_notifs
+from benchmarks.bench_sessions import parse_gui_log, annotate_dropped_notifs
 
 # ---------------------------------------------------------------------------
 # Fixtures

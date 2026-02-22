@@ -3,98 +3,11 @@ from collections import deque
 from queue import PriorityQueue, Empty, Full, Queue
 import time
 import logging
-from dataclasses import dataclass, field
 from PySide6.QtCore import QObject, Signal
-from enum import IntEnum, Enum, auto
 from typing import Callable, Any, Optional, Dict, List, Set, Generator
-from network import protocol # Import protocol for notifications
+from core.priority import Priority, TaskState, TaskType, SourceJob, RenderTask  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-class Priority(IntEnum):
-    """
-    Priority levels for tasks (higher number = higher priority).
-    - BACKGROUND_SCAN: For non-interactive, background jobs like checking DB consistency.
-    - CONTENT_HASH: Slow tasks like full file hashing.
-    - LOW: Low-priority tasks.
-    - GUI_REQUEST_LOW: For background loading of non-visible thumbnails
-    - NORMAL: Default priority for standard operations (e.g., loading thumbnails for a new directory).
-    - HIGH: Important tasks that should be processed soon.
-    - GUI_REQUEST: For tasks directly triggered by user interaction that need immediate feedback.
-    - SHUTDOWN: Highest priority to ensure it's processed immediately.
-    """
-    BACKGROUND_SCAN = 10
-    CONTENT_HASH = 20
-    LOW = 30
-    GUI_REQUEST_LOW = 40 # For background loading of non-visible thumbnails
-    NORMAL = 50
-    HIGH = 70
-    GUI_REQUEST = 90
-    FULLRES_REQUEST = 95  # Picture viewer — preempts all background/thumbnail work
-    SHUTDOWN = 999
-
-class TaskState(IntEnum):
-    PENDING = 1 # Task has been submitted but dependencies not met OR not yet queued
-    RUNNING = 2
-    QUEUED = 3  # Task is ready to run and waiting in the priority queue
-    COMPLETED = 4
-    FAILED = 5
-
-class TaskType(Enum):
-    SIMPLE = auto()
-    GENERATOR = auto()
-
-@dataclass
-class SourceJob:
-    """A self-contained blueprint for a workflow."""
-    priority: Priority
-    job_id: str
-    generator: Generator[Any, None, None]
-    task_factory: Callable[[Any, Priority], List['RenderTask']] # The "how-to" for each item
-    create_tasks: bool = True
-    _cancel_event: threading.Event = field(default_factory=threading.Event, compare=False)
-
-    def __lt__(self, other):
-        return self.priority > other.priority
-
-    def cancel(self):
-        """Signals the job to stop processing."""
-        self._cancel_event.set()
-
-    def is_cancelled(self):
-        """Checks if the job has been cancelled."""
-        return self._cancel_event.is_set()
-
-@dataclass
-class RenderTask:
-    """
-    Represents a task in the dependency graph. Can be invalidated by setting is_active=False.
-    """
-    # 1. Required arguments first
-    task_id: str = field(compare=False)
-    func: Callable = field(compare=False)
-    priority: Priority = field(compare=False)
-    
-    # 2. Arguments with default values after
-    timestamp: float = field(compare=False, default_factory=time.perf_counter)
-    args: tuple = field(compare=False, default_factory=tuple)
-    kwargs: dict = field(compare=False, default_factory=dict)
-    task_type: TaskType = field(compare=False, default=TaskType.SIMPLE)
-    dependencies: Set[str] = field(compare=False, default_factory=set)
-    dependents: Set[str] = field(compare=False, default_factory=set)
-    state: TaskState = field(compare=False, default=TaskState.PENDING)
-    worker_thread_id: Optional[int] = field(compare=False, default=None)
-    on_complete_callback: Optional[Callable] = field(compare=False, default=None)
-    is_active: bool = field(compare=False, default=True)
-
-    def __lt__(self, other):
-        """Enable priority queue sorting: higher priority comes first, then older tasks."""
-        if not isinstance(other, RenderTask):
-            return NotImplemented
-        # Sort by priority descending (higher number first), then by timestamp ascending (older first)
-        if self.priority != other.priority:
-            return self.priority > other.priority # Higher priority value means comes first
-        return self.timestamp < other.timestamp # Lower timestamp means comes first
 
 class RenderManager(QObject):
     """
@@ -388,6 +301,7 @@ class RenderManager(QObject):
 
     def _emit_scan_complete(self, job: SourceJob, slice_index: int):
         """Emit a scan_complete notification for gui_scan jobs."""
+        from network import protocol
         job_parts = job.job_id.split('::', 2)
         session_id = job_parts[1] if len(job_parts) > 2 else None
         job_path = job_parts[2] if len(job_parts) > 2 else job_parts[-1]
@@ -432,6 +346,7 @@ class RenderManager(QObject):
         session_id = job_parts[1] if len(job_parts) > 2 else None
         job_path = job_parts[2] if len(job_parts) > 2 else job_parts[-1]
 
+        from network import protocol
         notification_data = protocol.ScanProgressData(path=job_path, files=items_to_process)
         notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
         try:

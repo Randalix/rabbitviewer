@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional, Set, Dict
 from core.event_system import event_system, EventType, StatusMessageEventData, StatusSection
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand
-from core.rendermanager import Priority
+from core.priority import Priority
 
 class ScriptAPI:
     """API interface provided to scripts for interacting with RabbitViewer."""

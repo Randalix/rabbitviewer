@@ -1,3 +1,4 @@
+from __future__ import annotations
 import socket
 import json
 import logging
@@ -6,10 +7,15 @@ import threading
 import queue
 import time
 import uuid
-from typing import List, Optional
-from pydantic import ValidationError
-from . import protocol
+from typing import List, Optional, TYPE_CHECKING
+try:
+    from pydantic import ValidationError
+except ImportError:
+    class ValidationError(Exception):  # type: ignore[assignment]
+        pass
 from ._framing import recv_exactly, MAX_MESSAGE_SIZE
+if TYPE_CHECKING:
+    from . import protocol
 
 class SocketConnection:
     """Represents a single socket connection with retry logic"""
@@ -143,6 +149,7 @@ class ThumbnailSocketClient:
 
     def _send_request(self, request: protocol.Request, response_model: type[protocol.Response]) -> Optional[protocol.Response]:
         """Send a request using a connection from the pool and validate the response."""
+        from . import protocol
         conn = self.connection_pool.get_connection()
         if not conn:
             return None
@@ -230,6 +237,7 @@ class ThumbnailSocketClient:
 
     def _send_simple_command(self, command: str) -> bool:
         """Helper for simple, non-Pydantic commands."""
+        from . import protocol
         conn = self.connection_pool.get_connection()
         if not conn: return False
         try:
