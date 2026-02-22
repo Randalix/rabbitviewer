@@ -4,6 +4,8 @@ from PySide6.QtGui import QFont, QFontMetrics
 from typing import Optional
 import logging
 
+from gui.components.scrolling_label import ScrollingLabel
+
 # Sentinel: rating section is blank because no image is hovered.
 # Distinct from None (image hovered, but no rating metadata available → "—").
 _CLEARED = object()
@@ -35,8 +37,7 @@ class CustomStatusBar(QStatusBar):
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(6)
 
-        self._filepath_label = QLabel()
-        self._filepath_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._filepath_label = ScrollingLabel()
         layout.addWidget(self._filepath_label, 3)
 
         self._rating_label = QLabel()
@@ -115,13 +116,7 @@ class CustomStatusBar(QStatusBar):
         return "".join(parts) if parts else ""
 
     def _refresh_elision(self):
-        fm_fp = QFontMetrics(self._filepath_label.font())
-        available_fp = self._filepath_label.width()
-        if available_fp > 0:
-            elided_fp = fm_fp.elidedText(self._raw_filepath, Qt.ElideLeft, available_fp)
-        else:
-            elided_fp = self._raw_filepath
-        self._filepath_label.setText(elided_fp)
+        self._filepath_label.setText(self._raw_filepath)
         self._filepath_label.setToolTip(self._raw_filepath)
 
         if self._raw_rating is not _CLEARED:
