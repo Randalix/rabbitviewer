@@ -254,9 +254,14 @@ _rabbit() {
         local cmds
         cmds="$(rabbit --complete 2>/dev/null)"
         COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
+    elif [[ "$COMP_CWORD" -ge 2 ]]; then
+        local subcmd="${COMP_WORDS[1]}"
+        local flags
+        flags="$(rabbit --complete "$subcmd" 2>/dev/null)"
+        COMPREPLY=($(compgen -W "$flags" -- "$cur"))
     fi
 }
-complete -F _rabbit rabbit
+complete -o default -F _rabbit rabbit
 COMP
     green "  bash completions → $dir/rabbit"
 }
@@ -271,7 +276,13 @@ _rabbit() {
     if (( CURRENT == 2 )); then
         commands=("${(@f)$(rabbit --complete 2>/dev/null)}")
         _describe 'command' commands
-    else
+    elif (( CURRENT >= 3 )); then
+        local subcmd="${words[2]}"
+        local -a flags
+        flags=("${(@f)$(rabbit --complete "$subcmd" 2>/dev/null)}")
+        if (( ${#flags} )); then
+            _describe 'flag' flags
+        fi
         _files
     fi
 }

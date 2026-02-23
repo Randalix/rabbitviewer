@@ -42,13 +42,51 @@ def _print_usage(commands: dict[str, Path]) -> None:
     print()
 
 
+def _extract_flags(path: Path) -> list[str]:
+    """Return completions for a subcommand.
+
+    If the source defines ``__completions__ = [...]`` use that list;
+    otherwise fall back to scanning for ``--flag`` strings.
+    """
+    import ast, re
+    try:
+        src = path.read_text()
+    except OSError:
+        return []
+    # Look for a module-level __completions__ list.
+    try:
+        tree = ast.parse(src)
+        for node in ast.iter_child_nodes(tree):
+            if (isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "__completions__"):
+                val = ast.literal_eval(node.value)
+                if isinstance(val, list):
+                    return val
+    except Exception:
+        pass
+    return sorted(set(re.findall(r'--[a-z][-a-z0-9]*', src)))
+
+
 def _complete() -> None:
-    """Print completion candidates and exit."""
+    """Print completion candidates and exit.
+
+    ``rabbit --complete``            → subcommand names + --help
+    ``rabbit --complete <subcmd>``   → flags for that subcommand
+    """
     commands = _discover_commands()
+
+    # If a subcommand was given, emit its flags.
+    if len(sys.argv) >= 3:
+        subcmd = sys.argv[2].replace("_", "-")
+        if subcmd in commands:
+            flags = _extract_flags(commands[subcmd])
+            if flags:
+                print("\n".join(flags))
+        return
+
     top_level = list(commands.keys()) + ["--help"]
-    # COMP_LINE / COMP_POINT are set by bash; for zsh we get the words
-    # via the completion function. We just dump candidates here and let
-    # the shell filter.
     print("\n".join(top_level))
 
 
@@ -82,7 +120,7 @@ def main() -> None:
     sys.argv = [str(script)] + sub_argv
 
     # Import and run the module's main() if it has one, otherwise exec.
-    spec = importlib.util.spec_from_file_location(script.stem, script)
+    spec = importlib.util.spec_from_file_location("__main__", script)
     if spec is None or spec.loader is None:
         print(f"rabbit: failed to load '{cmd}'", file=sys.stderr)
         sys.exit(1)
