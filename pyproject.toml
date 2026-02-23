@@ -21,8 +21,7 @@ cr3 = ["rawpy", "numpy", "imageio"]
 dev = ["pytest==7.2.1", "pytest-qt==4.0.2"]
 
 [project.scripts]
-rabbitviewer = "main:main"
-rabbitviewer-daemon = "rabbitviewer_daemon:main"
+rabbit = "cli.rabbit:main"
 
 [tool.setuptools]
 py-modules = ["main", "rabbitviewer_daemon"]
