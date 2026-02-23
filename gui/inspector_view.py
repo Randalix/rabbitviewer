@@ -116,7 +116,10 @@ class InspectorView(QWidget):
                 data = protocol.PreviewsReadyData.model_validate(event_data.data)
 
                 # If this is the image we are waiting for, load it directly.
-                if data.view_image_path and data.image_path == self._current_image_path:
+                # Skip if in video mode — scrub worker manages the display.
+                if (data.view_image_path
+                        and data.image_path == self._current_image_path
+                        and not self._is_video_mode):
                     self._picture_base.loadImageFromPath(data.view_image_path)
                     self._view_image_ready = True
             # why: ValidationError covers malformed daemon payload; OSError covers
@@ -428,7 +431,9 @@ class InspectorView(QWidget):
         duration: float = 0.0
 
         try:
-            player = _mpv.MPV(vo="null", ao="null", aid="no", hwdec="auto-safe")
+            player = _mpv.MPV(vo="null", ao="null", aid="no", hwdec="auto-safe",
+                               hr_seek="yes", keep_open="yes",
+                               pause=True)
         except Exception as e:
             logging.error("Failed to create scrub player: %s", e)
             return
@@ -454,21 +459,26 @@ class InspectorView(QWidget):
                 # Load video if changed.
                 if loaded_path != video_path:
                     player.play(video_path)
-                    for _ in range(50):
+                    # Player starts paused; poll until demuxer reports duration.
+                    for _ in range(100):
                         _time.sleep(0.02)
                         dur = player.duration
                         if dur and dur > 0:
                             break
                     duration = player.duration or 0.0
                     loaded_path = video_path
-                    player.pause = True
 
                 if duration <= 0:
                     continue
 
                 target = max(0.0, min(norm_x * duration, duration))
                 player.seek(target, reference="absolute")
-                player.frame_step()
+                # Wait for the async seek to settle before grabbing.
+                for _ in range(25):
+                    _time.sleep(0.01)
+                    tp = player.time_pos
+                    if tp is not None and abs(tp - target) < 0.1:
+                        break
 
                 raw = player.screenshot_raw()
                 if hasattr(raw, 'tobytes'):
