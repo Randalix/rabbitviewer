@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from network.socket_client import ThumbnailSocketClient
 from network import protocol
-from pydantic import ValidationError
+_ValidationErrors = (ValueError, TypeError, KeyError)
 from gui.components.grid_layout_manager import GridLayoutManager
 from utils.thumbnail_filters import matches_filter
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, ToggleSelectionCommand, RemoveFromSelectionCommand
@@ -616,7 +616,7 @@ class ThumbnailViewWidget(QFrame):
                         self._preview_tick_timer.start()
                 else:
                     logging.debug(f"[thumb] previews_ready has no thumbnail_path for {os.path.basename(data.image_path)}")
-            except ValidationError as e:
+            except _ValidationErrors as e:
                 logging.error(f"Error processing 'previews_ready' notification: {e}", exc_info=True)
         elif event_data.notification_type == "scan_progress":
             try:
@@ -628,7 +628,7 @@ class ThumbnailViewWidget(QFrame):
                     logging.info(f"[startup] first scan_progress: {elapsed_ms:.0f} ms after load_directory ({len(data.files)} files in batch)")
                 logging.info(f"Received scan_progress batch for '{data.path}' with {len(data.files)} files.")
                 self._add_image_batch(sorted(data.files))
-            except ValidationError as e:
+            except _ValidationErrors as e:
                 logging.error(f"Error processing 'scan_progress' notification: {e}", exc_info=True)
 
         elif event_data.notification_type == "scan_complete":

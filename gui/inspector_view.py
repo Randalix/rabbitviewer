@@ -12,7 +12,6 @@ from .picture_base import PictureBase
 from core.event_system import event_system, EventType, InspectorEventData, DaemonNotificationEventData
 from network.socket_client import ThumbnailSocketClient
 from network import protocol
-from pydantic import ValidationError
 from plugins.video_plugin import VIDEO_EXTENSIONS
 
 _VIDEO_EXTENSIONS = frozenset(VIDEO_EXTENSIONS)
@@ -124,7 +123,7 @@ class InspectorView(QWidget):
                     self._view_image_ready = True
             # why: ValidationError covers malformed daemon payload; OSError covers
             # loadImageFromPath on a path deleted between previews_ready and load
-            except (ValidationError, OSError) as e:
+            except (ValueError, TypeError, KeyError, OSError) as e:
                 logging.error("Error processing 'previews_ready' in InspectorView: %s", e, exc_info=True)
 
     def _handle_inspector_update(self, event_data: InspectorEventData):

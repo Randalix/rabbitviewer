@@ -8,11 +8,7 @@ import queue
 import time
 import uuid
 from typing import List, Optional, TYPE_CHECKING
-try:
-    from pydantic import ValidationError
-except ImportError:
-    class ValidationError(Exception):  # type: ignore[assignment]
-        pass
+_ValidationErrors = (ValueError, TypeError, KeyError)
 from ._framing import recv_exactly, MAX_MESSAGE_SIZE
 if TYPE_CHECKING:
     from . import protocol as protocol
@@ -175,7 +171,7 @@ class ThumbnailSocketClient:
                 return protocol.ErrorResponse.model_validate(response_dict)
             return response_model.model_validate(response_dict)
 
-        except ValidationError as e:
+        except _ValidationErrors as e:
             logging.error(f"Client-side validation error for command '{request.command}': {e}")
             return protocol.ErrorResponse(message=str(e))
         except Exception as e:  # why: socket and protocol errors from external daemon are untyped

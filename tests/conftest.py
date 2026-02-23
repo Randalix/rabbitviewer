@@ -8,47 +8,6 @@ import types
 # Ensure project root is on path for all tests
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# ---------------------------------------------------------------------------
-# pydantic stub — allow network/protocol.py to be imported without pydantic.
-# Only installed when pydantic is absent; a real installation takes precedence.
-# ---------------------------------------------------------------------------
-if 'pydantic' not in sys.modules:
-    _REQUIRED = object()  # sentinel for required fields with no default
-
-    def _field_stub(*args, **kwargs):
-        # why: Field(default_factory=...) passes no positional arg; return None so
-        # _BaseModel.__init__ doesn't propagate _REQUIRED sentinel into instances.
-        if args and args[0] is not ...:
-            return args[0]
-        if 'default' in kwargs:
-            return kwargs['default']
-        return _REQUIRED if not kwargs else None
-
-    class _BaseModel:
-        """Minimal pydantic.BaseModel stub for test environments."""
-        def __init__(self, **kwargs):
-            for klass in reversed(type(self).__mro__):
-                for name, val in vars(klass).items():
-                    if not name.startswith('_') and val is not _REQUIRED:
-                        object.__setattr__(self, name, val)
-            for k, v in kwargs.items():
-                object.__setattr__(self, k, v)
-
-        @classmethod
-        def model_validate(cls, data: dict):
-            return cls(**data)
-
-        def model_dump(self) -> dict:
-            return dict(self.__dict__)
-
-    class _ValidationError(Exception):
-        pass
-
-    _pydantic = types.ModuleType('pydantic')
-    _pydantic.BaseModel = _BaseModel          # type: ignore[attr-defined]
-    _pydantic.Field = _field_stub             # type: ignore[attr-defined]
-    _pydantic.ValidationError = _ValidationError  # type: ignore[attr-defined]
-    sys.modules['pydantic'] = _pydantic
 
 # ---------------------------------------------------------------------------
 # PySide6 stubs — allow daemon/core modules to be imported without Qt installed.

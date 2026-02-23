@@ -11,7 +11,7 @@ from core.directory_scanner import DirectoryScanner
 from core.rendermanager import Priority, TaskType, SourceJob
 from . import protocol
 from ._framing import MAX_MESSAGE_SIZE
-from pydantic import ValidationError
+_ValidationErrors = (ValueError, TypeError, KeyError)
 import queue
 
 class ThumbnailSocketServer:
@@ -263,7 +263,7 @@ class ThumbnailSocketServer:
             response_model = self._dispatch_command(command, request_data)
             return response_model.model_dump_json()
 
-        except ValidationError as e:
+        except _ValidationErrors as e:
             return protocol.ErrorResponse(message=f"Validation Error: {e}").model_dump_json()
         except Exception as e:  # why: any unhandled error from handler dispatch must not crash the server
             logging.error(f"Error processing request: {e}", exc_info=True)
