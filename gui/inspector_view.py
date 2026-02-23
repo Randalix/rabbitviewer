@@ -52,6 +52,7 @@ class InspectorView(QWidget):
 
         # Background-fetch tracking: only one socket fetch in flight at a time.
         self._desired_image_path: Optional[str] = None
+        self._desired_norm_pos: QPointF = QPointF(0.5, 0.5)
         self._fetch_in_flight: Optional[str] = None
         # why: CPython GIL makes single bool read/write atomic; the worst case is
         # one extra signal emission after closeEvent, which Qt discards safely.
@@ -115,13 +116,16 @@ class InspectorView(QWidget):
             try:
                 data = protocol.PreviewsReadyData.model_validate(event_data.data)
 
-                # If this is the image we are waiting for, load it directly.
+                # Accept previews for the image we already display OR the image
+                # the user currently wants (slow-drive case: the fetch returned
+                # empty and _current_image_path was never set to the desired path).
                 # Skip if in video mode — scrub worker manages the display.
-                if (data.view_image_path
-                        and data.image_path == self._current_image_path
-                        and not self._is_video_mode):
-                    self._picture_base.loadImageFromPath(data.view_image_path)
-                    self._view_image_ready = True
+                target = data.image_path
+                is_target = (target == self._current_image_path
+                             or target == self._desired_image_path)
+                if data.view_image_path and is_target and not self._is_video_mode:
+                    norm_pos = self._desired_norm_pos if self._view_mode == _ViewMode.TRACKING else QPointF(0.5, 0.5)
+                    self.update_view(target, data.view_image_path, norm_pos)
             # why: ValidationError covers malformed daemon payload; OSError covers
             # loadImageFromPath on a path deleted between previews_ready and load
             except (ValidationError, OSError) as e:
@@ -143,6 +147,7 @@ class InspectorView(QWidget):
         if _is_video(image_path):
             self._is_video_mode = True
             self._desired_image_path = image_path
+            self._desired_norm_pos = norm_pos
             self._current_image_path = image_path
             self._view_image_ready = True
 
@@ -158,6 +163,7 @@ class InspectorView(QWidget):
             self._update_window_title()
 
         self._desired_image_path = image_path
+        self._desired_norm_pos = norm_pos
 
         same_image = image_path == self._current_image_path
         if not same_image:

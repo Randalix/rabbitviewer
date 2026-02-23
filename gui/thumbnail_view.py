@@ -380,6 +380,9 @@ class ThumbnailViewWidget(QFrame):
         elif isinstance(obj, ThumbnailLabel):
             if event.type() == QEvent.Type.Enter:
                 self._set_hovered_label(obj)
+                # Emit an initial inspector event so the inspector view updates
+                # immediately on hover, even if the mouse doesn't move further.
+                obj._queueInspectorEvent(QPointF(obj.rect().center()))
             elif event.type() == QEvent.Type.Leave:
                 self._clear_hovered_label(obj)
             return False # Important: Forward event so Label can also process it
