@@ -279,14 +279,12 @@ class ThumbnailManager:
 
         return thumbnail_path
 
-    def _generate_view_image_task(self, image_path: str, expected_session_id: Optional[str] = None):
-        """
-        Worker task (Stage C): generates the full-resolution view image (~7-17s on NAS).
-        Only called by the Stage C SourceJob after all thumbnails are cached.
-        Sends previews_ready with both thumbnail_path and view_image_path on success.
+    def _generate_view_image_task(self, image_path: str, expected_session_id: Optional[str] = None,
+                                    cancel_event: Optional[threading.Event] = None):
+        """Worker task (Stage C): generates the full-resolution view image.
 
-        expected_session_id: if provided, aborts before the expensive exiftool call
-        when the GUI has navigated away, freeing the worker for the new session.
+        Aborts before the expensive exiftool call if *expected_session_id* is
+        stale or *cancel_event* is set.
         """
         if not os.path.exists(image_path):
             logger.warning(f"File not found during view image processing: '{image_path}'. Queuing JIT database cleanup.")
@@ -327,6 +325,9 @@ class ThumbnailManager:
 
         md5_hash = self._hash_file(image_path)
         if not md5_hash:
+            return None
+
+        if cancel_event and cancel_event.is_set():
             return None
 
         # Slow step: exiftool -JpgFromRaw, 7-17s per CR3 on NAS.
@@ -482,6 +483,29 @@ class ThumbnailManager:
             task_ids.add(path)              # thumbnail task id
             task_ids.add(f"meta::{path}")   # metadata task id
         self.render_manager.downgrade_task_priorities(task_ids, priority)
+
+    def request_speculative_fullres(self, image_path: str, priority: Priority,
+                                     gui_session_id: Optional[str] = None):
+        """Submit or upgrade a speculative fullres task for heatmap pre-caching."""
+        view_task_id = f"view::{image_path}"
+
+        paths = self.metadata_db.get_thumbnail_paths(image_path)
+        existing_view = paths.get('view_image_path')
+        if existing_view and os.path.exists(existing_view):
+            return
+
+        self.render_manager.submit_task(
+            view_task_id, priority,
+            self._generate_view_image_task, image_path,
+            expected_session_id=gui_session_id,
+            cancel_event=threading.Event(),
+        )
+
+    def cancel_speculative_fullres(self, image_path: str):
+        self.render_manager.cancel_task(f"view::{image_path}")
+
+    def cancel_speculative_fullres_batch(self, image_paths: List[str]):
+        self.render_manager.cancel_tasks([f"view::{p}" for p in image_paths])
 
     def _process_view_image_task(self, image_path: str, md5_hash: str):
         logger.debug(f"Starting view image task for {image_path}")

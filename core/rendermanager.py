@@ -65,6 +65,28 @@ class RenderManager(QObject):
         with self.active_jobs_lock:
             return list(self.active_jobs.keys())
 
+    def cancel_task(self, task_id: str) -> bool:
+        """Cooperatively cancel a task (set cancel_event + mark inactive)."""
+        with self.graph_lock:
+            task = self.task_graph.get(task_id)
+            if task and task.cancel_event:
+                task.cancel_event.set()
+                task.is_active = False
+                return True
+        return False
+
+    def cancel_tasks(self, task_ids: List[str]) -> int:
+        """Batch-cancel multiple tasks under a single lock acquisition."""
+        count = 0
+        with self.graph_lock:
+            for task_id in task_ids:
+                task = self.task_graph.get(task_id)
+                if task and task.cancel_event:
+                    task.cancel_event.set()
+                    task.is_active = False
+                    count += 1
+        return count
+
     def cancel_job(self, job_id: str):
         """Cancels a source job, preventing any further processing of its items."""
         with self.active_jobs_lock:
@@ -99,7 +121,8 @@ class RenderManager(QObject):
                     dependencies: Optional[Set[str]] = None,
                     callback: Optional[Callable] = None,
                     task_type: TaskType = TaskType.SIMPLE,
-                    on_complete_callback: Optional[Callable] = None, # New parameter
+                    on_complete_callback: Optional[Callable] = None,
+                    cancel_event: Optional[threading.Event] = None,
                     **kwargs) -> bool:
         """
         Submits a task to the orchestrator. If a task with the same ID exists,
@@ -153,7 +176,8 @@ class RenderManager(QObject):
                         task_id=task.task_id, func=func, priority=priority,
                         args=args, kwargs=kwargs, dependencies=(dependencies or set()).copy(),
                         task_type=task.task_type, on_complete_callback=on_complete_callback,
-                        dependents=task.dependents # Preserve dependents
+                        dependents=task.dependents, # Preserve dependents
+                        cancel_event=task.cancel_event or cancel_event,  # Preserve cancel_event
                     )
                     self.task_graph[task_id] = new_task
                     task = new_task # Continue with the new task object
@@ -173,7 +197,8 @@ class RenderManager(QObject):
                     args=args, kwargs=kwargs,
                     dependencies=(dependencies or set()).copy(),
                     task_type=task_type,
-                    on_complete_callback=on_complete_callback # Assign new callback
+                    on_complete_callback=on_complete_callback,
+                    cancel_event=cancel_event,
                 )
                 self.task_graph[task_id] = task
 
@@ -253,7 +278,8 @@ class RenderManager(QObject):
             self.submit_task(
                 task.task_id, priority, task.func, *task.args,
                 dependencies=task.dependencies, task_type=task.task_type,
-                on_complete_callback=task.on_complete_callback, **task.kwargs
+                on_complete_callback=task.on_complete_callback,
+                cancel_event=task.cancel_event, **task.kwargs
             )
 
     def downgrade_task_priorities(self, task_ids: Set[str], priority: Priority):
@@ -289,6 +315,7 @@ class RenderManager(QObject):
                     task_type=task.task_type,
                     on_complete_callback=task.on_complete_callback,
                     dependents=task.dependents,
+                    cancel_event=task.cancel_event,
                 )
                 self.task_graph[tid] = new_task
 
@@ -476,6 +503,11 @@ class RenderManager(QObject):
         logger.debug(f"Worker executing SIMPLE task '{task.task_id}'.")
         result, error = None, None
         try:
+            if task.cancel_event and task.cancel_event.is_set():
+                with self.graph_lock:
+                    task.state = TaskState.COMPLETED
+                return
+
             result = task.func(*task.args, **task.kwargs)
             with self.graph_lock: task.state = TaskState.COMPLETED
         except Exception as e:

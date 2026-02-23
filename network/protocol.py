@@ -73,11 +73,18 @@ class GetMetadataBatchRequest(Request):
 class GetMetadataBatchResponse(Response):
     metadata: Dict[str, Dict[str, Any]]
 
-# --- Update Viewport (upgrade visible + downgrade scrolled-away thumbnails) ---
+# --- Update Viewport (heatmap-based per-path priorities) ---
+class PathPriority(BaseModel):
+    """A file path with its computed heatmap priority."""
+    path: str
+    priority: int
+
 class UpdateViewportRequest(Request):
     command: str = "update_viewport"
-    paths_to_upgrade: List[str]
-    paths_to_downgrade: List[str]
+    paths_to_upgrade: List[PathPriority] = []
+    paths_to_downgrade: List[str] = []
+    fullres_to_request: List[PathPriority] = []
+    fullres_to_cancel: List[str] = []
 
 # --- Request View Image (FULLRES_REQUEST priority) ---
 class RequestViewImageRequest(Request):
@@ -160,3 +167,23 @@ class PreviewsReadyData(BaseModel):
     image_path: str
     thumbnail_path: Optional[str]
     view_image_path: Optional[str]
+
+class FilesRemovedData(BaseModel):
+    files: List[str]
+
+# ==============================================================================
+#  Run Tasks (Generic Daemon Task Dispatch)
+# ==============================================================================
+
+class TaskOperation(BaseModel):
+    """A single named operation with file paths to operate on."""
+    name: str
+    file_paths: List[str]
+
+class RunTasksRequest(Request):
+    command: str = "run_tasks"
+    operations: List[TaskOperation]
+
+class RunTasksResponse(Response):
+    task_id: str
+    queued_count: int
