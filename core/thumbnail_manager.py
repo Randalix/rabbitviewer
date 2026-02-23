@@ -429,6 +429,81 @@ class ThumbnailManager:
             logger.debug(f"ThumbnailManager: Submitted on-demand tasks at {priority.name} for: {image_path}")
         return True
 
+    def batch_request_thumbnails(self, image_paths: List[str], priority: Priority,
+                                  gui_session_id: Optional[str] = None) -> int:
+        """
+        Batch version of request_thumbnail.  Checks thumbnail validity for all
+        paths in a single DB query, then upgrades or submits tasks with minimal
+        lock contention.
+
+        Returns the number of paths successfully queued or notified.
+        """
+        if not image_paths:
+            return 0
+
+        # Single DB query for all paths.
+        validity = self.metadata_db.batch_get_thumbnail_validity(image_paths)
+
+        # Separate cached (valid) from uncached paths.
+        cached_paths = []
+        uncached_paths = []
+        for path in image_paths:
+            info = validity.get(path)
+            if info and info['valid']:
+                cached_paths.append((path, info))
+            else:
+                uncached_paths.append(path)
+
+        # Batch-notify for all cached thumbnails.
+        for path, info in cached_paths:
+            notification = protocol.Notification(
+                type="previews_ready",
+                data=protocol.PreviewsReadyData(
+                    image_path=path,
+                    thumbnail_path=info.get('thumbnail_path'),
+                    view_image_path=info.get('view_image_path'),
+                ).model_dump()
+            )
+            try:
+                self.render_manager.notification_queue.put_nowait(notification)
+            except Full:
+                logger.warning("Notification queue full; dropping batch notification for %s", path)
+
+        # For uncached paths, check task graph in a single lock scope.
+        tasks_to_upgrade = set()
+        paths_to_submit = []
+        with self.render_manager.graph_lock:
+            for path in uncached_paths:
+                if path in self.render_manager.task_graph:
+                    tasks_to_upgrade.add(path)
+                    tasks_to_upgrade.add(f"meta::{path}")
+                    # Stamp session ID for session-aware abort.
+                    if gui_session_id:
+                        task = self.render_manager.task_graph.get(path)
+                        if (task is not None
+                                and task.state not in (TaskState.RUNNING,
+                                                       TaskState.COMPLETED,
+                                                       TaskState.FAILED)):
+                            task.kwargs['expected_session_id'] = gui_session_id
+                else:
+                    paths_to_submit.append(path)
+
+        # Batch-upgrade existing tasks (single call, single lock acquisition).
+        if tasks_to_upgrade:
+            self.render_manager.update_task_priorities(tasks_to_upgrade, priority)
+
+        # Submit new tasks for paths not yet in the graph.
+        for path in paths_to_submit:
+            self.render_manager.submit_task(
+                path, priority, self._generate_thumbnail_task, path,
+                expected_session_id=gui_session_id
+            )
+            self.render_manager.submit_task(
+                f"meta::{path}", priority, self._process_metadata_task, path
+            )
+
+        return len(cached_paths) + len(uncached_paths)
+
     def request_view_image(self, image_path: str,
                            gui_session_id: Optional[str] = None) -> Optional[str]:
         """

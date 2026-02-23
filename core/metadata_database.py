@@ -404,7 +404,55 @@ class MetadataDatabase:
             logging.error(f"Error getting thumbnail paths for {file_path}: {e}")
             
         return {'thumbnail_path': None, 'view_image_path': None}
-    
+
+    def batch_get_thumbnail_validity(self, file_paths: List[str]) -> Dict[str, Dict]:
+        """
+        Batch-checks thumbnail validity for multiple files in a single query.
+        Returns {path: {thumbnail_path, view_image_path, valid: bool}} for
+        paths that have DB records.  Paths without records are omitted.
+        """
+        if not file_paths:
+            return {}
+
+        results: Dict[str, Dict] = {}
+        # Stat all files upfront (one syscall each, but outside DB lock).
+        stat_cache: Dict[str, os.stat_result] = {}
+        for p in file_paths:
+            try:
+                stat_cache[p] = os.stat(p)
+            except OSError:
+                pass  # file gone — will be treated as invalid
+
+        try:
+            placeholders = ",".join("?" for _ in file_paths)
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(f'''
+                    SELECT file_path, thumbnail_path, view_image_path, mtime, file_size
+                    FROM image_metadata
+                    WHERE file_path IN ({placeholders})
+                ''', file_paths)
+                for row in cursor.fetchall():
+                    fp, thumb, view, stored_mtime, stored_size = row
+                    stat = stat_cache.get(fp)
+                    valid = (
+                        stat is not None
+                        and stored_mtime is not None
+                        and stored_mtime >= stat.st_mtime
+                        and stored_size == stat.st_size
+                        and thumb
+                        and os.path.exists(thumb)
+                    )
+                    results[fp] = {
+                        'thumbnail_path': thumb,
+                        'view_image_path': view,
+                        'valid': bool(valid),
+                    }
+        except sqlite3.Error as e:
+            logging.error(f"Error in batch_get_thumbnail_validity: {e}")
+
+        return results
+
     def is_thumbnail_valid(self, file_path: str) -> bool:
         """
         Checks if a valid thumbnail exists for the file. This is optimized to reduce syscalls.

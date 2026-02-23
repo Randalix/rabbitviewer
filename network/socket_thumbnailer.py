@@ -289,10 +289,9 @@ class ThumbnailSocketServer:
         logging.info(f"SocketServer: Received request_previews for {len(req.image_paths)} paths with priority {req.priority}.")
         session_id = self._get_session_id()
         priority_level = Priority(req.priority)
-        success_count = 0
-        for path in req.image_paths:
-            if self.thumbnail_manager.request_thumbnail(path, priority_level, session_id):
-                success_count += 1
+        success_count = self.thumbnail_manager.batch_request_thumbnails(
+            req.image_paths, priority_level, session_id
+        )
         return protocol.RequestPreviewsResponse(count=success_count)
 
     def _handle_get_previews_status(self, request_data: dict) -> protocol.Response:
@@ -367,10 +366,9 @@ class ThumbnailSocketServer:
             f"downgrading {len(req.paths_to_downgrade)} tasks."
         )
         session_id = self._get_session_id()
-        success_count = 0
-        for path in req.paths_to_upgrade:
-            if self.thumbnail_manager.request_thumbnail(path, Priority.GUI_REQUEST, session_id):
-                success_count += 1
+        success_count = self.thumbnail_manager.batch_request_thumbnails(
+            req.paths_to_upgrade, Priority.GUI_REQUEST, session_id
+        )
 
         if req.paths_to_downgrade:
             self.thumbnail_manager.downgrade_thumbnail_tasks(
