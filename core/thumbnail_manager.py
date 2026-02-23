@@ -54,6 +54,11 @@ class ThumbnailManager:
         self._volume_cache: Dict[str, Tuple[bool, float]] = {}   # mount_point → (ok, expiry)
         self._volume_cache_lock = threading.Lock()
 
+        self._task_operations: Dict[str, Callable] = {
+            "send2trash": self._op_send2trash,
+            "remove_records": self._op_remove_records,
+        }
+
         self._configure_file_logging()
 
     def _configure_file_logging(self):
@@ -805,6 +810,62 @@ class ThumbnailManager:
             ))
 
         return tasks
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  Generic task operations (daemon-side registry)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def get_task_operation(self, name: str) -> Optional[Callable]:
+        return self._task_operations.get(name)
+
+    def execute_compound_task(self, operations: List[Tuple[str, List[str]]]) -> Dict[str, Any]:
+        """Execute a sequence of named operations. Runs in a RenderManager worker thread."""
+        results: Dict[str, Any] = {}
+        for name, file_paths in operations:
+            handler = self._task_operations.get(name)
+            if not handler:
+                logger.error(f"Unknown task operation: {name}")
+                results[name] = {"error": f"unknown operation: {name}"}
+                continue
+            try:
+                results[name] = handler(file_paths)
+            except Exception as e:
+                logger.error(f"Task operation '{name}' failed: {e}", exc_info=True)
+                results[name] = {"error": str(e)}
+        return results
+
+    def _op_send2trash(self, file_paths: List[str]) -> Dict[str, Any]:
+        """Move files to system trash with per-file error handling."""
+        from send2trash import send2trash
+        succeeded, failed = 0, 0
+        for path in file_paths:
+            try:
+                send2trash(path)
+                succeeded += 1
+            except OSError as e:
+                if "Directory not found" in str(e):
+                    # Fallback: volume trash unavailable, try home trash
+                    home_trash = os.path.expanduser("~/.Trash")
+                    try:
+                        os.makedirs(home_trash, exist_ok=True)
+                        import shutil
+                        shutil.move(path, home_trash)
+                        succeeded += 1
+                        continue
+                    except Exception as fallback_e:
+                        logger.warning(f"Home trash fallback also failed for {path}: {fallback_e}")
+                logger.warning(f"Failed to trash {path}: {e}")
+                failed += 1
+            except Exception as e:
+                logger.warning(f"Failed to trash {path}: {e}")
+                failed += 1
+        logger.info(f"send2trash: {succeeded} trashed, {failed} failed out of {len(file_paths)}")
+        return {"succeeded": succeeded, "failed": failed}
+
+    def _op_remove_records(self, file_paths: List[str]) -> Dict[str, Any]:
+        """Remove database records and associated cache files."""
+        success = self.metadata_db.remove_records(file_paths)
+        return {"success": success, "count": len(file_paths)}
 
     def shutdown(self) -> None:
         """Gracefully shuts down the ThumbnailManager and its associated RenderManager."""

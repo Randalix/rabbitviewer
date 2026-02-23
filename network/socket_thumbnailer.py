@@ -33,6 +33,20 @@ class ThumbnailSocketServer:
         self.active_gui_session_id: Optional[str] = None
         self.session_lock = threading.Lock()
         self._fast_scan_cancel: Optional[threading.Event] = None
+        self._compound_task_counter = 0
+        self._command_handlers = {
+            "request_previews":      self._handle_request_previews,
+            "get_previews_status":   self._handle_get_previews_status,
+            "get_metadata_batch":    self._handle_get_metadata_batch,
+            "set_rating":            self._handle_set_rating,
+            "shutdown":              self._handle_shutdown,
+            "update_viewport":       self._handle_update_viewport,
+            "request_view_image":    self._handle_request_view_image,
+            "get_filtered_file_paths": self._handle_get_filtered_file_paths,
+            "get_directory_files":   self._handle_get_directory_files,
+            "move_records":          self._handle_move_records,
+            "run_tasks":             self._handle_run_tasks,
+        }
 
         self.directory_scanner = DirectoryScanner(thumbnail_manager, thumbnail_manager.config_manager)
 
@@ -257,195 +271,216 @@ class ThumbnailSocketServer:
     
     def _dispatch_command(self, command: str, request_data: dict) -> protocol.Response:
         """Dispatches commands to the appropriate handler."""
+        handler = self._command_handlers.get(command)
+        if handler is None:
+            return protocol.ErrorResponse(message=f"Unknown command: {command}")
+        return handler(request_data)
+
+    def _get_session_id(self) -> Optional[str]:
         with self.session_lock:
-            session_id_snapshot = self.active_gui_session_id
-        if command == "request_previews":
-            req = protocol.RequestPreviewsRequest.model_validate(request_data)
-            logging.info(f"SocketServer: Received request_previews for {len(req.image_paths)} paths with priority {req.priority}.")
-            success_count = 0
-            priority_level = Priority(req.priority)
+            return self.active_gui_session_id
 
-            # Directly call the priority upgrade logic instead of queueing a task to do it.
+    # ──────────────────────────────────────────────────────────────────────
+    #  Command handlers
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _handle_request_previews(self, request_data: dict) -> protocol.Response:
+        req = protocol.RequestPreviewsRequest.model_validate(request_data)
+        logging.info(f"SocketServer: Received request_previews for {len(req.image_paths)} paths with priority {req.priority}.")
+        session_id = self._get_session_id()
+        priority_level = Priority(req.priority)
+        success_count = 0
+        for path in req.image_paths:
+            if self.thumbnail_manager.request_thumbnail(path, priority_level, session_id):
+                success_count += 1
+        return protocol.RequestPreviewsResponse(count=success_count)
+
+    def _handle_get_previews_status(self, request_data: dict) -> protocol.Response:
+        req = protocol.GetPreviewsStatusRequest.model_validate(request_data)
+        statuses = {}
+        for path in req.image_paths:
+            is_thumbnail_ready = False
+            thumbnail_path = None
+            view_image_ready = False
+            view_image_path = None
+
+            cached_paths = self.thumbnail_manager.metadata_db.get_thumbnail_paths(path)
+            if cached_paths:
+                thumbnail_path = cached_paths.get('thumbnail_path')
+                view_image_path = cached_paths.get('view_image_path')
+                if view_image_path and os.path.exists(view_image_path):
+                    view_image_ready = True
+                if thumbnail_path and os.path.exists(thumbnail_path):
+                    is_thumbnail_ready = True
+
+            statuses[path] = protocol.PreviewStatus(
+                thumbnail_ready=is_thumbnail_ready,
+                thumbnail_path=thumbnail_path if is_thumbnail_ready else None,
+                view_image_ready=view_image_ready,
+                view_image_path=view_image_path if view_image_ready else None
+            )
+        return protocol.GetPreviewsStatusResponse(statuses=statuses)
+
+    def _handle_get_metadata_batch(self, request_data: dict) -> protocol.Response:
+        req = protocol.GetMetadataBatchRequest.model_validate(request_data)
+
+        if req.priority:
+            self.thumbnail_manager.render_manager.submit_task(
+                f"metadata_batch::{hash(tuple(req.image_paths))}",
+                Priority.GUI_REQUEST,
+                self.thumbnail_manager.request_metadata_extraction,
+                req.image_paths, Priority.GUI_REQUEST,
+                task_type=TaskType.SIMPLE
+            )
+
+        metadata_results = {}
+        for path in req.image_paths:
+            metadata = self.thumbnail_manager.metadata_db.get_metadata(path)
+            metadata_results[path] = metadata if metadata else {}
+
+        return protocol.GetMetadataBatchResponse(metadata=metadata_results)
+
+    def _handle_set_rating(self, request_data: dict) -> protocol.Response:
+        req = protocol.SetRatingRequest.model_validate(request_data)
+        success_db, _count = self.thumbnail_manager.metadata_db.batch_set_ratings(req.image_paths, req.rating)
+
+        if success_db:
             for path in req.image_paths:
-                if self.thumbnail_manager.request_thumbnail(
-                        path, priority_level, session_id_snapshot):
-                    success_count += 1
-
-            return protocol.RequestPreviewsResponse(count=success_count)
-
-        elif command == "get_previews_status":
-            req = protocol.GetPreviewsStatusRequest.model_validate(request_data)
-            statuses = {}
-            for path in req.image_paths:
-                # This must be a fast, non-blocking check.
-                is_thumbnail_ready = False
-                thumbnail_path = None
-                view_image_ready = False
-                view_image_path = None
-
-                cached_paths = self.thumbnail_manager.metadata_db.get_thumbnail_paths(path)
-                if cached_paths:
-                    thumbnail_path = cached_paths.get('thumbnail_path')
-                    view_image_path = cached_paths.get('view_image_path')
-                    if view_image_path and os.path.exists(view_image_path):
-                        view_image_ready = True
-                    if thumbnail_path and os.path.exists(thumbnail_path):
-                        is_thumbnail_ready = True
-
-                statuses[path] = protocol.PreviewStatus(
-                    thumbnail_ready=is_thumbnail_ready,
-                    thumbnail_path=thumbnail_path if is_thumbnail_ready else None,
-                    view_image_ready=view_image_ready,
-                    view_image_path=view_image_path if view_image_ready else None
-                )
-            return protocol.GetPreviewsStatusResponse(statuses=statuses)
-
-        elif command == "get_metadata_batch":
-            req = protocol.GetMetadataBatchRequest.model_validate(request_data)
-
-            if req.priority:
                 self.thumbnail_manager.render_manager.submit_task(
-                    f"metadata_batch::{hash(tuple(req.image_paths))}", # Unique ID for batch
-                    Priority.GUI_REQUEST,
-                    self.thumbnail_manager.request_metadata_extraction,
-                    req.image_paths, Priority.GUI_REQUEST,
+                    f"write_rating::{path}",
+                    Priority.NORMAL,
+                    self.thumbnail_manager._write_rating_to_file,
+                    path, req.rating,
                     task_type=TaskType.SIMPLE
                 )
+            return protocol.Response(message="Ratings updated and queued for file write.")
+        return protocol.ErrorResponse(message="Failed to update rating in database.")
 
-            metadata_results = {}
-            for path in req.image_paths:
-                # Fetch all metadata from DB
-                metadata = self.thumbnail_manager.metadata_db.get_metadata(path)
-                metadata_results[path] = metadata if metadata else {} # Ensure it's a dict
+    def _handle_shutdown(self, request_data: dict) -> protocol.Response:
+        self.shutdown()
+        return protocol.Response(message="Server shutting down")
 
-            return protocol.GetMetadataBatchResponse(metadata=metadata_results)
+    def _handle_update_viewport(self, request_data: dict) -> protocol.Response:
+        req = protocol.UpdateViewportRequest.model_validate(request_data)
+        logging.info(
+            f"SocketServer: update_viewport — upgrading {len(req.paths_to_upgrade)}, "
+            f"downgrading {len(req.paths_to_downgrade)} tasks."
+        )
+        session_id = self._get_session_id()
+        success_count = 0
+        for path in req.paths_to_upgrade:
+            if self.thumbnail_manager.request_thumbnail(path, Priority.GUI_REQUEST, session_id):
+                success_count += 1
 
-        elif command == "set_rating":
-            req = protocol.SetRatingRequest.model_validate(request_data)
-
-            success_db, _count = self.thumbnail_manager.metadata_db.batch_set_ratings(req.image_paths, req.rating)
-
-            if success_db:
-                for path in req.image_paths:
-                    self.thumbnail_manager.render_manager.submit_task(
-                        f"write_rating::{path}",
-                        Priority.NORMAL,
-                        self.thumbnail_manager._write_rating_to_file,
-                        path, req.rating,
-                        task_type=TaskType.SIMPLE
-                    )
-                return protocol.Response(message="Ratings updated and queued for file write.")
-            else:
-                return protocol.ErrorResponse(message="Failed to update rating in database.")
-
-        elif command == "shutdown":
-            self.shutdown()
-            return protocol.Response(message="Server shutting down")
-
-        elif command == "update_viewport":
-            req = protocol.UpdateViewportRequest.model_validate(request_data)
-            logging.info(
-                f"SocketServer: update_viewport — upgrading {len(req.paths_to_upgrade)}, "
-                f"downgrading {len(req.paths_to_downgrade)} tasks."
+        if req.paths_to_downgrade:
+            self.thumbnail_manager.downgrade_thumbnail_tasks(
+                req.paths_to_downgrade, Priority.GUI_REQUEST_LOW
             )
-            success_count = 0
-            for path in req.paths_to_upgrade:
-                if self.thumbnail_manager.request_thumbnail(
-                        path, Priority.GUI_REQUEST, session_id_snapshot):
-                    success_count += 1
+        return protocol.RequestPreviewsResponse(count=success_count)
 
-            if req.paths_to_downgrade:
-                self.thumbnail_manager.downgrade_thumbnail_tasks(
-                    req.paths_to_downgrade, Priority.GUI_REQUEST_LOW
-                )
-            return protocol.RequestPreviewsResponse(count=success_count)
+    def _handle_request_view_image(self, request_data: dict) -> protocol.Response:
+        req = protocol.RequestViewImageRequest.model_validate(request_data)
+        logging.info(f"SocketServer: Received request_view_image for {req.image_path}")
+        view_image_path = self.thumbnail_manager.request_view_image(
+            req.image_path, self._get_session_id()
+        )
+        return protocol.RequestViewImageResponse(view_image_path=view_image_path)
 
-        elif command == "request_view_image":
-            req = protocol.RequestViewImageRequest.model_validate(request_data)
-            logging.info(f"SocketServer: Received request_view_image for {req.image_path}")
-            view_image_path = self.thumbnail_manager.request_view_image(
-                req.image_path, session_id_snapshot
-            )
-            return protocol.RequestViewImageResponse(view_image_path=view_image_path)
+    def _handle_get_filtered_file_paths(self, request_data: dict) -> protocol.Response:
+        req = protocol.GetFilteredFilePathsRequest.model_validate(request_data)
+        # This is a simplification. A truly robust implementation would wait for metadata
+        # extraction to complete. For now, we proceed with what's in the DB.
+        visible_paths = self.thumbnail_manager.metadata_db.get_filtered_file_paths(
+            req.text_filter, req.star_states
+        )
+        return protocol.GetFilteredFilePathsResponse(paths=visible_paths)
 
-        elif command == "get_filtered_file_paths":
-            req = protocol.GetFilteredFilePathsRequest.model_validate(request_data)
+    def _handle_get_directory_files(self, request_data: dict) -> protocol.Response:
+        req = protocol.GetDirectoryFilesRequest.model_validate(request_data)
+        if not req.session_id:
+            return protocol.ErrorResponse(message="get_directory_files requires a non-empty session_id.")
+        # A new directory load from the GUI defines the active session.
+        with self.session_lock:
+            self.active_gui_session_id = req.session_id
+        logging.info(f"Set active GUI session to {req.session_id[:8]} for path '{req.path}'")
 
-            # This is a simplification. A truly robust implementation would wait for metadata
-            # extraction to complete. For now, we proceed with what's in the DB.
-            visible_paths = self.thumbnail_manager.metadata_db.get_filtered_file_paths(
-                req.text_filter, req.star_states
-            )
-            return protocol.GetFilteredFilePathsResponse(paths=visible_paths)
+        # --- Discovery + Task Creation ---
+        # Job 1 (fast scan): dedicated OS thread — iterates the directory and streams
+        # scan_progress notifications without touching the worker pool.
+        if self._fast_scan_cancel:
+            self._fast_scan_cancel.set()
+        cancel_event = threading.Event()
+        self._fast_scan_cancel = cancel_event
+        threading.Thread(
+            target=self._run_fast_scan_thread,
+            args=(req.session_id, req.path, req.recursive, cancel_event),
+            daemon=True,
+            name=f"FastScan-{req.session_id[:8]}",
+        ).start()
 
-        elif command == "get_directory_files":
-            req = protocol.GetDirectoryFilesRequest.model_validate(request_data)
-            if not req.session_id:
-                return protocol.ErrorResponse(message="get_directory_files requires a non-empty session_id.")
-            # A new directory load from the GUI defines the active session.
-            with self.session_lock:
-                self.active_gui_session_id = req.session_id
-            logging.info(f"Set active GUI session to {req.session_id[:8]} for path '{req.path}'")
+        # Job 2: A lower-priority scan to create thumbnailing tasks for all images in the background.
+        slow_scan_generator = self.directory_scanner.scan_incremental(
+            req.path, req.recursive
+        )
+        slow_scan_job = SourceJob(
+            job_id=f"gui_scan_tasks::{req.session_id}::{req.path}",
+            priority=Priority.GUI_REQUEST_LOW,
+            generator=slow_scan_generator,
+            task_factory=self.thumbnail_manager.create_tasks_for_file,
+            create_tasks=True
+        )
+        self.thumbnail_manager.render_manager.submit_source_job(slow_scan_job)
 
-            # --- Discovery + Task Creation ---
-            # Job 1 (fast scan): dedicated OS thread — iterates the directory and streams
-            # scan_progress notifications without touching the worker pool.
-            if self._fast_scan_cancel:
-                self._fast_scan_cancel.set()
-            cancel_event = threading.Event()
-            self._fast_scan_cancel = cancel_event
-            threading.Thread(
-                target=self._run_fast_scan_thread,
-                args=(req.session_id, req.path, req.recursive, cancel_event),
-                daemon=True,
-                name=f"FastScan-{req.session_id[:8]}",
-            ).start()
+        # Job 3 (Stage C): Background view image generation.
+        # Runs at BACKGROUND_SCAN (10), well below thumbnail tasks (40/90), so it
+        # only consumes workers after the queue has no pending thumbnail work.
+        view_image_generator = self.directory_scanner.scan_incremental(
+            req.path, req.recursive
+        )
+        view_image_job = SourceJob(
+            job_id=f"gui_view_images::{req.session_id}::{req.path}",
+            priority=Priority.BACKGROUND_SCAN,
+            generator=view_image_generator,
+            task_factory=self.thumbnail_manager.create_view_image_task_for_file,
+            create_tasks=True
+        )
+        self.thumbnail_manager.render_manager.submit_source_job(view_image_job)
 
-            # Job 2: A lower-priority scan to create thumbnailing tasks for all images in the background.
-            slow_scan_generator = self.directory_scanner.scan_incremental(
-                req.path, req.recursive
-            )
-            slow_scan_job = SourceJob(
-                job_id=f"gui_scan_tasks::{req.session_id}::{req.path}",
-                priority=Priority.GUI_REQUEST_LOW,  # Runs after UI is populated & visible items are processed
-                generator=slow_scan_generator,
-                task_factory=self.thumbnail_manager.create_tasks_for_file,
-                create_tasks=True  # Creates all backend tasks
-            )
-            self.thumbnail_manager.render_manager.submit_source_job(slow_scan_job)
+        # Return cached files immediately while the scan runs in the background
+        db_files = self.thumbnail_manager.metadata_db.get_directory_files(req.path)
+        if db_files:
+            logging.info(f"Found {len(db_files)} files in DB for '{req.path}'. Returning cached list while scan runs.")
+            if not req.recursive:
+                normalized_path = os.path.normpath(req.path)
+                db_files = [f for f in db_files if os.path.dirname(f) == normalized_path]
+            return protocol.GetDirectoryFilesResponse(files=sorted(db_files))
 
-            # Job 3 (Stage C): Background view image generation.
-            # Runs at BACKGROUND_SCAN (10), well below thumbnail tasks (40/90), so it
-            # only consumes workers after the queue has no pending thumbnail work.
-            view_image_generator = self.directory_scanner.scan_incremental(
-                req.path, req.recursive
-            )
-            view_image_job = SourceJob(
-                job_id=f"gui_view_images::{req.session_id}::{req.path}",
-                priority=Priority.BACKGROUND_SCAN,
-                generator=view_image_generator,
-                task_factory=self.thumbnail_manager.create_view_image_task_for_file,
-                create_tasks=True
-            )
-            self.thumbnail_manager.render_manager.submit_source_job(view_image_job)
+        return protocol.GetDirectoryFilesResponse(files=[])
 
-            # Return cached files immediately while the scan runs in the background
-            db_files = self.thumbnail_manager.metadata_db.get_directory_files(req.path)
-            if db_files:
-                logging.info(f"Found {len(db_files)} files in DB for '{req.path}'. Returning cached list while scan runs.")
-                if not req.recursive:
-                    normalized_path = os.path.normpath(req.path)
-                    db_files = [f for f in db_files if os.path.dirname(f) == normalized_path]
-                return protocol.GetDirectoryFilesResponse(files=sorted(db_files))
+    def _handle_move_records(self, request_data: dict) -> protocol.Response:
+        req = protocol.MoveRecordsRequest.model_validate(request_data)
+        count = self.thumbnail_manager.metadata_db.move_records(req.moves)
+        return protocol.MoveRecordsResponse(moved_count=count)
 
-            return protocol.GetDirectoryFilesResponse(files=[])
-
-        elif command == "move_records":
-            req = protocol.MoveRecordsRequest.model_validate(request_data)
-            count = self.thumbnail_manager.metadata_db.move_records(req.moves)
-            return protocol.MoveRecordsResponse(moved_count=count)
-
-        return protocol.ErrorResponse(message=f"Unknown command: {command}")
+    def _handle_run_tasks(self, request_data: dict) -> protocol.Response:
+        req = protocol.RunTasksRequest.model_validate(request_data)
+        if not req.operations:
+            return protocol.ErrorResponse(message="run_tasks requires at least one operation")
+        for op in req.operations:
+            if self.thumbnail_manager.get_task_operation(op.name) is None:
+                return protocol.ErrorResponse(message=f"Unknown task operation: {op.name}")
+        self._compound_task_counter += 1
+        task_id = f"script_task::{self._compound_task_counter}"
+        operations = [(op.name, op.file_paths) for op in req.operations]
+        queued = self.thumbnail_manager.render_manager.submit_task(
+            task_id,
+            Priority.NORMAL,
+            self.thumbnail_manager.execute_compound_task,
+            operations,
+        )
+        if not queued:
+            return protocol.ErrorResponse(message=f"Failed to queue compound task: {task_id}")
+        return protocol.RunTasksResponse(task_id=task_id, queued_count=len(req.operations))
 
     def send_notification(self, notification: protocol.Notification):
         """Sends a JSON notification to all registered listener clients."""

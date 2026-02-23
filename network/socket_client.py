@@ -250,6 +250,12 @@ class ThumbnailSocketClient:
         request = protocol.MoveRecordsRequest(moves=moves)
         return self._send_request(request, protocol.MoveRecordsResponse)
 
+    def run_tasks(self, operations: List[protocol.TaskOperation]) -> Optional[protocol.RunTasksResponse]:
+        """Submit compound task operations to the daemon for async execution."""
+        protocol = _lazy_protocol()
+        request = protocol.RunTasksRequest(operations=operations)
+        return self._send_request(request, protocol.RunTasksResponse)
+
     # --- Daemon Control Methods ---
     def is_socket_file_present(self) -> bool:
         """Check if the thumbnailer server socket file exists."""

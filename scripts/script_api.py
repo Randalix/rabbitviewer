@@ -108,6 +108,29 @@ class ScriptAPI:
             logging.error(f"Error submitting background deletion task: {e}", exc_info=True)
             return False
 
+    def daemon_tasks(self, operations: List[tuple]) -> bool:
+        """Submit compound task operations to the daemon for async execution.
+
+        Each tuple is ``(operation_name, file_paths)`` where *operation_name*
+        is a key in the daemon's task operation registry (e.g. ``"send2trash"``,
+        ``"remove_records"``).
+        """
+        try:
+            from network.protocol import TaskOperation
+            ops = [TaskOperation(name=name, file_paths=paths) for name, paths in operations]
+            response = self.socket_client.run_tasks(ops)
+            if response is None:
+                logging.error("daemon_tasks failed: no response (connection issue)")
+                return False
+            if response.status == "success":
+                logging.info(f"Submitted {len(ops)} daemon task(s): {[op.name for op in ops]}")
+                return True
+            logging.error(f"daemon_tasks failed: {getattr(response, 'message', response)}")
+            return False
+        except Exception as e:
+            logging.error(f"Error submitting daemon tasks: {e}", exc_info=True)
+            return False
+
     def add_images(self, image_paths: List[str]) -> None:
         """Add new images to the current view."""
         start_time = time.time()

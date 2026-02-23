@@ -807,10 +807,12 @@ class MetadataDatabase:
             # 3. Delete associated cache files outside the DB lock
             for thumb_path, view_path in cache_paths_to_delete:
                 for path in (thumb_path, view_path):
-                    if path and os.path.exists(path):
+                    if path:
                         try:
                             os.remove(path)
                             logging.debug(f"Removed cache file: {path}")
+                        except FileNotFoundError:
+                            pass
                         except OSError as e:
                             logging.warning(f"Error removing cache file {path}: {e}")
             

@@ -118,6 +118,23 @@ class MoveRecordsResponse(Response):
     moved_count: int
 
 # ==============================================================================
+#  Run Tasks (Generic Daemon Task Dispatch)
+# ==============================================================================
+
+class TaskOperation(BaseModel):
+    """A single named operation with file paths to operate on."""
+    name: str
+    file_paths: List[str]
+
+class RunTasksRequest(Request):
+    command: str = "run_tasks"
+    operations: List[TaskOperation]
+
+class RunTasksResponse(Response):
+    task_id: str
+    queued_count: int
+
+# ==============================================================================
 #  GUI Server Protocol
 # ==============================================================================
 
