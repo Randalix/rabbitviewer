@@ -336,19 +336,26 @@ class ThumbnailSocketServer:
 
     def _handle_update_viewport(self, request_data: dict) -> protocol.Response:
         req = protocol.UpdateViewportRequest.model_validate(request_data)
-        logging.info(
-            f"SocketServer: update_viewport — upgrading {len(req.paths_to_upgrade)}, "
-            f"downgrading {len(req.paths_to_downgrade)} tasks."
-        )
         session_id = self._get_session_id()
-        success_count = self.thumbnail_manager.batch_request_thumbnails(
-            req.paths_to_upgrade, Priority.GUI_REQUEST, session_id
-        )
+
+        success_count = 0
+        for pp in req.paths_to_upgrade:
+            if self.thumbnail_manager.request_thumbnail(
+                    pp.path, Priority(pp.priority), session_id):
+                success_count += 1
 
         if req.paths_to_downgrade:
             self.thumbnail_manager.downgrade_thumbnail_tasks(
-                req.paths_to_downgrade, Priority.GUI_REQUEST_LOW
-            )
+                req.paths_to_downgrade, Priority.GUI_REQUEST_LOW)
+
+        if req.fullres_to_cancel:
+            self.thumbnail_manager.cancel_speculative_fullres_batch(
+                req.fullres_to_cancel)
+
+        for pp in req.fullres_to_request:
+            self.thumbnail_manager.request_speculative_fullres(
+                pp.path, Priority(pp.priority), session_id)
+
         return protocol.RequestPreviewsResponse(count=success_count)
 
     def _handle_request_view_image(self, request_data: dict) -> protocol.Response:

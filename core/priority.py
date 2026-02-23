@@ -68,7 +68,8 @@ class RenderTask:
     state: TaskState = field(compare=False, default=TaskState.PENDING)
     worker_thread_id: Optional[int] = field(compare=False, default=None)
     on_complete_callback: Optional[Callable] = field(compare=False, default=None)
-    is_active: bool = field(compare=False, default=True)  # why: set False to cancel without queue removal
+    is_active: bool = field(compare=False, default=True)
+    cancel_event: Optional[threading.Event] = field(compare=False, default=None)
 
     def __lt__(self, other):
         # why: inverted so higher Priority value wins; ties broken by insertion order

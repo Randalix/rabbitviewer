@@ -95,7 +95,7 @@ class DirectoryScanner:
 
         self.thumbnail_manager.render_manager.submit_source_job(job)
 
-    def scan_incremental(self, directory_path: str, recursive: bool = True, batch_size: int = 50):
+    def scan_incremental(self, directory_path: str, recursive: bool = True, batch_size: int = 10):
         """
         Generator that incrementally yields batches of supported file paths.
         Batching reduces priority-queue and notification overhead.

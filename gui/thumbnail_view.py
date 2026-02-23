@@ -21,6 +21,7 @@ from gui.components.grid_layout_manager import GridLayoutManager
 from utils.thumbnail_filters import matches_filter
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, ToggleSelectionCommand, RemoveFromSelectionCommand
 from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, DaemonNotificationEventData, StatusMessageEventData, EventData
+from core.heatmap import compute_heatmap, THUMB_RING_COUNT
 
 from dataclasses import dataclass
 
@@ -211,7 +212,9 @@ class ThumbnailViewWidget(QFrame):
         self._original_to_visible_mapping = {}
         self._visible_original_indices: List[int] = []
         self._last_layout_file_count = 0
-        self._last_prioritized_paths: Set[str] = set()
+        self._last_thumb_pairs: dict[str, int] = {}   # path → priority from last heatmap
+        self._last_fullres_pairs: dict[str, int] = {}  # path → priority from last heatmap
+        self._viewport_generation: int = 0  # monotonic counter; stale IPC calls check this
 
         self.image_states: Dict[int, ImageState] = {}
 
@@ -279,11 +282,13 @@ class ThumbnailViewWidget(QFrame):
         if self._hovered_label != label:
             self._hovered_label = label
             self.thumbnailHovered.emit(label.original_path)
+            self._priority_update_timer.start()
 
     def _clear_hovered_label(self, label: ThumbnailLabel):
         if self._hovered_label == label:
             self._hovered_label = None
             self.thumbnailLeft.emit()
+            self._priority_update_timer.start()
 
     def get_hovered_image_path(self) -> Optional[str]:
         """
@@ -882,6 +887,8 @@ class ThumbnailViewWidget(QFrame):
             self._label_tick_timer.stop()
         if hasattr(self, '_pending_labels'):
             self._pending_labels.clear()
+        self._last_thumb_pairs = {}
+        self._last_fullres_pairs = {}
 
         # Recycle all labels first while they still have proper parent
         for widget in self.labels.values():
@@ -907,7 +914,8 @@ class ThumbnailViewWidget(QFrame):
         self.current_directory_path = None
         self.image_states.clear()
         self._last_layout_file_count = 0
-        self._last_prioritized_paths.clear()
+        self._last_thumb_pairs.clear()
+        self._last_fullres_pairs.clear()
         self._hovered_label = None
 
         if hasattr(self, '_resize_timer'):
@@ -1323,9 +1331,13 @@ class ThumbnailViewWidget(QFrame):
         self._priority_update_timer.start()
 
     def _prioritize_visible_thumbnails(self):
-        """
-        Calculates visible thumbnails using the layout manager and sends a
-        high-priority request to the daemon for unloaded ones.
+        """Computes heatmap priorities around the cursor and sends per-path
+        priority pairs to the daemon for both thumbnails and speculative fullres.
+
+        Only paths whose priority actually changed (or that entered/left the
+        zone) are sent, keeping the daemon call small even on single-cell moves.
+        Stale IPC calls are dropped via a generation counter so the daemon never
+        processes an outdated viewport position.
         """
         if not self.socket_client or not self.labels or not self.current_files or not self._grid_layout_manager:
             return
@@ -1334,68 +1346,122 @@ class ThumbnailViewWidget(QFrame):
         if columns <= 0:
             return
 
-        first_row, last_row = self._grid_layout_manager.get_visible_rows()
+        # --- Determine heatmap center ---
+        ref_visible_idx = None
+        if self._hovered_label:
+            hovered_orig_idx = self._label_to_original_idx(self._hovered_label)
+            if hovered_orig_idx is not None:
+                ref_visible_idx = self._original_to_visible_mapping.get(hovered_orig_idx)
 
-        # Add a buffer of one row above and below for pre-loading
-        first_row = max(0, first_row - 1)
-        last_row += 1
+        if ref_visible_idx is None:
+            first_row, last_row = self._grid_layout_manager.get_visible_rows()
+            first_row = max(0, first_row - 1)
+            last_row += 1
+            start_idx = first_row * columns
+            end_idx = min(len(self.current_files) - 1, (last_row + 1) * columns - 1)
+            ref_visible_idx = (start_idx + end_idx) // 2
 
-        start_idx = first_row * columns
-        end_idx = min(len(self.current_files) - 1, (last_row + 1) * columns - 1)
+        center_row, center_col = divmod(ref_visible_idx, columns)
 
-        # Keep (visible_idx, path) so we can sort by cursor distance later.
-        visible_unloaded: list[tuple[int, str]] = []
+        # --- Build loaded_set scoped to the heatmap bounding box ---
+        total_visible = len(self.current_files)
+        total_rows = (total_visible + columns - 1) // columns if total_visible > 0 else 0
+        bb_min_row = max(0, center_row - THUMB_RING_COUNT)
+        bb_max_row = min(total_rows - 1, center_row + THUMB_RING_COUNT) if total_rows > 0 else 0
+        bb_min_col = max(0, center_col - THUMB_RING_COUNT)
+        bb_max_col = min(columns - 1, center_col + THUMB_RING_COUNT)
 
-        for i in range(start_idx, end_idx + 1):
-            original_idx = self._visible_to_original_mapping.get(i)
-            if original_idx is not None:
-                state = self.image_states.get(original_idx)
-                if state and not state.loaded:
-                    visible_unloaded.append((i, self.all_files[original_idx]))
+        loaded_set: Set[int] = set()
+        for r in range(bb_min_row, bb_max_row + 1):
+            for c in range(bb_min_col, bb_max_col + 1):
+                vis_idx = r * columns + c
+                if vis_idx >= total_visible:
+                    continue
+                orig_idx = self._visible_to_original_mapping.get(vis_idx)
+                if orig_idx is not None:
+                    state = self.image_states.get(orig_idx)
+                    if state and state.loaded:
+                        loaded_set.add(vis_idx)
 
-        paths_to_prioritize = {path for _, path in visible_unloaded}
+        # --- Compute heatmap ---
+        thumb_pairs, fullres_pairs = compute_heatmap(
+            center_row, center_col, columns,
+            total_visible, loaded_set,
+        )
 
-        if paths_to_prioritize != self._last_prioritized_paths:
-            # Determine the reference point for distance sorting.
-            # Prefer the hovered thumbnail; fall back to the centre of the viewport.
-            ref_visible_idx = None
-            if self._hovered_label:
-                hovered_orig_idx = self._label_to_original_idx(self._hovered_label)
-                if hovered_orig_idx is not None:
-                    ref_visible_idx = self._original_to_visible_mapping.get(hovered_orig_idx)
-            if ref_visible_idx is None:
-                ref_visible_idx = (start_idx + end_idx) // 2
+        # --- Map visible_idx → file path, build {path: priority} dicts ---
+        vis_to_orig = self._visible_to_original_mapping.get
+        all_files = self.all_files
 
-            ref_row, ref_col = divmod(ref_visible_idx, columns)
-            visible_unloaded.sort(
-                key=lambda item: (
-                    abs(item[0] // columns - ref_row)
-                    + abs(item[0] % columns - ref_col)
-                )
+        current_thumb: dict[str, int] = {}
+        for vis_idx, priority in thumb_pairs:
+            orig_idx = vis_to_orig(vis_idx)
+            if orig_idx is not None:
+                current_thumb[all_files[orig_idx]] = priority
+
+        current_fullres: dict[str, int] = {}
+        for vis_idx, priority in fullres_pairs:
+            orig_idx = vis_to_orig(vis_idx)
+            if orig_idx is not None:
+                current_fullres[all_files[orig_idx]] = priority
+
+        # --- Early out: skip IPC when every (path, priority) pair is identical ---
+        if current_thumb == self._last_thumb_pairs and current_fullres == self._last_fullres_pairs:
+            return
+
+        # --- Compute deltas: only send paths whose priority changed or that entered/left ---
+        prev_thumb = self._last_thumb_pairs
+        prev_fullres = self._last_fullres_pairs
+
+        # Thumb upgrades: new paths OR paths whose priority changed.
+        delta_upgrade: list[tuple[str, int]] = [
+            (p, pri) for p, pri in current_thumb.items()
+            if prev_thumb.get(p) != pri
+        ]
+        # Thumb downgrades: paths that left the zone entirely.
+        paths_to_downgrade = [p for p in prev_thumb if p not in current_thumb]
+
+        # Fullres requests: new or priority-changed.
+        delta_fullres: list[tuple[str, int]] = [
+            (p, pri) for p, pri in current_fullres.items()
+            if prev_fullres.get(p) != pri
+        ]
+        # Fullres cancels: paths that left the zone.
+        fullres_to_cancel = [p for p in prev_fullres if p not in current_fullres]
+
+        # --- Send to daemon (with stale-request protection) ---
+        if delta_upgrade or paths_to_downgrade or delta_fullres or fullres_to_cancel:
+            self._viewport_generation += 1
+            gen = self._viewport_generation
+            logging.debug(
+                f"Heatmap delta (gen {gen}): {len(delta_upgrade)} thumb upgrades, "
+                f"{len(delta_fullres)} fullres, "
+                f"{len(paths_to_downgrade)} downgrades, "
+                f"{len(fullres_to_cancel)} fullres cancels."
             )
-            sorted_upgrade = [path for _, path in visible_unloaded]
 
-            paths_to_downgrade = self._last_prioritized_paths - paths_to_prioritize
-            if paths_to_prioritize or paths_to_downgrade:
-                logging.debug(
-                    f"Viewport changed: upgrading {len(sorted_upgrade)}, "
-                    f"downgrading {len(paths_to_downgrade)} thumbnails."
-                )
-                upgrade = sorted_upgrade
-                downgrade = list(paths_to_downgrade)
-                # Fire-and-forget: viewport updates are best-effort priority hints.
-                # Stale calls from rapid scrolling are harmless; only the latest state matters.
-                self._viewport_executor.submit(self.socket_client.update_viewport, upgrade, downgrade)
+            def _send_if_current(generation, up, down, fr, fc):
+                if self._viewport_generation != generation:
+                    logging.debug(f"Dropping stale viewport update gen {generation} (current: {self._viewport_generation}).")
+                    return
+                self.socket_client.update_viewport_heatmap(up, down, fr, fc)
 
-            # Also reorder the local pending-preview buffer so visible items are
-            # drained first by _tick_preview_loading, giving the visible area
-            # priority even when a large warm-cache batch is already buffered.
-            if paths_to_prioritize and self._pending_previews:
-                priority_q = [(p, t) for p, t in self._pending_previews if p in paths_to_prioritize]
-                rest_q     = [(p, t) for p, t in self._pending_previews if p not in paths_to_prioritize]
-                self._pending_previews[:] = priority_q + rest_q
+            self._viewport_executor.submit(
+                _send_if_current, gen,
+                delta_upgrade, paths_to_downgrade,
+                delta_fullres, fullres_to_cancel,
+            )
 
-            self._last_prioritized_paths = paths_to_prioritize
+        # --- Partition pending previews: heatmap items first (O(N)) ---
+        if self._pending_previews and current_thumb:
+            priority_q = []
+            rest_q = []
+            for item in self._pending_previews:
+                (priority_q if item[0] in current_thumb else rest_q).append(item)
+            self._pending_previews[:] = priority_q + rest_q
+
+        self._last_thumb_pairs = current_thumb
+        self._last_fullres_pairs = current_fullres
 
     def get_visible_count(self) -> int:
         """Returns the number of currently visible thumbnails."""

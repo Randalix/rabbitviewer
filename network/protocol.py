@@ -136,12 +136,20 @@ class GetMetadataBatchRequest(Request):
 class GetMetadataBatchResponse(Response):
     metadata: Dict[str, Dict[str, Any]] = dataclasses.field(default_factory=dict)
 
-# --- Update Viewport (upgrade visible + downgrade scrolled-away thumbnails) ---
+# --- Update Viewport (heatmap-based per-path priorities) ---
+@dataclasses.dataclass
+class PathPriority(Message):
+    """A file path with its computed heatmap priority."""
+    path: str = ""
+    priority: int = 0
+
 @dataclasses.dataclass
 class UpdateViewportRequest(Request):
     command: str = "update_viewport"
-    paths_to_upgrade: List[str] = dataclasses.field(default_factory=list)
+    paths_to_upgrade: List[PathPriority] = dataclasses.field(default_factory=list)
     paths_to_downgrade: List[str] = dataclasses.field(default_factory=list)
+    fullres_to_request: List[PathPriority] = dataclasses.field(default_factory=list)
+    fullres_to_cancel: List[str] = dataclasses.field(default_factory=list)
 
 # --- Request View Image (FULLRES_REQUEST priority) ---
 @dataclasses.dataclass
