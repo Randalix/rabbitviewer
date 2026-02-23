@@ -60,16 +60,6 @@ class ThumbnailManager:
             "remove_records": self._op_remove_records,
         }
 
-        self._configure_file_logging()
-
-    def _configure_file_logging(self):
-        """Idempotent: adds a FileHandler to this module's logger."""
-        log_file = os.path.abspath("daemon.log")
-        if not any(isinstance(h, logging.FileHandler) and h.baseFilename == log_file for h in logger.handlers):
-            handler = logging.FileHandler(log_file)
-            handler.setLevel(logging.DEBUG)
-            handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-            logger.addHandler(handler)
 
     def load_plugins(self) -> None:
         """Load and register all format plugins. Called after the socket is bound."""

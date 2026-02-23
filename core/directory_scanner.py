@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 import fnmatch
 from dataclasses import dataclass, field
 from typing import List, Set, Optional
@@ -100,33 +101,48 @@ class DirectoryScanner:
         Generator that incrementally yields batches of supported file paths.
         Batching reduces priority-queue and notification overhead.
         """
-        logging.info(f"Performing incremental scan for: {directory_path} (Recursive: {recursive})")
+        logging.info(f"Performing incremental scan for: {directory_path} (Recursive: {recursive}, batch_size={batch_size})")
         current_batch = []
+        total_yielded = 0
+        scan_start = time.monotonic()
 
         if not os.path.isdir(directory_path):
             logging.warning(f"Directory to scan does not exist: {directory_path}")
             return
 
         try:
+            walk_start = time.monotonic()
             walker = os.walk(directory_path) if recursive else [(directory_path, [], os.listdir(directory_path))]
             for root, _, files in walker:
+                walk_elapsed = time.monotonic() - walk_start
+                logging.info(f"[chunking] scan_incremental: entering dir '{root}' ({len(files)} entries, {walk_elapsed:.3f}s since last yield/start)")
                 for filename in files:
                     try:
                         full_path = os.path.join(root, filename)
                         if os.path.isfile(full_path) and self.is_supported_file(full_path):
                             current_batch.append(full_path)
                             if len(current_batch) >= batch_size:
+                                total_yielded += len(current_batch)
+                                elapsed = time.monotonic() - scan_start
+                                logging.info(f"[chunking] scan_incremental: yielding batch of {len(current_batch)} (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
                                 yield current_batch
                                 current_batch = []
-                    except OSError:
+                                walk_start = time.monotonic()
+                    except OSError as e:
+                        logging.debug(f"[chunking] scan_incremental: OSError on '{filename}': {e}")
                         continue
             if current_batch:
+                total_yielded += len(current_batch)
+                elapsed = time.monotonic() - scan_start
+                logging.info(f"[chunking] scan_incremental: yielding final batch of {len(current_batch)} (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
                 yield current_batch
+            elapsed = time.monotonic() - scan_start
+            logging.info(f"[chunking] scan_incremental: generator exhausting for '{directory_path}' (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
         except Exception as e:
             logging.error(f"Error during directory scan of {directory_path}: {e}", exc_info=True)
 
     def scan_incremental_reconcile(self, directory_path: str, recursive: bool,
-                                     ctx: ReconcileContext, batch_size: int = 50):
+                                     ctx: ReconcileContext, batch_size: int = 10):
         """Like scan_incremental but also tracks ghost files via *ctx*.
 
         Wraps scan_incremental: for each discovered file, discards it from

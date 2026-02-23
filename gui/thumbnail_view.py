@@ -611,10 +611,12 @@ class ThumbnailViewWidget(QFrame):
         """
         if not files:
             return
+        logging.info(f"[chunking] _on_initial_files_received: {len(files)} files from DB")
         self._add_image_batch(files)
         # Drain one chunk immediately so the first screenful of placeholders
         # paints without waiting for a timer tick.
         if self._pending_labels:
+            logging.info(f"[chunking] draining first chunk synchronously ({len(self._pending_labels)} pending)")
             self._tick_label_creation()
         if self.all_files:
             self.reapply_filters()
@@ -690,7 +692,12 @@ class ThumbnailViewWidget(QFrame):
             if self._startup_t0 is not None:
                 elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
                 logging.info(f"[startup] scan_complete: {elapsed_ms:.0f} ms after load_directory")
-            logging.info("Daemon has completed the scan and thumbnailing pipeline.")
+            logging.info(
+                f"[chunking] scan_complete: all_files={len(self.all_files)}, "
+                f"labels={len(self.labels)}, pending_labels={len(self._pending_labels)}, "
+                f"current_files(in layout)={len(self.current_files)}, "
+                f"label_timer_active={self._label_tick_timer.isActive()}"
+            )
             # Stop any pending batched update, as this is the final one.
             self._filter_update_timer.stop()
             # Mark loading complete before reapply_filters() so the daemon is queried
@@ -1251,7 +1258,11 @@ class ThumbnailViewWidget(QFrame):
         filter is computed locally (fast path).  Otherwise the daemon is
         queried on a background thread so the GUI never blocks on I/O.
         """
-        logging.debug(f"Re-applying filters. Text: '{self._current_filter}', Stars: {self._current_star_filter}")
+        logging.info(
+            f"[chunking] reapply_filters: is_loading={self._is_loading}, "
+            f"all_files={len(self.all_files)}, labels={len(self.labels)}, "
+            f"pending_labels={len(self._pending_labels)}"
+        )
 
         if not self.all_files or not self.socket_client:
             logging.warning("Cannot apply filters: file list or socket client is not ready.")

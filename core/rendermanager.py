@@ -358,8 +358,10 @@ class RenderManager(QObject):
 
         # 4. If the generator is exhausted, the job is complete.
         if item is None:
-            logger.info(f"[{job.job_id}::{slice_index}] Generator is exhausted. Finalizing job.")
-            logger.info(f"Source job '{job.job_id}' finished.")
+            logger.info(
+                f"[chunking] generator exhausted for '{job.job_id}' at slice={slice_index}. "
+                f"Calling on_complete and emitting scan_complete."
+            )
             with self.active_jobs_lock:
                 self.active_jobs.pop(job.job_id, None)
 
@@ -388,6 +390,11 @@ class RenderManager(QObject):
             from network import protocol
             notification_data = protocol.ScanProgressData(path=job_path, files=items_to_process)
             notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
+            logger.info(
+                f"[chunking] generator_runner: scan_progress for '{job.job_id}' "
+                f"slice={slice_index}, files_in_batch={len(items_to_process)}, "
+                f"queue_size={self.notification_queue.qsize()}"
+            )
             try:
                 self.notification_queue.put_nowait(notification)
             except Full:
@@ -408,7 +415,10 @@ class RenderManager(QObject):
         # 6. Schedule the next slice of this job.
         next_slice_index = slice_index + 1
         next_task_id = f"job_slice::{job.job_id}::{next_slice_index}"
-        logger.debug(f"Attempting to schedule next slice: {next_task_id}")
+        logger.info(
+            f"[chunking] scheduling next slice: {next_task_id} "
+            f"(priority={job.priority}, queue_depth={self.task_queue.qsize()})"
+        )
         success = self.submit_task(
             next_task_id,
             job.priority,
