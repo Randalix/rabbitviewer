@@ -631,6 +631,15 @@ class ThumbnailViewWidget(QFrame):
             except ValidationError as e:
                 logging.error(f"Error processing 'scan_progress' notification: {e}", exc_info=True)
 
+        elif event_data.notification_type == "files_removed":
+            try:
+                data = protocol.FilesRemovedData.model_validate(event_data.data)
+                if data.files:
+                    logging.info(f"Removing {len(data.files)} ghost files from view.")
+                    self.remove_images(data.files)
+            except ValidationError as e:
+                logging.error(f"Error processing 'files_removed' notification: {e}", exc_info=True)
+
         elif event_data.notification_type == "scan_complete":
             if self._startup_t0 is not None:
                 elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000

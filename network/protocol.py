@@ -160,3 +160,6 @@ class PreviewsReadyData(BaseModel):
     image_path: str
     thumbnail_path: Optional[str]
     view_image_path: Optional[str]
+
+class FilesRemovedData(BaseModel):
+    files: List[str]

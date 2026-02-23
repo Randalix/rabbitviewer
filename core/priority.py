@@ -39,6 +39,7 @@ class SourceJob:
     generator: Generator[Any, None, None]
     task_factory: Callable[[Any, Priority], List['RenderTask']]
     create_tasks: bool = True
+    on_complete: Optional[Callable] = field(default=None, compare=False)
     _cancel_event: threading.Event = field(default_factory=threading.Event, compare=False)
 
     def __lt__(self, other):
