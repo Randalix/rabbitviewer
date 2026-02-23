@@ -59,25 +59,33 @@ def main() -> None:
         _complete()
         sys.exit(0)
 
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+    if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
         _print_usage(commands)
         sys.exit(0)
 
-    cmd = sys.argv[1]
-    # Accept both dashes and underscores.
-    normalised = cmd.replace("_", "-")
-    if normalised not in commands:
-        print(f"rabbit: unknown command '{cmd}'", file=sys.stderr)
-        print(f"Run 'rabbit --help' for a list of commands.", file=sys.stderr)
-        sys.exit(1)
+    # Resolve subcommand.  If the first arg is a known command use it;
+    # otherwise default to "viewer" and pass all args through (e.g.
+    # `rabbit /some/dir` becomes `rabbit viewer /some/dir`).
+    if len(sys.argv) >= 2:
+        normalised = sys.argv[1].replace("_", "-")
+        if normalised in commands:
+            cmd = normalised
+            sub_argv = sys.argv[2:]
+        else:
+            cmd = "viewer"
+            sub_argv = sys.argv[1:]
+    else:
+        cmd = "viewer"
+        sub_argv = []
 
-    script = commands[normalised]
-
-    # Rewrite sys.argv so the subcommand sees itself as argv[0].
-    sys.argv = [str(script)] + sys.argv[2:]
+    script = commands[cmd]
+    sys.argv = [str(script)] + sub_argv
 
     # Import and run the module's main() if it has one, otherwise exec.
-    spec = importlib.util.spec_from_file_location(normalised, script)
+    spec = importlib.util.spec_from_file_location(script.stem, script)
+    if spec is None or spec.loader is None:
+        print(f"rabbit: failed to load '{cmd}'", file=sys.stderr)
+        sys.exit(1)
     mod = importlib.util.module_from_spec(spec)
     mod.__name__ = "__main__"
     spec.loader.exec_module(mod)

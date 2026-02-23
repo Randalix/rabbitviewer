@@ -26,8 +26,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$REPO_DIR/venv"
 BIN_DIR="$HOME/.local/bin"
-SCRIPTS=("rabbitviewer" "rabbitviewer-daemon")
-CLI_DIR="$REPO_DIR/cli"    # used by rabbit dispatcher wrapper
+CLI_DIR="$REPO_DIR/cli"
 MODE="${1:-}"
 
 # ── argument validation ────────────────────────────────────────────────────────
@@ -89,29 +88,18 @@ detect_shell_rc() {
     esac
 }
 
-# Map a script name to its venv entry point path.
-entry_point_for() {
-    case "$1" in
-        rabbitviewer)        echo "$VENV_DIR/bin/rabbitviewer" ;;
-        rabbitviewer-daemon) echo "$VENV_DIR/bin/rabbitviewer-daemon" ;;
-        *) red "Unknown script: $1"; exit 1 ;;
-    esac
-}
-
 # ── uninstall ─────────────────────────────────────────────────────────────────
 
 if [[ "$MODE" == "--uninstall" ]]; then
     yellow "Removing wrappers from $BIN_DIR …"
-    for script in "${SCRIPTS[@]}"; do
-        target="$BIN_DIR/$script"
+    # Remove legacy wrappers from previous installs.
+    for legacy in rabbitviewer rabbitviewer-daemon; do
+        target="$BIN_DIR/$legacy"
         if [[ -f "$target" || -L "$target" ]]; then
             rm "$target"
-            green "  removed $target"
-        else
-            yellow "  $target not found, skipping"
+            green "  removed $target (legacy)"
         fi
     done
-    # Remove rabbit CLI dispatcher.
     target="$BIN_DIR/rabbit"
     if [[ -f "$target" || -L "$target" ]]; then
         rm "$target"
@@ -232,43 +220,28 @@ yellow "Installing RabbitViewer (editable) …"
 "$VENV_PIP" install -e "$REPO_DIR"
 green "Package installed."
 
-# 5. Write wrapper scripts into ~/.local/bin.
-#    Wrappers embed the absolute venv path set at install time; re-run install.sh
-#    if the repo is moved.
-#    rm -f before writing: prevents cat > dst from following a leftover symlink
-#    and overwriting the pip-generated entry point inside the venv.
+# 5. Write `rabbit` wrapper into ~/.local/bin.
+#    The wrapper prepends the repo to PYTHONPATH so project modules win,
+#    then delegates to the venv's `rabbit` entry point (installed by pip).
+#    Re-run install.sh if the repo is moved.
 mkdir -p "$BIN_DIR"
 
-for script in "${SCRIPTS[@]}"; do
-    src="$(entry_point_for "$script")"
-    dst="$BIN_DIR/$script"
-
-    if [[ ! -f "$src" ]]; then
-        red "Entry point not found after install: $src"
-        exit 1
-    fi
-
-    rm -f "$dst"
-    cat > "$dst" <<WRAPPER
-#!/usr/bin/env bash
-export PYTHONPATH="${REPO_DIR}\${PYTHONPATH:+:\${PYTHONPATH}}"
-exec "${src}" "\$@"
-WRAPPER
-    chmod +x "$dst"
-    green "  $dst → $src"
-done
-
-# 5b. Write wrapper for `rabbit` CLI dispatcher.
-RABBIT_SRC="$CLI_DIR/rabbit.py"
+RABBIT_EP="$VENV_DIR/bin/rabbit"
 RABBIT_DST="$BIN_DIR/rabbit"
+
+if [[ ! -f "$RABBIT_EP" ]]; then
+    red "Entry point not found after install: $RABBIT_EP"
+    exit 1
+fi
+
 rm -f "$RABBIT_DST"
 cat > "$RABBIT_DST" <<WRAPPER
 #!/usr/bin/env bash
 export PYTHONPATH="${REPO_DIR}\${PYTHONPATH:+:\${PYTHONPATH}}"
-exec "${VENV_PYTHON}" "${RABBIT_SRC}" "\$@"
+exec "${RABBIT_EP}" "\$@"
 WRAPPER
 chmod +x "$RABBIT_DST"
-green "  $RABBIT_DST → $RABBIT_SRC"
+green "  $RABBIT_DST → $RABBIT_EP"
 
 # 5c. Install shell completions for `rabbit`.
 install_bash_completion() {
@@ -358,7 +331,6 @@ if [[ "$(uname)" == "Darwin" ]]; then
     MACOS_DIR="$CONTENTS/MacOS"
     RESOURCES="$CONTENTS/Resources"
     ICON_SRC="$REPO_DIR/logo/rabbitViewerLogo.png"
-    RABBITVIEWER_EP="$(entry_point_for rabbitviewer)"
 
     rm -rf "$APP_DIR"
     mkdir -p "$MACOS_DIR" "$RESOURCES"
@@ -412,7 +384,7 @@ PLIST
     cat > "$MACOS_DIR/RabbitViewer" <<LAUNCHER
 #!/usr/bin/env bash
 export PYTHONPATH="${REPO_DIR}\${PYTHONPATH:+:\${PYTHONPATH}}"
-exec "${RABBITVIEWER_EP}" "\$@"
+exec "${RABBIT_EP}" viewer "\$@"
 LAUNCHER
     chmod +x "$MACOS_DIR/RabbitViewer"
 
@@ -476,5 +448,5 @@ fi
 
 echo
 bold "Installation complete."
-green "Run: rabbitviewer [directory]"
+green "Run: rabbit [directory]"
 green "CLI: rabbit --help"
