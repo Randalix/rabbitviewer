@@ -26,7 +26,7 @@ Heavy work runs in a background daemon process. The GUI never blocks on decoding
 ### Progressive Thumbnails
 
 Images render as they are decoded.
-Visible items are automatically prioritized by the scheduler — what you see loads first.
+A heatmap radiates from the mouse cursor — thumbnails closest to the pointer load first, with priority decreasing outward across a 10-ring Manhattan diamond. Nearby images also get speculative fullres pre-caching (4-ring zone) that cancels cooperatively when the cursor moves away.
 
 ### Star Ratings
 
@@ -311,13 +311,14 @@ RabbitViewer runs as two cooperating processes:
 
 ### Scheduling
 
-The `RenderManager` uses a priority queue.
-Visible images always jump to the highest priority.
+The `RenderManager` uses a priority queue with heatmap-based graduated priorities.
+A 10-ring Manhattan diamond around the cursor assigns priorities from 90 (under cursor) to 40 (ring 10). Speculative fullres pre-caching covers a 4-ring zone with cooperative cancellation. Delta-only IPC ensures only changed priorities are sent, and a generation counter drops stale updates during fast scrolling.
 
 ### Work Model
 
 * SourceJob pattern discovers file paths
 * Task factory converts paths into render tasks
+* RenderTask supports cooperative cancellation via `cancel_event` (threading.Event)
 
 ### Database
 
