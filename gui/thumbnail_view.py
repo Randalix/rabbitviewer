@@ -235,6 +235,14 @@ class ThumbnailViewWidget(QFrame):
         self._preview_tick_timer.setInterval(16)  # ~60 fps drain rate
         self._preview_tick_timer.timeout.connect(self._tick_preview_loading)
 
+        # Chunked label creation: instead of creating all labels synchronously
+        # in _add_image_batch (which freezes the GUI for large directories), we
+        # buffer (file_path, original_idx) pairs and drain them at ~60fps.
+        self._pending_labels: list = []  # [(file_path, original_idx), ...]
+        self._label_tick_timer = QTimer(self)
+        self._label_tick_timer.setInterval(16)  # ~60 fps, same as preview timer
+        self._label_tick_timer.timeout.connect(self._tick_label_creation)
+
         self._priority_update_timer = QTimer(self)
         self._priority_update_timer.setSingleShot(True)
         self._priority_update_timer.setInterval(100)
@@ -591,13 +599,17 @@ class ThumbnailViewWidget(QFrame):
     @Slot(list)
     def _on_initial_files_received(self, files: list):
         """
-        Handles the DB-response file list.  Always calls reapply_filters()
-        immediately so the full placeholder grid appears as soon as the daemon
-        responds, regardless of whether fast-scan batches arrived first.
+        Handles the DB-response file list.  Creates the first chunk of labels
+        synchronously so placeholders paint in the same frame, then lets the
+        timer handle the rest at ~60fps.
         """
         if not files:
             return
         self._add_image_batch(files)
+        # Drain one chunk immediately so the first screenful of placeholders
+        # paints without waiting for a timer tick.
+        if self._pending_labels:
+            self._tick_label_creation()
         if self.all_files:
             self.reapply_filters()
 
@@ -670,7 +682,13 @@ class ThumbnailViewWidget(QFrame):
 
 
     def _add_image_batch(self, files: List[str]):
-        """Adds a batch of new file placeholders and schedules a single layout update."""
+        """Adds a batch of new file paths and queues label creation in chunks.
+
+        Index bookkeeping (all_files, _all_files_set, _path_to_idx) is done
+        immediately so lookups and deduplication work.  Actual label allocation
+        is deferred to _tick_label_creation which drains _pending_labels at
+        ~60fps, keeping the GUI responsive for large directories.
+        """
         if not files:
             return
 
@@ -684,8 +702,26 @@ class ThumbnailViewWidget(QFrame):
         for i, f in enumerate(new_files):
             self._path_to_idx[f] = start_idx + i
 
-        for i, file_path in enumerate(new_files):
-            original_idx = start_idx + i
+        # Queue label creation for chunked processing.
+        self._pending_labels.extend(
+            (f, start_idx + i) for i, f in enumerate(new_files)
+        )
+        if not self._label_tick_timer.isActive():
+            self._label_tick_timer.start()
+
+    _LABEL_TICK_BATCH = 500  # labels created per 16ms tick (~0.01ms each)
+
+    def _tick_label_creation(self):
+        """Drains up to _LABEL_TICK_BATCH items from _pending_labels per tick.
+
+        Creates ImageState + ThumbnailLabel for each, applies any cached
+        thumbnails, then triggers a layout update.  Stops the timer when
+        the queue is empty.
+        """
+        batch = self._pending_labels[:self._LABEL_TICK_BATCH]
+        del self._pending_labels[:self._LABEL_TICK_BATCH]
+
+        for file_path, original_idx in batch:
             self.image_states[original_idx] = ImageState()
             label = self._get_or_create_label(file_path, original_idx)
             if label:
@@ -695,7 +731,10 @@ class ThumbnailViewWidget(QFrame):
                     del self.ready_thumbnails[file_path]
                 self.labels[original_idx] = label
 
-        # Use a timer to batch updates instead of re-filtering on every single batch.
+        if not self._pending_labels:
+            self._label_tick_timer.stop()
+
+        # Trigger layout update for the labels just created.
         self._filter_update_timer.start()
 
     def add_images(self, image_paths: List[str]) -> None:
@@ -809,6 +848,8 @@ class ThumbnailViewWidget(QFrame):
             self._priority_update_timer.stop()
         if hasattr(self, '_preview_tick_timer'):
             self._preview_tick_timer.stop()
+        if hasattr(self, '_label_tick_timer'):
+            self._label_tick_timer.stop()
         if hasattr(self, '_viewport_executor'):
             # wait=False: in-flight viewport calls are best-effort priority hints; the
             # socket client handles broken-pipe errors on its own after widget teardown.
@@ -837,7 +878,10 @@ class ThumbnailViewWidget(QFrame):
             self._preview_tick_timer.stop()
         if hasattr(self, '_pending_previews'):
             self._pending_previews.clear()
-
+        if hasattr(self, '_label_tick_timer'):
+            self._label_tick_timer.stop()
+        if hasattr(self, '_pending_labels'):
+            self._pending_labels.clear()
 
         # Recycle all labels first while they still have proper parent
         for widget in self.labels.values():
