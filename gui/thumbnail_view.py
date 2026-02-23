@@ -1396,6 +1396,25 @@ class ThumbnailViewWidget(QFrame):
             if orig_idx is not None:
                 current_thumb[all_files[orig_idx]] = priority
 
+        # --- Visible-but-outside-heatmap: request at GUI_REQUEST_LOW (40) ---
+        # The heatmap diamond only covers ~221 cells; the rest of the viewport
+        # still needs requesting so cached thumbnails get previews_ready.
+        first_row, last_row = self._grid_layout_manager.get_visible_rows()
+        first_row = max(0, first_row - 1)
+        last_row += 1
+        vis_start = first_row * columns
+        vis_end = min(total_visible - 1, (last_row + 1) * columns - 1)
+        for vis_idx in range(vis_start, vis_end + 1):
+            orig_idx = vis_to_orig(vis_idx)
+            if orig_idx is None:
+                continue
+            state = self.image_states.get(orig_idx)
+            if state and state.loaded:
+                continue
+            path = all_files[orig_idx]
+            if path not in current_thumb:
+                current_thumb[path] = 40  # GUI_REQUEST_LOW
+
         current_fullres: dict[str, int] = {}
         for vis_idx, priority in fullres_pairs:
             orig_idx = vis_to_orig(vis_idx)
