@@ -932,21 +932,11 @@ class ThumbnailManager:
         thumb_valid = self.metadata_db.is_thumbnail_valid(file_path)
 
         if thumb_valid:
-            # Warm cache: notify the GUI immediately, no thumbnail/metadata tasks.
-            if priority >= Priority.GUI_REQUEST_LOW:
-                paths = self.metadata_db.get_thumbnail_paths(file_path)
-                notification_data = protocol.PreviewsReadyData(
-                    image_path=file_path,
-                    thumbnail_path=paths.get('thumbnail_path'),
-                    view_image_path=paths.get('view_image_path'),
-                )
-                notification = protocol.Notification(
-                    type="previews_ready", data=notification_data.model_dump()
-                )
-                try:
-                    self.render_manager.notification_queue.put_nowait(notification)
-                except Full:
-                    logger.warning("Notification queue full; dropping previews_ready for %s", file_path)
+            # Warm cache: no thumbnail/metadata tasks needed.
+            # Don't send previews_ready here — the GUI's heatmap will call
+            # request_thumbnail() which handles cache-hit notifications in
+            # the correct priority order (cursor-outward).
+            pass
         else:
             tasks.append(RenderTask(
                 task_id=f"meta::{file_path}",

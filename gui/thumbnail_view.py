@@ -989,6 +989,13 @@ class ThumbnailViewWidget(QFrame):
         del self._pending_previews[:self._PREVIEW_TICK_BATCH]
 
         for image_path, thumbnail_path in batch:
+            # Skip duplicates: the scan and heatmap both send previews_ready
+            # for cached files, so the same path may appear multiple times.
+            orig_idx = self._path_to_idx.get(image_path, -1)
+            if orig_idx >= 0:
+                state = self.image_states.get(orig_idx)
+                if state and state.loaded:
+                    continue
             image = QImage(thumbnail_path)
             if not image.isNull():
                 self._thumbnail_generated_signal.emit(image_path, image, None)
