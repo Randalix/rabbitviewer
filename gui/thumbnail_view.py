@@ -221,6 +221,7 @@ class ThumbnailViewWidget(QFrame):
         # Startup timing — reset in load_directory, logged at each pipeline milestone.
         self._startup_t0: Optional[float] = None
         self._startup_first_scan_progress: bool = False
+        self._needs_heatmap_seed: bool = False
         self._startup_first_previews_ready: bool = False
 
         self._filter_update_timer = QTimer(self)
@@ -640,6 +641,11 @@ class ThumbnailViewWidget(QFrame):
                 logging.info(f"ThumbnailViewWidget received notification: Previews ready for {data.image_path}")
 
                 if data.thumbnail_path:
+                    # Skip notifications for files not in the current directory.
+                    # Daemon background work (watchdog, previous sessions) can produce
+                    # previews_ready for unrelated files that waste tick slots.
+                    if data.image_path not in self._path_to_idx:
+                        return
                     # Buffer the path instead of loading QImage immediately.  Draining
                     # the buffer via _preview_tick_timer lets the event loop repaint
                     # between batches, producing smooth progressive thumbnail reveal
@@ -655,12 +661,19 @@ class ThumbnailViewWidget(QFrame):
             try:
                 # The GUI's only job is to add placeholders as they are discovered.
                 data = protocol.ScanProgressData.model_validate(event_data.data)
-                if not self._startup_first_scan_progress and self._startup_t0 is not None:
+                first_batch = not self._startup_first_scan_progress
+                if first_batch and self._startup_t0 is not None:
                     self._startup_first_scan_progress = True
                     elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
                     logging.info(f"[startup] first scan_progress: {elapsed_ms:.0f} ms after load_directory ({len(data.files)} files in batch)")
                 logging.info(f"Received scan_progress batch for '{data.path}' with {len(data.files)} files.")
                 self._add_image_batch(sorted(data.files))
+                # Mark that the first layout after this batch should seed the
+                # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
+                # here because _visible_to_original_mapping is not yet populated —
+                # label creation and layout update happen asynchronously via timers.
+                if first_batch:
+                    self._needs_heatmap_seed = True
             except _ValidationErrors as e:
                 logging.error(f"Error processing 'scan_progress' notification: {e}", exc_info=True)
 
@@ -699,6 +712,7 @@ class ThumbnailViewWidget(QFrame):
 
         new_files = [f for f in files if f not in self._all_files_set]
         if not new_files:
+            logging.debug(f"[chunking] _add_image_batch: all {len(files)} files already known, skipping")
             return
 
         start_idx = len(self.all_files)
@@ -710,6 +724,11 @@ class ThumbnailViewWidget(QFrame):
         # Queue label creation for chunked processing.
         self._pending_labels.extend(
             (f, start_idx + i) for i, f in enumerate(new_files)
+        )
+        logging.info(
+            f"[chunking] _add_image_batch: +{len(new_files)} new files "
+            f"(all_files={len(self.all_files)}, pending_labels={len(self._pending_labels)}, "
+            f"labels={len(self.labels)})"
         )
         if not self._label_tick_timer.isActive():
             self._label_tick_timer.start()
@@ -736,8 +755,16 @@ class ThumbnailViewWidget(QFrame):
                     del self.ready_thumbnails[file_path]
                 self.labels[original_idx] = label
 
+        remaining = len(self._pending_labels)
+        logging.info(
+            f"[chunking] _tick_label_creation: created {len(batch)} labels "
+            f"(labels={len(self.labels)}, pending={remaining}, "
+            f"all_files={len(self.all_files)}, is_loading={self._is_loading})"
+        )
+
         if not self._pending_labels:
             self._label_tick_timer.stop()
+            logging.info("[chunking] _tick_label_creation: queue drained, timer stopped")
 
         # Trigger layout update for the labels just created.
         self._filter_update_timer.start()
@@ -911,6 +938,14 @@ class ThumbnailViewWidget(QFrame):
         self.current_directory_path = None
         self.image_states.clear()
         self._last_layout_file_count = 0
+        # Cancel any in-flight speculative fullres tasks from the old directory
+        # so workers don't waste time on files no longer visible.
+        if self._last_fullres_pairs and self.socket_client:
+            paths_to_cancel = list(self._last_fullres_pairs.keys())
+            self._viewport_executor.submit(
+                self.socket_client.update_viewport_heatmap,
+                [], [], [], paths_to_cancel,
+            )
         self._last_thumb_pairs = {}
         self._last_fullres_pairs = {}
         self._hovered_label = None
@@ -984,23 +1019,32 @@ class ThumbnailViewWidget(QFrame):
         Drains up to _PREVIEW_TICK_BATCH items from _pending_previews per timer
         tick.  Loading QImages in small batches lets Qt process paint events
         between ticks, so thumbnails appear progressively instead of all at once.
+
+        Items are sorted by heatmap priority (highest first = closest to cursor)
+        before draining, so thumbnails always load in cursor-outward order
+        regardless of the order notifications arrived from the daemon.
         """
+        if self._last_thumb_pairs and len(self._pending_previews) > self._PREVIEW_TICK_BATCH:
+            pmap = self._last_thumb_pairs
+            self._pending_previews.sort(key=lambda item: -pmap.get(item[0], 0))
+
         batch = self._pending_previews[:self._PREVIEW_TICK_BATCH]
         del self._pending_previews[:self._PREVIEW_TICK_BATCH]
 
         for image_path, thumbnail_path in batch:
-            # Skip duplicates: the scan and heatmap both send previews_ready
-            # for cached files, so the same path may appear multiple times.
+            # Skip files not in the current directory (stale notifications from
+            # daemon background work) and duplicates already loaded.
             orig_idx = self._path_to_idx.get(image_path, -1)
-            if orig_idx >= 0:
-                state = self.image_states.get(orig_idx)
-                if state and state.loaded:
-                    continue
+            if orig_idx < 0:
+                continue
+            state = self.image_states.get(orig_idx)
+            if state and state.loaded:
+                continue
             image = QImage(thumbnail_path)
             if not image.isNull():
                 self._thumbnail_generated_signal.emit(image_path, image, None)
             else:
-                logging.warning(f"[thumb] thumbnail missing or unreadable: {thumbnail_path}")
+                logging.warning(f"Failed to load thumbnail: {thumbnail_path}")
 
         if not self._pending_previews:
             self._preview_tick_timer.stop()
@@ -1267,11 +1311,34 @@ class ThumbnailViewWidget(QFrame):
             if file_path not in visible_paths:
                 new_hidden_indices.add(i)
 
+        hidden_changed = self._hidden_indices != new_hidden_indices
+        count_changed = len(self.all_files) != self._last_layout_file_count
+        will_update = hidden_changed or count_changed
+
+        logging.info(
+            f"[chunking] _apply_filter_results: all_files={len(self.all_files)}, "
+            f"labels={len(self.labels)}, visible_paths={len(visible_paths)}, "
+            f"hidden={len(new_hidden_indices)}, "
+            f"hidden_changed={hidden_changed}, count_changed={count_changed}, "
+            f"last_layout_file_count={self._last_layout_file_count}, "
+            f"will_update_layout={will_update}"
+        )
+
         # Update layout only if the set of visible items OR the total count has changed
-        if self._hidden_indices != new_hidden_indices or len(self.all_files) != self._last_layout_file_count:
+        if will_update:
             self._hidden_indices = new_hidden_indices
             self._update_filtered_layout()
             self._last_layout_file_count = len(self.all_files)
+            logging.info(
+                f"[chunking] _update_filtered_layout done: "
+                f"current_files={len(self.current_files)}, "
+                f"labels_in_layout={len(self._visible_to_original_mapping)}"
+            )
+        else:
+            logging.info(
+                f"[chunking] _apply_filter_results: SKIPPED layout update "
+                f"(labels={len(self.labels)} but layout has {self._last_layout_file_count} files)"
+            )
 
             total_count = len(self.all_files)
             visible_count = len(self.current_files)
@@ -1328,7 +1395,15 @@ class ThumbnailViewWidget(QFrame):
         visible_labels = {i: self.labels[self._visible_to_original_mapping[i]] for i in range(len(self.current_files))}
         self._grid_layout_manager.set_files_and_labels(self.current_files, visible_labels)
         self._grid_layout_manager.update_layout()
-        self._priority_update_timer.start()
+
+        # On the first layout after load, seed the heatmap immediately so
+        # _last_thumb_pairs is populated before notifications start draining.
+        # Subsequent updates use the normal 100ms coalescing timer.
+        if self._needs_heatmap_seed:
+            self._needs_heatmap_seed = False
+            self._prioritize_visible_thumbnails()
+        else:
+            self._priority_update_timer.start()
 
     def _on_scroll(self, value):
         """Slot to handle scroll bar value changes."""
@@ -1456,16 +1531,8 @@ class ThumbnailViewWidget(QFrame):
         if delta_upgrade or paths_to_downgrade or delta_fullres or fullres_to_cancel:
             self._viewport_generation += 1
             gen = self._viewport_generation
-            logging.debug(
-                f"Heatmap delta (gen {gen}): {len(delta_upgrade)} thumb upgrades, "
-                f"{len(delta_fullres)} fullres, "
-                f"{len(paths_to_downgrade)} downgrades, "
-                f"{len(fullres_to_cancel)} fullres cancels."
-            )
-
             def _send_if_current(generation, up, down, fr, fc):
                 if self._viewport_generation != generation:
-                    logging.debug(f"Dropping stale viewport update gen {generation} (current: {self._viewport_generation}).")
                     return
                 self.socket_client.update_viewport_heatmap(up, down, fr, fc)
 
@@ -1474,14 +1541,6 @@ class ThumbnailViewWidget(QFrame):
                 delta_upgrade, paths_to_downgrade,
                 delta_fullres, fullres_to_cancel,
             )
-
-        # --- Partition pending previews: heatmap items first (O(N)) ---
-        if self._pending_previews and current_thumb:
-            priority_q = []
-            rest_q = []
-            for item in self._pending_previews:
-                (priority_q if item[0] in current_thumb else rest_q).append(item)
-            self._pending_previews[:] = priority_q + rest_q
 
         self._last_thumb_pairs = current_thumb
         self._last_fullres_pairs = current_fullres

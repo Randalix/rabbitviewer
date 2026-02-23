@@ -194,16 +194,6 @@ class ThumbnailSocketClient:
         request = protocol.RequestPreviewsRequest(image_paths=image_paths, priority=priority)
         return self._send_request(request, protocol.RequestPreviewsResponse)
 
-    def update_viewport(self, paths_to_upgrade: List[str],
-                        paths_to_downgrade: List[str]) -> Optional[protocol.RequestPreviewsResponse]:
-        """Legacy: upgrades visible thumbnails to GUI_REQUEST and downgrades scrolled-away ones."""
-        protocol = _lazy_protocol()
-        request = protocol.UpdateViewportRequest(
-            paths_to_upgrade=[protocol.PathPriority(path=p, priority=90) for p in paths_to_upgrade],
-            paths_to_downgrade=paths_to_downgrade,
-        )
-        return self._send_request(request, protocol.RequestPreviewsResponse)
-
     def update_viewport_heatmap(
         self,
         upgrade_pairs: List[tuple],

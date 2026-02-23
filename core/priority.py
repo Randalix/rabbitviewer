@@ -18,6 +18,18 @@ class Priority(IntEnum):
     FULLRES_REQUEST = 95
     SHUTDOWN = 999
 
+    @classmethod
+    def _missing_(cls, value):
+        """Allow intermediate heatmap priorities (e.g. 85, 75, 65).
+
+        Creates a pseudo-member so Priority(85) works and .name returns
+        a human-readable string like 'PRIORITY_85'.
+        """
+        obj = int.__new__(cls, value)
+        obj._value_ = value
+        obj._name_ = f"PRIORITY_{value}"
+        return obj
+
 
 class TaskState(IntEnum):
     PENDING = 1

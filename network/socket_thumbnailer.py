@@ -356,7 +356,7 @@ class ThumbnailSocketServer:
             self.thumbnail_manager.request_speculative_fullres(
                 pp.path, Priority(pp.priority), session_id)
 
-        return protocol.RequestPreviewsResponse(count=success_count)
+        return protocol.Response(message=f"{success_count} upgraded")
 
     def _handle_request_view_image(self, request_data: dict) -> protocol.Response:
         req = protocol.RequestViewImageRequest.model_validate(request_data)
@@ -423,7 +423,7 @@ class ThumbnailSocketServer:
 
         reconcile_job = SourceJob(
             job_id=f"gui_scan::{req.session_id}::{req.path}",
-            priority=Priority.GUI_REQUEST_LOW,
+            priority=Priority.BACKGROUND_SCAN,
             generator=self.directory_scanner.scan_incremental_reconcile(
                 req.path, req.recursive, reconcile_ctx
             ),
