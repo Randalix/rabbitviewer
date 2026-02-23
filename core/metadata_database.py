@@ -2,7 +2,7 @@ import sqlite3
 import os
 import logging
 import hashlib
-from typing import Dict, Optional, List, Any, Set
+from typing import Dict, Optional, List, Any
 import threading
 from threading import Lock
 import time
@@ -669,23 +669,23 @@ class MetadataDatabase:
             logging.error(f"Error searching by camera: {e}")
             return []
             
-    def get_filtered_file_paths(self, text_filter: str, star_states: List[bool]) -> Set[str]:
+    def get_filtered_file_paths(self, text_filter: str, star_states: List[bool]) -> List[str]:
         """
-        Efficiently gets a set of file paths that match the text and star filters
+        Gets file paths that match the text and star filters
         by performing the filtering directly within the database.
         """
         try:
             with self._lock:
                 cursor = self.conn.cursor()
-                
+
                 query = "SELECT file_path FROM image_metadata WHERE 1=1"
                 params = []
-                
+
                 # Add text filter
                 if text_filter:
                     query += " AND file_path LIKE ?"
                     params.append(f"%{text_filter}%")
-                
+
                 # Add star filter
                 enabled_ratings = [i for i, state in enumerate(star_states) if state]
                 if len(enabled_ratings) < len(star_states) and enabled_ratings:
@@ -698,12 +698,12 @@ class MetadataDatabase:
 
                 cursor.execute(query, params)
                 results = cursor.fetchall()
-                
-                return {row[0] for row in results}
-                
+
+                return [row[0] for row in results]
+
         except sqlite3.Error as e:
             logging.error(f"Error getting filtered files: {e}", exc_info=True)
-            return set()
+            return []
 
     def get_all_file_paths(self) -> List[str]:
         """Gets a list of all file_path entries from the database."""
