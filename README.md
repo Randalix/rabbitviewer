@@ -53,12 +53,18 @@ Scan entire directory trees with optional recursive mode.
 * Invert selection
 * Undo / redo
 
+### Video Playback
+
+* Embedded mpv player for MP4, MOV, MKV, AVI, WebM, and more
+* Space to pause, M to mute, `[`/`]` to seek
+* Timeline scrubbing in the inspector via mouse position
+
 ### Full Image Viewer
 
 * Zoom
 * Pan
 * Fast switching
-* Pixel-level inspector overlay
+* Pixel-level inspector overlay (images and videos)
 
 ### Fully Rebindable Hotkeys
 
@@ -102,6 +108,11 @@ Add support for new formats by dropping a file into `plugins/`.
 * Samsung SRW
 * Adobe DNG
 
+### Video Formats (via ffmpeg + mpv)
+
+* MP4, MOV, MKV, AVI, WebM, M4V
+* WMV, FLV, MPG, MPEG, 3GP, TS
+
 New formats can be added by implementing:
 
 ```
@@ -131,6 +142,10 @@ All hotkeys are defined in `config.yaml`.
 | Invert selection     | Shift+I         |
 | Set rating 0–4       | 0 – 4           |
 | Delete selected      | Del / R         |
+| Pause / resume video | Space           |
+| Mute / unmute video  | M               |
+| Seek forward 5s      | ]               |
+| Seek backward 5s     | [               |
 
 You can bind any hotkey to a script:
 
@@ -181,17 +196,21 @@ The hotkey system acts as the automation entry point.
 
 * Python 3.10–3.13 (PySide6 does not yet support 3.14+)
 * ExifTool (required for RAW support and writing ratings)
+* ffmpeg / ffprobe (required for video thumbnails and metadata)
+* mpv + libmpv (required for video playback)
 
 **macOS**
 
 ```
-brew install exiftool
+brew install exiftool ffmpeg mpv
+pip install python-mpv
 ```
 
 **Debian / Ubuntu**
 
 ```
-sudo apt install libimage-exiftool-perl
+sudo apt install libimage-exiftool-perl ffmpeg libmpv-dev
+pip install python-mpv
 ```
 
 ---
@@ -325,6 +344,7 @@ GUI uses an internal pub/sub EventSystem.
 * watchdog
 * Pillow
 * ExifTool
+* ffmpeg / mpv
 
 ---
 
