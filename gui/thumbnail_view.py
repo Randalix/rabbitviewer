@@ -143,6 +143,7 @@ class ThumbnailViewWidget(QFrame):
     # Dedicated signal for the DB-response file list so it always triggers an
     # immediate layout update, regardless of what fast-scan batches arrived first.
     _initial_files_signal = Signal(list)
+    _filtered_paths_ready = Signal(object)  # set of visible paths from daemon
 
     def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
@@ -181,6 +182,8 @@ class ThumbnailViewWidget(QFrame):
         self._drag_start_index: int = -1
         self._drag_last_index: int = -1
         self._current_selection: Set[str] = set()
+        self._selected_indices: Set[int] = set()
+        self._last_preview_selected: Set[int] = set()
 
         self._setupUI()
         self.viewport().installEventFilter(self)
@@ -245,11 +248,14 @@ class ThumbnailViewWidget(QFrame):
         event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._handle_daemon_notification_from_thread)
         self._daemon_notification_received.connect(self._process_daemon_notification)
         self._initial_files_signal.connect(self._on_initial_files_received)
+        self._filtered_paths_ready.connect(self._on_filtered_paths_ready)
 
         self._hovered_label: Optional[ThumbnailLabel] = None
         self._thumbnail_generated_signal.connect(self._on_thumbnail_ready, Qt.QueuedConnection)
 
         self._is_loading = False
+        self._filter_in_flight = False
+        self._filter_pending = False
 
 
     def _initializeLayout(self):
@@ -455,17 +461,24 @@ class ThumbnailViewWidget(QFrame):
 
     def _on_selection_changed(self, event_data: SelectionChangedEventData):
         """
-        Update the visual state of all labels and the local selection cache
-        when the central selection state changes.
-        This is the subscriber to the SELECTION_CHANGED event.
+        Update the visual state of changed labels when the central selection
+        state changes.  Only labels whose selected state actually differs from
+        the previous frame are touched (delta update).
         """
         if event_data.event_type == EventType.SELECTION_CHANGED:
             selected_paths = event_data.selected_paths
-            selected_indices = {self._path_to_idx[p] for p in selected_paths if p in self._path_to_idx}
-            for idx, label in self.labels.items():
-                is_selected = idx in selected_indices
-                if label.selected != is_selected:
-                    label.setSelected(is_selected)
+            new_indices = {self._path_to_idx[p] for p in selected_paths if p in self._path_to_idx}
+            newly_selected = new_indices - self._selected_indices
+            deselected = self._selected_indices - new_indices
+            for idx in newly_selected:
+                label = self.labels.get(idx)
+                if label:
+                    label.setSelected(True)
+            for idx in deselected:
+                label = self.labels.get(idx)
+                if label:
+                    label.setSelected(False)
+            self._selected_indices = new_indices
             self._current_selection = selected_paths
 
     def _label_to_original_idx(self, label: ThumbnailLabel) -> Optional[int]:
@@ -829,6 +842,8 @@ class ThumbnailViewWidget(QFrame):
         cmd = ReplaceSelectionCommand(paths=set(), source="thumbnail_view", timestamp=time.time())
         event_system.publish(cmd)
         self.selection_anchor_index = None
+        self._selected_indices.clear()
+        self._last_preview_selected.clear()
 
         self.pending_thumbnails.clear()
         self.ready_thumbnails.clear()
@@ -981,34 +996,45 @@ class ThumbnailViewWidget(QFrame):
             self._drag_start_index = -1
             self._drag_last_index = -1
             self._selection_mode = None
+            self._last_preview_selected = set()
 
         super().mouseReleaseEvent(event)
 
     def _update_selection_preview(self, start_idx: int, end_idx: Optional[int]):
-        """Visually update thumbnail borders during a drag without changing the core selection state."""
+        """Visually update thumbnail borders during a drag without changing the core selection state.
+
+        Uses delta tracking: only labels whose highlight state actually changed
+        since the last call are touched, avoiding an O(N) scan of all labels.
+        """
         if end_idx is None:
             end_idx = start_idx
 
         preview_indices = self._get_indices_in_range(start_idx, end_idx)
-        current_selected_indices = {self._path_to_idx[p] for p in self._current_selection if p in self._path_to_idx}
+        current_selected_indices = self._selected_indices
 
-        for idx, label in self.labels.items():
-            if not label.isVisible():
-                continue
+        # Compute the full desired-selected set via set math (no label iteration).
+        if self._selection_mode == "replace":
+            desired = preview_indices
+        elif self._selection_mode == "add":
+            desired = current_selected_indices | preview_indices
+        elif self._selection_mode == "remove":
+            desired = current_selected_indices - preview_indices
+        else:
+            desired = preview_indices
 
-            in_current_selection = idx in current_selected_indices
-            in_preview_range = idx in preview_indices
+        to_highlight = desired - self._last_preview_selected
+        to_unhighlight = self._last_preview_selected - desired
 
-            is_selected = False
-            if self._selection_mode == "replace":
-                is_selected = in_preview_range
-            elif self._selection_mode == "add":
-                is_selected = in_current_selection or in_preview_range
-            elif self._selection_mode == "remove":
-                is_selected = in_current_selection and not in_preview_range
+        for idx in to_highlight:
+            label = self.labels.get(idx)
+            if label and label.isVisible() and not label.selected:
+                label.setSelected(True)
+        for idx in to_unhighlight:
+            label = self.labels.get(idx)
+            if label and label.isVisible() and label.selected:
+                label.setSelected(False)
 
-            if label.selected != is_selected:
-                label.setSelected(is_selected)
+        self._last_preview_selected = desired
 
     def _commit_selection(self, start_idx: int, end_idx: int):
         """Publish the appropriate command to finalize the selection."""
@@ -1112,8 +1138,9 @@ class ThumbnailViewWidget(QFrame):
 
     def reapply_filters(self):
         """
-        Re-applies all active filters by asking the daemon for the filtered list
-        and then updates the layout.
+        Re-applies all active filters.  When the scan is still running the
+        filter is computed locally (fast path).  Otherwise the daemon is
+        queried on a background thread so the GUI never blocks on I/O.
         """
         logging.debug(f"Re-applying filters. Text: '{self._current_filter}', Stars: {self._current_star_filter}")
 
@@ -1121,21 +1148,55 @@ class ThumbnailViewWidget(QFrame):
             logging.warning("Cannot apply filters: file list or socket client is not ready.")
             return
 
-        visible_paths = set()
         if self._is_loading:
-            visible_paths = set(self.all_files)
-        else:
-            # Otherwise, when loading is complete, query the daemon with the active filter.
-            response = self.socket_client.get_filtered_file_paths(
-                self._current_filter, self._current_star_filter
-            )
+            # Fast path: show everything during the initial scan.
+            self._apply_filter_results(set(self.all_files))
+            return
 
+        # Async path: submit the socket call to the executor so the GUI
+        # stays responsive while the daemon processes the query.
+        if self._filter_in_flight:
+            self._filter_pending = True
+            return
+
+        self._filter_in_flight = True
+        # Snapshot the current filter values so racing changes don't corrupt
+        # the background call with half-old / half-new state.
+        text_filter = self._current_filter
+        star_filter = list(self._current_star_filter)
+        self._viewport_executor.submit(self._fetch_filtered_paths, text_filter, star_filter)
+
+    def _fetch_filtered_paths(self, text_filter: str, star_filter: list):
+        """Runs on _viewport_executor thread — never blocks the GUI."""
+        try:
+            response = self.socket_client.get_filtered_file_paths(text_filter, star_filter)
             if response and response.status == "success":
-                visible_paths = set(response.paths)
+                self._filtered_paths_ready.emit(set(response.paths))
             else:
                 logging.error(f"Failed to get filtered paths from daemon. Response: {response}")
-                visible_paths = set(self.all_files) # Fallback
+                self._filtered_paths_ready.emit(None)
+        except Exception as e:
+            logging.error(f"Error fetching filtered paths: {e}", exc_info=True)
+            self._filtered_paths_ready.emit(None)
 
+    @Slot(object)
+    def _on_filtered_paths_ready(self, visible_paths):
+        """Receives the daemon's filter response on the GUI thread."""
+        self._filter_in_flight = False
+
+        if visible_paths is None:
+            visible_paths = set(self.all_files)
+
+        self._apply_filter_results(visible_paths)
+
+        # If another filter change arrived while this one was in flight,
+        # re-submit with the latest filter values.
+        if self._filter_pending:
+            self._filter_pending = False
+            self.reapply_filters()
+
+    def _apply_filter_results(self, visible_paths: set):
+        """Common path for both sync (loading) and async (daemon) filter results."""
         new_hidden_indices = set()
         for i, file_path in enumerate(self.all_files):
             if file_path not in visible_paths:

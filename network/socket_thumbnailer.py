@@ -262,14 +262,11 @@ class ThumbnailSocketServer:
         if command == "request_previews":
             req = protocol.RequestPreviewsRequest.model_validate(request_data)
             logging.info(f"SocketServer: Received request_previews for {len(req.image_paths)} paths with priority {req.priority}.")
-            success_count = 0
             priority_level = Priority(req.priority)
 
-            # Directly call the priority upgrade logic instead of queueing a task to do it.
-            for path in req.image_paths:
-                if self.thumbnail_manager.request_thumbnail(
-                        path, priority_level, session_id_snapshot):
-                    success_count += 1
+            success_count = self.thumbnail_manager.batch_request_thumbnails(
+                req.image_paths, priority_level, session_id_snapshot
+            )
 
             return protocol.RequestPreviewsResponse(count=success_count)
 
@@ -348,11 +345,9 @@ class ThumbnailSocketServer:
                 f"SocketServer: update_viewport — upgrading {len(req.paths_to_upgrade)}, "
                 f"downgrading {len(req.paths_to_downgrade)} tasks."
             )
-            success_count = 0
-            for path in req.paths_to_upgrade:
-                if self.thumbnail_manager.request_thumbnail(
-                        path, Priority.GUI_REQUEST, session_id_snapshot):
-                    success_count += 1
+            success_count = self.thumbnail_manager.batch_request_thumbnails(
+                req.paths_to_upgrade, Priority.GUI_REQUEST, session_id_snapshot
+            )
 
             if req.paths_to_downgrade:
                 self.thumbnail_manager.downgrade_thumbnail_tasks(
