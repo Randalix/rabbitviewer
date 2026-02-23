@@ -771,6 +771,41 @@ class ThumbnailManager:
         )
         return [view_task]
 
+    def create_all_tasks_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
+        """Task factory for daemon background indexing: creates thumbnail, metadata,
+        and view image tasks in a single pass — one ``_passes_pre_checks`` call and
+        one DB lookup instead of two."""
+        if not self._passes_pre_checks(file_path):
+            return []
+
+        tasks: List[RenderTask] = []
+
+        if not self.metadata_db.is_thumbnail_valid(file_path):
+            tasks.append(RenderTask(
+                task_id=f"meta::{file_path}",
+                priority=priority,
+                func=self._process_metadata_task,
+                args=(file_path,),
+            ))
+            tasks.append(RenderTask(
+                task_id=file_path,
+                priority=priority,
+                func=self._generate_thumbnail_task,
+                args=(file_path,),
+            ))
+
+        paths = self.metadata_db.get_thumbnail_paths(file_path)
+        existing_view = paths.get('view_image_path') if paths else None
+        if not (existing_view and os.path.exists(existing_view)):
+            tasks.append(RenderTask(
+                task_id=f"view::{file_path}",
+                priority=priority,
+                func=self._generate_view_image_task,
+                args=(file_path,),
+            ))
+
+        return tasks
+
     def shutdown(self) -> None:
         """Gracefully shuts down the ThumbnailManager and its associated RenderManager."""
         logger.info("ThumbnailManager: Shutting down.")

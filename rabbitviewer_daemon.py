@@ -9,7 +9,7 @@ import errno
 from network.socket_thumbnailer import ThumbnailSocketServer
 from core.thumbnail_manager import ThumbnailManager
 from core.metadata_database import get_metadata_database
-from core.rendermanager import Priority, SourceJob
+from core.background_indexer import BackgroundIndexer
 from filewatcher.watcher import WatchdogHandler
 from config.config_manager import ConfigManager
 
@@ -127,21 +127,15 @@ def main():
         server_thread.start()
         logging.info("Socket server thread started.")
 
-        # 4. Start the file watcher and its initial scan AFTER the server is up.
-        logging.info("Starting file watcher with initial scan...")
+        # 4. Start the file watcher for live filesystem events.
+        logging.info("Starting file watcher...")
         watcher.start()
 
-        for watch_path in WATCH_PATHS:
-            if not os.path.exists(watch_path):
-                continue
-            view_image_job = SourceJob(
-                job_id=f"daemon_bg::view_images::{watch_path}",
-                priority=Priority.BACKGROUND_SCAN,
-                generator=server.directory_scanner.scan_incremental(watch_path, recursive=True),
-                task_factory=thumbnail_manager.create_view_image_task_for_file,
-            )
-            thumbnail_manager.render_manager.submit_source_job(view_image_job)
-            logging.info(f"Submitted background view image scan for: {watch_path}")
+        # 5. Start continuous background indexing of watch_paths.
+        background_indexer = BackgroundIndexer(
+            thumbnail_manager, server.directory_scanner, WATCH_PATHS
+        )
+        background_indexer.start_indexing()
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, shutdown_service)

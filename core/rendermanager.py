@@ -342,17 +342,23 @@ class RenderManager(QObject):
 
         # 5. Process the yielded item and create child tasks.
         items_to_process = item if isinstance(item, list) else [item]
+        _is_daemon_job = job.job_id.startswith("daemon_idx::")
         job_parts = job.job_id.split('::', 2)
-        session_id = job_parts[1] if len(job_parts) > 2 else None
+        # Daemon indexing jobs have no GUI session; session_id only applies to gui_scan jobs.
+        session_id = None if _is_daemon_job else (job_parts[1] if len(job_parts) > 2 else None)
         job_path = job_parts[2] if len(job_parts) > 2 else job_parts[-1]
 
-        from network import protocol
-        notification_data = protocol.ScanProgressData(path=job_path, files=items_to_process)
-        notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
-        try:
-            self.notification_queue.put_nowait(notification)
-        except Full:
-            logging.warning(f"Notification queue full; dropping scan_progress for job '{job.job_id}'.")
+        # Suppress scan_progress for daemon indexing jobs — the GUI blindly adds
+        # every file from scan_progress to its model, which would pollute the view
+        # with files from unrelated directories.
+        if not _is_daemon_job:
+            from network import protocol
+            notification_data = protocol.ScanProgressData(path=job_path, files=items_to_process)
+            notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
+            try:
+                self.notification_queue.put_nowait(notification)
+            except Full:
+                logging.warning(f"Notification queue full; dropping scan_progress for job '{job.job_id}'.")
 
         # Only create backend processing tasks if the job is configured to do so.
         # For fast GUI scans, this will be false.
