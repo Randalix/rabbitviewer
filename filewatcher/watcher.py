@@ -3,17 +3,14 @@ import os
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from core.thumbnail_manager import ThumbnailManager
-from core.rendermanager import Priority, SourceJob
-import threading
-from typing import Generator, List, Optional
-
-_INITIAL_SCAN_BATCH_SIZE = 100
+from core.rendermanager import Priority
 
 
 class WatchdogHandler(FileSystemEventHandler):
     """
     Filesystem event handler that submits render tasks into ThumbnailManager
-    at LOW priority for live changes and BACKGROUND_SCAN for the initial sweep.
+    at LOW priority for live changes. Initial indexing is handled by
+    BackgroundIndexer; this class is exclusively a live-event monitor.
     """
     def __init__(self, thumbnail_manager: ThumbnailManager, watch_paths: list, is_daemon_mode: bool = False):
         super().__init__()
@@ -22,7 +19,6 @@ class WatchdogHandler(FileSystemEventHandler):
         self.observer = Observer()
         self.is_daemon_mode = is_daemon_mode
         self._ignore_next_mod = set()
-        self.initial_scan_timer: Optional[threading.Timer] = None
 
     @property
     def watch_paths(self):
@@ -38,7 +34,7 @@ class WatchdogHandler(FileSystemEventHandler):
             self.start()
 
     def start(self):
-        """Schedule the observer on all watch_paths and arm the delayed initial-scan job."""
+        """Schedule the observer on all watch_paths for live filesystem monitoring."""
         if self.observer.is_alive():
             self.observer.stop()
             self.observer.join(timeout=1.0)
@@ -60,53 +56,8 @@ class WatchdogHandler(FileSystemEventHandler):
         else:
             logging.info("No watch paths configured, Watchdog observer not started.")
 
-        if self.is_daemon_mode:
-            logging.info("Daemon mode detected. Scheduling initial scan source job.")
-
-            def submit_initial_scan():
-                initial_scan_job = SourceJob(
-                    job_id=f"watchdog::initial_scan::{self.watch_paths[0] if len(self.watch_paths) == 1 else hash(tuple(sorted(self.watch_paths)))}",
-                    priority=Priority.BACKGROUND_SCAN,
-                    generator=self._initial_scan_generator(),
-                    task_factory=self.thumbnail_manager.create_tasks_for_file
-                )
-                self.thumbnail_manager.render_manager.submit_source_job(initial_scan_job)
-
-            # why: 30s delay avoids startup race between observer thread and daemon socket readiness
-            self.initial_scan_timer = threading.Timer(30.0, submit_initial_scan)
-            self.initial_scan_timer.start()
-
-
-    def _initial_scan_generator(self) -> Generator[List[str], None, None]:
-        """Yield supported file paths under all watch_paths in batches for the RenderManager pipeline."""
-        logging.info("Starting initial scan of existing files...")
-        current_batch = []
-
-        try:
-            for watch_path in self.watch_paths:
-                if not os.path.exists(watch_path):
-                    logging.warning(f"Watch path does not exist for initial scan: {watch_path}")
-                    continue
-
-                for root, dirs, files in os.walk(watch_path):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        if self.thumbnail_manager.is_format_supported(file_path):
-                            current_batch.append(file_path)
-                            if len(current_batch) >= _INITIAL_SCAN_BATCH_SIZE:
-                                yield current_batch
-                                current_batch = []
-            if current_batch:
-                yield current_batch
-
-            logging.info(f"Initial scan generator finished.")
-        except OSError as e:
-            logging.error(f"Error during initial scan generator: {e}", exc_info=True)
-
     def stop(self):
-        """Cancel the pending initial-scan timer and shut down the observer thread."""
-        if self.initial_scan_timer:
-            self.initial_scan_timer.cancel()
+        """Shut down the observer thread."""
         if self.observer.is_alive():
             self.observer.stop()
             self.observer.join(timeout=1.0)

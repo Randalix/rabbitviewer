@@ -2,7 +2,7 @@ import os
 import socket
 import json
 import logging
-from typing import Optional, Dict, List, Tuple, Set, Generator, Any
+from typing import Optional
 import threading
 import time
 from filewatcher.watcher import WatchdogHandler
@@ -12,7 +12,7 @@ from core.rendermanager import Priority, TaskType, SourceJob
 from . import protocol
 from ._framing import MAX_MESSAGE_SIZE
 from pydantic import ValidationError
-import queue # Import for queue.Empty
+import queue
 
 class ThumbnailSocketServer:
     """Server that handles thumbnail generation and rating requests via Unix domain socket."""
@@ -190,14 +190,17 @@ class ThumbnailSocketServer:
                     self.notification_clients.remove(conn)
                     logging.info("Unregistered a notification client.")
 
-                    # If a GUI client disconnects, cancel all jobs for its session.
+                    # If a GUI client disconnects, cancel all session-scoped jobs.
                     with self.session_lock:
                         active_session = self.active_gui_session_id
                     if active_session:
                         render_manager = self.thumbnail_manager.render_manager
+                        # why: only cancel GUI-session jobs (gui_scan, gui_view_images);
+                        # daemon_idx:: jobs must survive GUI disconnect.
+                        _GUI_JOB_PREFIXES = ("gui_scan", "gui_view_images")
                         jobs_to_cancel = [
                             job_id for job_id in render_manager.get_all_job_ids()
-                            if active_session in job_id
+                            if job_id.startswith(_GUI_JOB_PREFIXES) and active_session in job_id
                         ]
                         for job_id in jobs_to_cancel:
                             logging.info(f"Client for session {active_session[:8]} disconnected. Cancelling job: {job_id}")
@@ -237,8 +240,6 @@ class ThumbnailSocketServer:
         """
         Handle incoming socket requests by validating against the protocol.
         """
-        # Removed the old breakpoint block here
-        
         try:
             command = request_data.get("command")
             if not command:
@@ -385,12 +386,6 @@ class ThumbnailSocketServer:
             with self.session_lock:
                 self.active_gui_session_id = req.session_id
             logging.info(f"Set active GUI session to {req.session_id[:8]} for path '{req.path}'")
-
-            # A new GUI load cancels any active watchdog initial scan.
-            render_manager = self.thumbnail_manager.render_manager
-            for job_id in render_manager.get_all_job_ids():
-                if job_id.startswith("watchdog::initial_scan"):
-                    render_manager.cancel_job(job_id)
 
             # --- Discovery + Task Creation ---
             # Job 1 (fast scan): dedicated OS thread — iterates the directory and streams
