@@ -18,16 +18,16 @@ from core.heatmap import (
 
 class TestHeatmapPriority:
     def test_thumb_ring_0(self):
-        assert heatmap_priority(0) == BASE  # 90
+        assert heatmap_priority(0) == 90
 
     def test_thumb_ring_10(self):
-        assert heatmap_priority(10) == BASE - 10 * STEP  # 40
+        assert heatmap_priority(10) == 40
 
     def test_fullres_ring_0(self):
-        assert heatmap_priority(0, is_fullres=True) == BASE - FULLRES_OFFSET * STEP  # 75
+        assert heatmap_priority(0, is_fullres=True) == 75
 
     def test_fullres_ring_4(self):
-        assert heatmap_priority(4, is_fullres=True) == BASE - (4 + FULLRES_OFFSET) * STEP  # 55
+        assert heatmap_priority(4, is_fullres=True) == 55
 
     def test_thumb_monotonically_decreasing(self):
         priorities = [heatmap_priority(r) for r in range(THUMB_RING_COUNT + 1)]
@@ -40,6 +40,16 @@ class TestHeatmapPriority:
     def test_interleaving(self):
         """Fullres ring 0 priority == thumb ring FULLRES_OFFSET priority."""
         assert heatmap_priority(0, is_fullres=True) == heatmap_priority(FULLRES_OFFSET)
+
+    def test_all_thumb_rings_hardcoded(self):
+        expected = [90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40]
+        actual = [heatmap_priority(r) for r in range(11)]
+        assert actual == expected
+
+    def test_all_fullres_rings_hardcoded(self):
+        expected = [75, 70, 65, 60, 55]
+        actual = [heatmap_priority(r, is_fullres=True) for r in range(5)]
+        assert actual == expected
 
 
 # ---------------------------------------------------------------------------
@@ -72,16 +82,14 @@ class TestComputeHeatmap:
 
     def test_single_cell_unloaded(self):
         t, f = compute_heatmap(0, 0, 1, 1, set())
-        assert len(t) == 1
-        assert t[0] == (0, BASE)
-        assert len(f) == 1
-        assert f[0] == (0, heatmap_priority(0, is_fullres=True))
+        assert t == [(0, 90)]
+        assert f == [(0, 75)]
 
     def test_single_cell_loaded(self):
         """Loaded cells are excluded from thumb_pairs but included in fullres_pairs."""
         t, f = compute_heatmap(0, 0, 1, 1, {0})
         assert t == []
-        assert len(f) == 1
+        assert f == [(0, 75)]
 
     def test_thumb_pairs_sorted_descending(self):
         t, _ = compute_heatmap(5, 5, 10, 100, set())
@@ -98,8 +106,17 @@ class TestComputeHeatmap:
         center_idx = 5 * 10 + 5
         thumb_dict = dict(t)
         fullres_dict = dict(f)
-        assert thumb_dict[center_idx] == BASE
-        assert fullres_dict[center_idx] == heatmap_priority(0, is_fullres=True)
+        assert thumb_dict[center_idx] == 90
+        assert fullres_dict[center_idx] == 75
+
+    def test_ring_4_different_thumb_vs_fullres(self):
+        """At distance 4, thumb and fullres give different priorities."""
+        t, f = compute_heatmap(5, 5, 10, 100, set())
+        # idx at ring 4: (5, 9) → vis_idx = 59
+        thumb_dict = dict(t)
+        fullres_dict = dict(f)
+        assert thumb_dict[59] == 70   # 90 - 4*5
+        assert fullres_dict[59] == 55  # 90 - (4+3)*5
 
     def test_no_oob_small_grid(self):
         """3x3 grid — no indices should exceed total_visible."""
@@ -136,10 +153,23 @@ class TestComputeHeatmap:
         fullres_indices = {idx for idx, _ in f}
         for idx in loaded:
             assert idx not in thumb_indices
-        # But fullres should still include loaded items if in range
-        assert 50 in fullres_indices  # center cell
+        # Fullres includes loaded items within the 4-ring zone
+        assert 50 in fullres_indices  # center cell (ring 0)
+        assert 51 in fullres_indices  # ring 1 — loaded but still in fullres
 
     def test_fullres_zone_smaller_than_thumb_zone(self):
         """Fullres pairs should cover fewer cells than thumb pairs."""
         t, f = compute_heatmap(5, 5, 10, 100, set())
         assert len(f) <= len(t)
+
+    def test_total_visible_clips_indices(self):
+        """Grid partially filled: only valid indices appear."""
+        # 3 columns, 7 items → row 2 has only 1 item (idx 6)
+        t, f = compute_heatmap(1, 1, 3, 7, set())
+        all_indices = {idx for idx, _ in t} | {idx for idx, _ in f}
+        for idx in all_indices:
+            assert idx < 7
+
+    def test_negative_columns_returns_empty(self):
+        t, f = compute_heatmap(0, 0, -1, 10, set())
+        assert t == [] and f == []

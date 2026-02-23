@@ -670,7 +670,7 @@ class ThumbnailViewWidget(QFrame):
                 if data.files:
                     logging.info(f"Removing {len(data.files)} ghost files from view.")
                     self.remove_images(data.files)
-            except ValidationError as e:
+            except _ValidationErrors as e:
                 logging.error(f"Error processing 'files_removed' notification: {e}", exc_info=True)
 
         elif event_data.notification_type == "scan_complete":
@@ -887,9 +887,6 @@ class ThumbnailViewWidget(QFrame):
             self._label_tick_timer.stop()
         if hasattr(self, '_pending_labels'):
             self._pending_labels.clear()
-        self._last_thumb_pairs = {}
-        self._last_fullres_pairs = {}
-
         # Recycle all labels first while they still have proper parent
         for widget in self.labels.values():
             if isinstance(widget, ThumbnailLabel):
@@ -914,8 +911,8 @@ class ThumbnailViewWidget(QFrame):
         self.current_directory_path = None
         self.image_states.clear()
         self._last_layout_file_count = 0
-        self._last_thumb_pairs.clear()
-        self._last_fullres_pairs.clear()
+        self._last_thumb_pairs = {}
+        self._last_fullres_pairs = {}
         self._hovered_label = None
 
         if hasattr(self, '_resize_timer'):

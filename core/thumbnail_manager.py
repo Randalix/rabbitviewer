@@ -575,11 +575,17 @@ class ThumbnailManager:
         if existing_view and os.path.exists(existing_view):
             return
 
+        # Only create a new Event if the task doesn't already exist;
+        # submit_task preserves the existing cancel_event on upgrade.
+        with self.render_manager.graph_lock:
+            existing = self.render_manager.task_graph.get(view_task_id)
+        evt = existing.cancel_event if existing else threading.Event()
+
         self.render_manager.submit_task(
             view_task_id, priority,
             self._generate_view_image_task, image_path,
             expected_session_id=gui_session_id,
-            cancel_event=threading.Event(),
+            cancel_event=evt,
         )
 
     def cancel_speculative_fullres(self, image_path: str):
