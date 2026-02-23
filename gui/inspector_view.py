@@ -327,7 +327,6 @@ class InspectorView(QWidget):
     def mousePressEvent(self, event):
         if self._view_mode == _ViewMode.FIT:
             return
-        self._enter_manual_mode()
         if event.button() == Qt.LeftButton:
             self._is_panning = True
             self._last_mouse_pos = event.position().toPoint()
@@ -365,6 +364,7 @@ class InspectorView(QWidget):
             transform = self._picture_base.calculateTransform()
             inv_transform, invertible = transform.inverted()
             if invertible:
+                self._enter_manual_mode()
                 delta_normalized = inv_transform.map(QPointF(delta)) - inv_transform.map(QPointF(0, 0))
 
                 current_center = self._picture_base.viewState().center
@@ -376,6 +376,7 @@ class InspectorView(QWidget):
         elif self._picture_base.isDragZooming():
             new_zoom = self._picture_base.computeDragZoom(event.position())
             if new_zoom is not None:
+                self._enter_manual_mode()
                 self.set_zoom_factor(new_zoom)
         super().mouseMoveEvent(event)
 
@@ -388,8 +389,8 @@ class InspectorView(QWidget):
                 self._picture_base.setFitMode(False)
                 self._picture_base.setZoom(1.0)
             else:
-                # Go to fit mode
-                self._view_mode = _ViewMode.FIT
+                # Go to fit mode, always reset to tracking
+                self._view_mode = _ViewMode.TRACKING
                 self._picture_base.setFitMode(True)
             self._update_window_title()
         super().mouseDoubleClickEvent(event)
@@ -399,8 +400,14 @@ class InspectorView(QWidget):
             self._picture_base.setFitMode(False)
             self._picture_base.setZoom(self._zoom_factor)
         self._enter_manual_mode()
+        mouse_anchor = self._picture_base.screenToNormalized(QPointF(event.position()))
         factor = 1.25 if event.angleDelta().y() > 0 else 1/1.25
-        self.set_zoom_factor(self._zoom_factor * factor)
+        new_zoom = max(0.1, min(self._zoom_factor * factor, 20.0))
+        self._zoom_factor = new_zoom
+        self._update_window_title()
+        if self._current_image_path:
+            self._picture_base.setFitMode(False)
+            self._picture_base.setZoom(self._zoom_factor, mouse_anchor)
         event.accept()
 
     def set_socket_client(self, socket_client: ThumbnailSocketClient):
