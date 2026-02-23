@@ -44,10 +44,25 @@ def _acquire_instance_lock(pid_file_path: str):
     return fd
 
 
+def setup_logging(log_level):
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    log_dir = os.path.expanduser("~/.rabbitviewer")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "daemon.log")
+    logging.basicConfig(
+        level=numeric_level,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, mode="a"),
+            logging.StreamHandler(sys.stderr)
+        ]
+    )
+
+
 def main():
     config_manager = ConfigManager()
     logging_level = config_manager.get("logging_level", "INFO")
-    logging.getLogger().setLevel(getattr(logging, logging_level.upper(), logging.INFO))
+    setup_logging(logging_level)
     logging.info(f"Logging level set to: {logging_level.upper()}")
 
     SOCKET_PATH = os.path.expanduser(config_manager.get("system.socket_path"))
