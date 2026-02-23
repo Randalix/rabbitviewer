@@ -335,7 +335,13 @@ class RenderManager(QObject):
             logger.info(f"Source job '{job.job_id}' finished.")
             with self.active_jobs_lock:
                 self.active_jobs.pop(job.job_id, None)
-            
+
+            if job.on_complete:
+                try:
+                    job.on_complete()
+                except Exception as e:
+                    logging.error(f"on_complete callback for job '{job.job_id}' failed: {e}", exc_info=True)
+
             # Send final "scan_complete" notification.
             self._emit_scan_complete(job, slice_index)
             return

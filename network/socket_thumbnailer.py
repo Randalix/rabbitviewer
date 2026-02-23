@@ -7,7 +7,7 @@ import threading
 import time
 from filewatcher.watcher import WatchdogHandler
 import sys
-from core.directory_scanner import DirectoryScanner
+from core.directory_scanner import DirectoryScanner, ReconcileContext
 from core.rendermanager import Priority, TaskType, SourceJob
 from . import protocol
 from ._framing import MAX_MESSAGE_SIZE
@@ -32,7 +32,6 @@ class ThumbnailSocketServer:
         self.notification_lock = threading.Lock()
         self.active_gui_session_id: Optional[str] = None
         self.session_lock = threading.Lock()
-        self._fast_scan_cancel: Optional[threading.Event] = None
         self._compound_task_counter = 0
         self._command_handlers = {
             "request_previews":      self._handle_request_previews,
@@ -90,30 +89,6 @@ class ThumbnailSocketServer:
                 # whether the notification was forwarded, filtered, or caused an error.
                 if notification is not None:
                     rm_queue.task_done()
-
-    def _run_fast_scan_thread(self, session_id: str, path: str, recursive: bool, cancel: threading.Event):
-        """
-        Dedicated thread for fast directory discovery. Iterates scan_incremental
-        and pushes scan_progress notifications directly to the notification queue,
-        bypassing the worker pool entirely so all workers stay free for thumbnails.
-        """
-        rm = self.thumbnail_manager.render_manager
-        for batch in self.directory_scanner.scan_incremental(path, recursive):
-            with self.session_lock:
-                current_session = self.active_gui_session_id
-            if cancel.is_set() or current_session != session_id:
-                logging.debug(f"Fast scan cancelled for session {session_id[:8]}")
-                return
-            notification = protocol.Notification(
-                type="scan_progress",
-                data=protocol.ScanProgressData(path=path, files=batch).model_dump(),
-                session_id=session_id,
-            )
-            try:
-                rm.notification_queue.put(notification, timeout=1)
-            except queue.Full:
-                logging.warning("Notification queue full; dropping fast scan batch for %s", path)
-        logging.info("Fast scan thread complete for %s", path)
 
     def run_forever(self):
         """Accept and handle connections indefinitely."""
@@ -209,9 +184,9 @@ class ThumbnailSocketServer:
                         active_session = self.active_gui_session_id
                     if active_session:
                         render_manager = self.thumbnail_manager.render_manager
-                        # why: only cancel GUI-session jobs (gui_scan, gui_view_images);
+                        # why: only cancel GUI-session jobs (gui_scan);
                         # daemon_idx:: jobs must survive GUI disconnect.
-                        _GUI_JOB_PREFIXES = ("gui_scan", "gui_view_images")
+                        _GUI_JOB_PREFIXES = ("gui_scan",)
                         jobs_to_cancel = [
                             job_id for job_id in render_manager.get_all_job_ids()
                             if job_id.startswith(_GUI_JOB_PREFIXES) and active_session in job_id
@@ -402,58 +377,56 @@ class ThumbnailSocketServer:
             self.active_gui_session_id = req.session_id
         logging.info(f"Set active GUI session to {req.session_id[:8]} for path '{req.path}'")
 
-        # --- Discovery + Task Creation ---
-        # Job 1 (fast scan): dedicated OS thread — iterates the directory and streams
-        # scan_progress notifications without touching the worker pool.
-        if self._fast_scan_cancel:
-            self._fast_scan_cancel.set()
-        cancel_event = threading.Event()
-        self._fast_scan_cancel = cancel_event
-        threading.Thread(
-            target=self._run_fast_scan_thread,
-            args=(req.session_id, req.path, req.recursive, cancel_event),
-            daemon=True,
-            name=f"FastScan-{req.session_id[:8]}",
-        ).start()
-
-        # Job 2: A lower-priority scan to create thumbnailing tasks for all images in the background.
-        slow_scan_generator = self.directory_scanner.scan_incremental(
-            req.path, req.recursive
+        # Phase 1: Return DB-cached files immediately (now recursive-aware).
+        db_files = self.thumbnail_manager.metadata_db.get_directory_files(
+            req.path, recursive=req.recursive
         )
-        slow_scan_job = SourceJob(
-            job_id=f"gui_scan_tasks::{req.session_id}::{req.path}",
+        logging.info(
+            f"DB returned {len(db_files)} cached files for '{req.path}' "
+            f"(recursive={req.recursive}). Starting reconciliation walk."
+        )
+
+        # Phase 2: Single reconciliation walk — discovers new files,
+        # creates thumbnail + metadata + view-image tasks, and detects
+        # ghost files (in DB but deleted on disk).
+        reconcile_ctx = ReconcileContext(db_file_set=set(db_files))
+        rm = self.thumbnail_manager.render_manager
+        session_id = req.session_id
+
+        def _on_reconcile_complete():
+            if reconcile_ctx.ghost_files:
+                logging.info(
+                    f"Reconciliation found {len(reconcile_ctx.ghost_files)} "
+                    f"ghost files for '{req.path}'."
+                )
+                notification = protocol.Notification(
+                    type="files_removed",
+                    data=protocol.FilesRemovedData(
+                        files=reconcile_ctx.ghost_files
+                    ).model_dump(),
+                    session_id=session_id,
+                )
+                try:
+                    rm.notification_queue.put_nowait(notification)
+                except queue.Full:
+                    logging.warning("Notification queue full; dropping files_removed.")
+                self.thumbnail_manager.metadata_db.remove_records(
+                    reconcile_ctx.ghost_files
+                )
+
+        reconcile_job = SourceJob(
+            job_id=f"gui_scan::{req.session_id}::{req.path}",
             priority=Priority.GUI_REQUEST_LOW,
-            generator=slow_scan_generator,
-            task_factory=self.thumbnail_manager.create_tasks_for_file,
-            create_tasks=True
+            generator=self.directory_scanner.scan_incremental_reconcile(
+                req.path, req.recursive, reconcile_ctx
+            ),
+            task_factory=self.thumbnail_manager.create_gui_tasks_for_file,
+            create_tasks=True,
+            on_complete=_on_reconcile_complete,
         )
-        self.thumbnail_manager.render_manager.submit_source_job(slow_scan_job)
+        rm.submit_source_job(reconcile_job)
 
-        # Job 3 (Stage C): Background view image generation.
-        # Runs at BACKGROUND_SCAN (10), well below thumbnail tasks (40/90), so it
-        # only consumes workers after the queue has no pending thumbnail work.
-        view_image_generator = self.directory_scanner.scan_incremental(
-            req.path, req.recursive
-        )
-        view_image_job = SourceJob(
-            job_id=f"gui_view_images::{req.session_id}::{req.path}",
-            priority=Priority.BACKGROUND_SCAN,
-            generator=view_image_generator,
-            task_factory=self.thumbnail_manager.create_view_image_task_for_file,
-            create_tasks=True
-        )
-        self.thumbnail_manager.render_manager.submit_source_job(view_image_job)
-
-        # Return cached files immediately while the scan runs in the background
-        db_files = self.thumbnail_manager.metadata_db.get_directory_files(req.path)
-        if db_files:
-            logging.info(f"Found {len(db_files)} files in DB for '{req.path}'. Returning cached list while scan runs.")
-            if not req.recursive:
-                normalized_path = os.path.normpath(req.path)
-                db_files = [f for f in db_files if os.path.dirname(f) == normalized_path]
-            return protocol.GetDirectoryFilesResponse(files=sorted(db_files))
-
-        return protocol.GetDirectoryFilesResponse(files=[])
+        return protocol.GetDirectoryFilesResponse(files=sorted(db_files))
 
     def _handle_move_records(self, request_data: dict) -> protocol.Response:
         req = protocol.MoveRecordsRequest.model_validate(request_data)

@@ -261,3 +261,7 @@ class PreviewsReadyData(Message):
     image_path: str = ""
     thumbnail_path: Optional[str] = None
     view_image_path: Optional[str] = None
+
+@dataclasses.dataclass
+class FilesRemovedData(Message):
+    files: List[str] = dataclasses.field(default_factory=list)

@@ -1,9 +1,22 @@
 import os
 import logging
 import fnmatch
+from dataclasses import dataclass, field
 from typing import List, Set, Optional
 from core.rendermanager import Priority, SourceJob
 from core.thumbnail_manager import ThumbnailManager
+
+
+@dataclass
+class ReconcileContext:
+    """Mutable context for scan_incremental_reconcile.
+
+    *db_file_set* is mutated during iteration — files found on disk are
+    discarded.  After the generator is exhausted, *ghost_files* contains
+    DB entries that no longer exist on disk.
+    """
+    db_file_set: Set[str]
+    ghost_files: List[str] = field(default_factory=list)
 
 class DirectoryScanner:
     """Handles scanning directories for supported image files."""
@@ -111,6 +124,21 @@ class DirectoryScanner:
                 yield current_batch
         except Exception as e:
             logging.error(f"Error during directory scan of {directory_path}: {e}", exc_info=True)
+
+    def scan_incremental_reconcile(self, directory_path: str, recursive: bool,
+                                     ctx: ReconcileContext, batch_size: int = 50):
+        """Like scan_incremental but also tracks ghost files via *ctx*.
+
+        Wraps scan_incremental: for each discovered file, discards it from
+        ctx.db_file_set.  After the walk finishes, any paths remaining in
+        db_file_set are ghost files (in DB but deleted on disk).
+        """
+        for batch in self.scan_incremental(directory_path, recursive, batch_size):
+            for f in batch:
+                ctx.db_file_set.discard(f)
+            yield batch
+
+        ctx.ghost_files = list(ctx.db_file_set)
 
     def scan_single_directory_no_queue(self, directory_path: str) -> List[str]:
         """Scans a single directory non-recursively and returns supported files."""

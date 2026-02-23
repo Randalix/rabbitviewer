@@ -765,19 +765,26 @@ class MetadataDatabase:
             logging.error(f"Error getting all file paths from database: {e}")
             return []
 
-    def get_directory_files(self, directory_path: str) -> List[str]:
-        """
-        Gets all file paths from the DB for a specific directory (non-recursive).
+    def get_directory_files(self, directory_path: str, recursive: bool = False) -> List[str]:
+        """Gets file paths from the DB for a directory.
+
+        When *recursive* is True, returns all files under *directory_path*
+        (including subdirectories).  When False, returns only direct children.
         """
         try:
             with self._lock:
                 cursor = self.conn.cursor()
                 search_path = os.path.join(directory_path, '')
-                # Query for files that are in the directory, but not in subdirectories.
-                cursor.execute("""
-                    SELECT file_path FROM image_metadata
-                    WHERE file_path LIKE ? AND SUBSTR(file_path, LENGTH(?) + 1) NOT LIKE '%/%'
-                """, (search_path + '%', search_path))
+                if recursive:
+                    cursor.execute(
+                        "SELECT file_path FROM image_metadata WHERE file_path LIKE ?",
+                        (search_path + '%',),
+                    )
+                else:
+                    cursor.execute("""
+                        SELECT file_path FROM image_metadata
+                        WHERE file_path LIKE ? AND SUBSTR(file_path, LENGTH(?) + 1) NOT LIKE '%/%'
+                    """, (search_path + '%', search_path))
                 files = [row[0] for row in cursor.fetchall()]
                 return files
         except sqlite3.Error as e:

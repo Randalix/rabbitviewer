@@ -887,6 +887,63 @@ class ThumbnailManager:
 
         return tasks
 
+    def create_gui_tasks_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
+        """Task factory for GUI directory loads.
+
+        Like create_all_tasks_for_file but assigns view-image tasks at
+        BACKGROUND_SCAN regardless of *priority*, keeping view-image work
+        below thumbnail generation in the queue.  Warm-cache files emit a
+        previews_ready notification immediately (no tasks created).
+        """
+        if not self._passes_pre_checks(file_path):
+            return []
+
+        tasks: List[RenderTask] = []
+        thumb_valid = self.metadata_db.is_thumbnail_valid(file_path)
+
+        if thumb_valid:
+            # Warm cache: notify the GUI immediately, no thumbnail/metadata tasks.
+            if priority >= Priority.GUI_REQUEST_LOW:
+                paths = self.metadata_db.get_thumbnail_paths(file_path)
+                notification_data = protocol.PreviewsReadyData(
+                    image_path=file_path,
+                    thumbnail_path=paths.get('thumbnail_path'),
+                    view_image_path=paths.get('view_image_path'),
+                )
+                notification = protocol.Notification(
+                    type="previews_ready", data=notification_data.model_dump()
+                )
+                try:
+                    self.render_manager.notification_queue.put_nowait(notification)
+                except Full:
+                    logger.warning("Notification queue full; dropping previews_ready for %s", file_path)
+        else:
+            tasks.append(RenderTask(
+                task_id=f"meta::{file_path}",
+                priority=priority,
+                func=self._process_metadata_task,
+                args=(file_path,),
+            ))
+            tasks.append(RenderTask(
+                task_id=file_path,
+                priority=priority,
+                func=self._generate_thumbnail_task,
+                args=(file_path,),
+            ))
+
+        # View-image at BACKGROUND_SCAN — runs only after thumbnail queue drains.
+        paths = self.metadata_db.get_thumbnail_paths(file_path)
+        existing_view = paths.get('view_image_path') if paths else None
+        if not (existing_view and os.path.exists(existing_view)):
+            tasks.append(RenderTask(
+                task_id=f"view::{file_path}",
+                priority=Priority.BACKGROUND_SCAN,
+                func=self._generate_view_image_task,
+                args=(file_path,),
+            ))
+
+        return tasks
+
     # ──────────────────────────────────────────────────────────────────────
     #  Generic task operations (daemon-side registry)
     # ──────────────────────────────────────────────────────────────────────
