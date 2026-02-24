@@ -112,22 +112,33 @@ Domain layer over `RenderManager`. Owns all image-specific workflows and the tas
 ```
 get_directory_files (socket command)
   │
-  ├── Phase 1: reconcile_job (Priority(80), create_tasks=False)
-  │     Generator: scan_incremental_reconcile — discovers files,
-  │     emits scan_progress so placeholders appear in the GUI.
-  │     Accumulates all paths in ReconcileContext.discovered_files.
-  │     No child tasks created — workers stay free for scanning.
+  ├── Response: return DB-cached files immediately (zero filesystem access)
   │
-  └── Phase 2: post_scan job (Priority.LOW, task_priority=LOW, on_complete callback)
-        Submitted by on_complete after reconcile_job exhausts its generator.
-        Iterates discovered_files → create_gui_tasks_for_file():
-          ├── thumbnail already valid → send previews_ready immediately
-          └── not valid → submit meta task + thumbnail task at LOW (30)
-        Heatmap upgrades visible tasks to 60-90; non-visible tasks
-        process in the background after all visible work completes.
+  ├── Cached folder (DB has entries):
+  │     Reconcile walk deferred 3s via threading.Timer at BACKGROUND_SCAN (10).
+  │     Heatmap drives thumbnail display from local cache — request_thumbnail
+  │     uses trust-cache path (get_cached_thumbnail_paths) which skips
+  │     os.stat() on source files, checking only local thumbnail existence.
+  │
+  └── New folder (empty DB):
+        Phase 1: reconcile_job (Priority(80), create_tasks=False)
+          Generator: scan_incremental_reconcile — discovers files,
+          emits scan_progress so placeholders appear in the GUI.
+          Accumulates all paths in ReconcileContext.discovered_files.
+          No child tasks created — workers stay free for scanning.
+
+        Phase 2: post_scan job (Priority.LOW, task_priority=LOW, on_complete)
+          Submitted by on_complete after reconcile_job exhausts its generator.
+          Iterates discovered_files → create_gui_tasks_for_file():
+            ├── thumbnail already valid → no tasks (heatmap handles display)
+            └── not valid → submit meta task + thumbnail task at LOW (30)
+          Heatmap upgrades visible tasks to 60-90; non-visible tasks
+          process in the background after all visible work completes.
 ```
 
-Phase 1 runs at priority 80 (above `HIGH`) so directory discovery is never blocked. Phase 2 tasks start at `LOW` (30), well below any heatmap ring minimum (60). The heatmap is the only mechanism that promotes tasks into the visible priority range. For cached folders (DB already has entries), the GUI additionally requests the full visible viewport at `GUI_REQUEST_LOW` (40) for immediate display.
+For new folders, Phase 1 runs at priority 80 (above `HIGH`) so directory discovery is never blocked. Phase 2 tasks start at `LOW` (30), well below any heatmap ring minimum (60). The heatmap is the only mechanism that promotes tasks into the visible priority range.
+
+For cached folders, the deferred reconcile walk detects new/deleted files after 3 seconds at `BACKGROUND_SCAN` priority. Stale thumbnails display briefly from cache until the walk re-validates and triggers regeneration. The GUI requests the full visible viewport at `GUI_REQUEST_LOW` (40) for immediate display.
 
 **Heatmap priority flow** (viewport scroll / hover → graduated priorities):
 
@@ -192,6 +203,11 @@ Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate
 ### MetadataDatabase — `core/metadata_database.py`
 
 SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, thumbnail + view image cache paths, content hashes. Thread-safe via `threading.Lock` (single shared connection). A module-level singleton (`get_metadata_database`) prevents multiple connections to the same path.
+
+**Thumbnail validity** has two modes:
+
+- `is_thumbnail_valid` / `batch_get_thumbnail_validity` — **strict**: calls `os.stat()` on the source file to compare mtime/size against the DB. Used by reconcile scan and task functions.
+- `get_cached_thumbnail_paths` / `batch_get_cached_thumbnail_validity` — **trust-cache**: DB-only check, verifies only that the local thumbnail file exists. No `os.stat()` on the source. Used by the heatmap fast path (`request_thumbnail`, `batch_request_thumbnails`) so cached folders display without NAS latency.
 
 `_store_metadata` (called by background metadata extraction) updates all fields including `rating`, so externally-set ratings are picked up on re-scan. `set_rating` updates only the DB rating synchronously; the EXIF write-back is queued separately at `LOW` priority.
 
