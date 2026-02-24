@@ -1206,6 +1206,9 @@ class ThumbnailViewWidget(QFrame):
         command = None
 
         if self._selection_mode == "replace":
+            # Single-click on an already-selected image with no modifiers clears selection
+            if start_idx == end_idx and paths_in_range <= self._current_selection:
+                paths_in_range = set()
             command = ReplaceSelectionCommand(paths=paths_in_range, source="thumbnail_view", timestamp=time.time())
         elif self._selection_mode == "add":
             command = AddToSelectionCommand(paths=paths_in_range, source="thumbnail_view", timestamp=time.time())
