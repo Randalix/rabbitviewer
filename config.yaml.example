@@ -66,6 +66,9 @@ hotkeys:
     sequence: '5'
   script:sort_by_name:
     description: Sort images by filename
+  menu:sort:
+    description: Open sort menu
+    sequence: F
   start_range_selection:
     description: Toggle range selection mode
     sequence: S

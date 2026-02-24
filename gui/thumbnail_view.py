@@ -882,6 +882,36 @@ class ThumbnailViewWidget(QFrame):
             # in-progress remove_images call on the same set of paths.
             logging.error(f"Error removing images: {e}", exc_info=True)
 
+    def reorder_files(self, ordered_paths: list):
+        """Reorder all_files to match *ordered_paths* and refresh the layout.
+
+        Unknown paths in *ordered_paths* are silently dropped.
+        """
+        old_idx_map = {path: idx for idx, path in enumerate(self.all_files)}
+        new_all_files = [p for p in ordered_paths if p in old_idx_map]
+
+        if not new_all_files or new_all_files == self.all_files:
+            return
+
+        new_labels = {}
+        new_image_states = {}
+        for new_idx, path in enumerate(new_all_files):
+            old_idx = old_idx_map[path]
+            if old_idx in self.labels:
+                label = self.labels[old_idx]
+                label._original_idx = new_idx
+                new_labels[new_idx] = label
+            if old_idx in self.image_states:
+                new_image_states[new_idx] = self.image_states[old_idx]
+
+        self.all_files = new_all_files
+        self._all_files_set = set(new_all_files)
+        self._path_to_idx = {path: idx for idx, path in enumerate(new_all_files)}
+        self.labels = new_labels
+        self.image_states = new_image_states
+
+        self._update_filtered_layout()
+
     def ensure_visible(self, original_idx: int, center: bool = False):
         """
         Ensure the thumbnail at the given original index is visible in the scroll area,

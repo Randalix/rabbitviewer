@@ -91,6 +91,11 @@ class HotkeyManager(QObject):
 					self.add_action(action_name, lambda s=script_name: (
 						self.parent_widget.script_manager.run_script(s)
 					))
+				elif action_name.startswith("menu:"):
+					menu_id = action_name[5:]
+					self.add_action(action_name, lambda m=menu_id: (
+						self.parent_widget.modal_menu.open(m)
+					))
 				
 				definition = HotkeyDefinition.from_config(action_name, action_config)
 				self.add_hotkey_shortcut(definition)
@@ -120,6 +125,16 @@ class HotkeyManager(QObject):
 				lambda an=definition.action_name: self.on_shortcut_triggered(an)
 			)
 			self.shortcuts[definition.action_name].append(shortcut)
+
+	def disable_shortcuts(self):
+		for shortcut_list in self.shortcuts.values():
+			for shortcut in shortcut_list:
+				shortcut.setEnabled(False)
+
+	def enable_shortcuts(self):
+		for shortcut_list in self.shortcuts.values():
+			for shortcut in shortcut_list:
+				shortcut.setEnabled(True)
 
 	def add_action(self, action_name: str, callback: Callable):
 		self.actions[action_name] = callback

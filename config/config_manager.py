@@ -74,6 +74,10 @@ DEFAULT_CONFIG = {
         "script:set_rating_5": {
             "sequence": "5",
             "description": "Rate selected images 5 stars"
+        },
+        "menu:sort": {
+            "sequence": "F",
+            "description": "Open sort menu"
         }
     },
     "thumbnail_size": 128,

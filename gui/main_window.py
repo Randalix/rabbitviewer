@@ -11,6 +11,8 @@ from .thumbnail_view import ThumbnailViewWidget
 from .hotkey_manager import HotkeyManager
 from .inspector_view import InspectorView
 from .filter_dialog import FilterDialog
+from .modal_menu import ModalMenu
+from .menu_registry import build_menus
 from .status_bar import CustomStatusBar
 from scripts.script_manager import ScriptManager, ScriptAPI
 from core.event_system import event_system, EventType, InspectorEventData, MouseEventData, KeyEventData, ViewEventData, EventData, StatusMessageEventData, StatusSection
@@ -85,6 +87,7 @@ class MainWindow(QMainWindow):
         self.script_manager.load_scripts(scripts_dir)
 
         self._setup_hotkeys()
+        self.modal_menu = ModalMenu(self, build_menus(), self.script_manager, self.hotkey_manager)
         self._setup_event_subscriptions()
 
     def _setup_thumbnail_view(self):

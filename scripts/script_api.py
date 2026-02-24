@@ -219,6 +219,34 @@ class ScriptAPI:
             logging.error(f"Error in get_all_images: {e}", exc_info=True)
             return []
 
+    def set_image_order(self, ordered_paths: List[str]) -> None:
+        """Reorder images in the thumbnail view to match *ordered_paths*.
+
+        This is an atomic operation — no remove+add flicker.
+        """
+        try:
+            view = self.main_window.thumbnail_view
+            if not view:
+                return
+            view.reorder_files(ordered_paths)
+        except Exception as e:  # why: user scripts may pass invalid paths or thumbnail_view may be mid-teardown
+            logging.error(f"Error in set_image_order: {e}", exc_info=True)
+
+    def get_metadata_batch(self, image_paths: List[str]) -> dict:
+        """Fetch metadata for a batch of images from the daemon.
+
+        Returns a dict mapping path → metadata dict.  Returns an empty
+        dict on failure.
+        """
+        try:
+            resp = self.socket_client.get_metadata_batch(image_paths)
+            if resp and hasattr(resp, "metadata"):
+                return resp.metadata
+            return {}
+        except Exception as e:  # why: socket_client may raise on connection loss or malformed response
+            logging.error(f"Error in get_metadata_batch: {e}", exc_info=True)
+            return {}
+
     def set_rating_for_images(self, image_paths: List[str], rating: int) -> None:
         """
         Sets image ratings using the new socket client API.

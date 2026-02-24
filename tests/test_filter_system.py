@@ -25,6 +25,8 @@ def _ensure_qt_stubs():
             def __init__(self, x=0, y=0): self._x = x; self._y = y
             def x(self): return self._x
             def y(self): return self._y
+            def __sub__(self, other):
+                return _QPoint(self._x - other._x, self._y - other._y)
         qtcore.QPoint = _QPoint
 
     if not hasattr(qtcore, "Slot"):
@@ -125,6 +127,19 @@ def _ensure_qt_stubs():
             def setAttribute(self, *a): pass
             def setMouseTracking(self, v): pass
             def installEventFilter(self, f): pass
+            def setWindowTitle(self, t): pass
+            def setMinimumSize(self, w, h): pass
+            def resize(self, w, h): pass
+            def restoreGeometry(self, g): pass
+            def saveGeometry(self): return b""
+            def rect(self): return qtcore.QRectF()
+            def setCursor(self, c): pass
+            def showEvent(self, e): pass
+            def resizeEvent(self, e): pass
+            def mousePressEvent(self, e): pass
+            def mouseReleaseEvent(self, e): pass
+            def mouseMoveEvent(self, e): pass
+            def mouseDoubleClickEvent(self, e): pass
         qtwidgets.QWidget = _QWidget
 
     if not hasattr(qtwidgets, "QFrame"):
@@ -188,13 +203,19 @@ def _ensure_qt_stubs():
 
     # Qt namespace constants
     qt = qtcore.Qt
-    for attr, val in [("Window", 0), ("LeftButton", 1), ("Dialog", 0),
+    for attr, val in [("Window", 0), ("LeftButton", 1), ("RightButton", 2),
+                      ("Dialog", 0), ("ArrowCursor", 0),
                       ("WindowStaysOnTopHint", 0), ("WA_DeleteOnClose", 0),
                       ("WA_Hover", 0), ("Key_Return", 0), ("Key_Enter", 0),
                       ("QueuedConnection", 0), ("Horizontal", 1),
                       ("AlignCenter", 0x84)]:
         if not hasattr(qt, attr):
             setattr(qt, attr, val)
+
+    if not hasattr(qt, "CursorShape"):
+        class _CursorShape:
+            ClosedHandCursor = 1
+        qt.CursorShape = _CursorShape
 
 
 _ensure_qt_stubs()
