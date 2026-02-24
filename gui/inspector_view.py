@@ -327,7 +327,10 @@ class InspectorView(QWidget):
     def mousePressEvent(self, event):
         if self._view_mode == _ViewMode.FIT:
             return
-        self._enter_manual_mode()
+        # why: do NOT call _enter_manual_mode() here — Qt fires mousePressEvent
+        # before mouseDoubleClickEvent, so entering manual on press would prevent
+        # double-click from toggling back to tracking. Manual mode is entered on
+        # the first actual drag in mouseMoveEvent instead.
         if event.button() == Qt.LeftButton:
             self._is_panning = True
             self._last_mouse_pos = event.position().toPoint()
@@ -359,6 +362,7 @@ class InspectorView(QWidget):
             return
 
         if self._is_panning:
+            self._enter_manual_mode()
             delta = event.position().toPoint() - self._last_mouse_pos
             self._last_mouse_pos = event.position().toPoint()
 
@@ -382,13 +386,10 @@ class InspectorView(QWidget):
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
             if self._view_mode == _ViewMode.FIT:
-                # Go to 100% zoom in auto-tracking mode
-                self._zoom_factor = 1.0
                 self._view_mode = _ViewMode.TRACKING
                 self._picture_base.setFitMode(False)
-                self._picture_base.setZoom(1.0)
+                self._picture_base.setZoom(self._zoom_factor)
             else:
-                # Go to fit mode
                 self._view_mode = _ViewMode.FIT
                 self._picture_base.setFitMode(True)
             self._update_window_title()
@@ -396,9 +397,10 @@ class InspectorView(QWidget):
 
     def wheelEvent(self, event):
         if self._view_mode == _ViewMode.FIT:
+            self._view_mode = _ViewMode.TRACKING
             self._picture_base.setFitMode(False)
             self._picture_base.setZoom(self._zoom_factor)
-        self._enter_manual_mode()
+            self._update_window_title()
         factor = 1.25 if event.angleDelta().y() > 0 else 1/1.25
         self.set_zoom_factor(self._zoom_factor * factor)
         event.accept()
