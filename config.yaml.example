@@ -1,5 +1,8 @@
 # Copy to ~/.config/rabbitviewer/config.yaml (or $XDG_CONFIG_HOME/rabbitviewer/config.yaml)
 cache_dir: ~/.rabbitviewer
+files:
+  cache:
+    dir: ~/.rabbitviewer/cache
 gui:
   background_color: '#000000'
   border_width: 1
@@ -24,8 +27,8 @@ hotkeys:
   open_filter:
     description: Open filter dialog
     sequence: Ctrl+F
-  open_inspector:
-    description: Open inspector window
+  toggle_inspector:
+    description: Toggle inspector window
     sequence: I
   previous_image:
     description: Navigate to previous image
@@ -58,6 +61,11 @@ hotkeys:
   script:set_rating_4:
     description: Set rating to 4 stars
     sequence: '4'
+  script:set_rating_5:
+    description: Set rating to 5 stars
+    sequence: '5'
+  script:sort_by_name:
+    description: Sort images by filename
   start_range_selection:
     description: Toggle range selection mode
     sequence: S

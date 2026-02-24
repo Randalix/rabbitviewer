@@ -5,6 +5,14 @@ DEFAULT_CONFIG = {
     "system": {
         "socket_path": f"/tmp/rabbitviewer_{os.getenv('USER', 'user')}.sock",
     },
+    "files": {
+        "cache": {
+            "dir": "~/.rabbitviewer/cache",
+        },
+    },
+    "inspector": {
+        "zoom_factor": 3.0,
+    },
     "logging_level": "DEBUG",
     "gui": {
         "background_color": "#000000",
