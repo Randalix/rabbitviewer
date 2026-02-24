@@ -21,13 +21,13 @@ class TestHeatmapPriority:
         assert heatmap_priority(0) == 90
 
     def test_thumb_ring_10(self):
-        assert heatmap_priority(10) == 40
+        assert heatmap_priority(10) == 60
 
     def test_fullres_ring_0(self):
-        assert heatmap_priority(0, is_fullres=True) == 75
+        assert heatmap_priority(0, is_fullres=True) == 81
 
     def test_fullres_ring_4(self):
-        assert heatmap_priority(4, is_fullres=True) == 55
+        assert heatmap_priority(4, is_fullres=True) == 69
 
     def test_thumb_monotonically_decreasing(self):
         priorities = [heatmap_priority(r) for r in range(THUMB_RING_COUNT + 1)]
@@ -42,12 +42,12 @@ class TestHeatmapPriority:
         assert heatmap_priority(0, is_fullres=True) == heatmap_priority(FULLRES_OFFSET)
 
     def test_all_thumb_rings_hardcoded(self):
-        expected = [90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40]
+        expected = [90, 87, 84, 81, 78, 75, 72, 69, 66, 63, 60]
         actual = [heatmap_priority(r) for r in range(11)]
         assert actual == expected
 
     def test_all_fullres_rings_hardcoded(self):
-        expected = [75, 70, 65, 60, 55]
+        expected = [81, 78, 75, 72, 69]
         actual = [heatmap_priority(r, is_fullres=True) for r in range(5)]
         assert actual == expected
 
@@ -83,13 +83,13 @@ class TestComputeHeatmap:
     def test_single_cell_unloaded(self):
         t, f = compute_heatmap(0, 0, 1, 1, set())
         assert t == [(0, 90)]
-        assert f == [(0, 75)]
+        assert f == [(0, 81)]
 
     def test_single_cell_loaded(self):
         """Loaded cells are excluded from thumb_pairs but included in fullres_pairs."""
         t, f = compute_heatmap(0, 0, 1, 1, {0})
         assert t == []
-        assert f == [(0, 75)]
+        assert f == [(0, 81)]
 
     def test_thumb_pairs_sorted_descending(self):
         t, _ = compute_heatmap(5, 5, 10, 100, set())
@@ -107,16 +107,16 @@ class TestComputeHeatmap:
         thumb_dict = dict(t)
         fullres_dict = dict(f)
         assert thumb_dict[center_idx] == 90
-        assert fullres_dict[center_idx] == 75
+        assert fullres_dict[center_idx] == 81
 
-    def test_ring_4_different_thumb_vs_fullres(self):
-        """At distance 4, thumb and fullres give different priorities."""
+    def test_ring_1_different_thumb_vs_fullres(self):
+        """At distance 1, thumb and fullres give different priorities."""
         t, f = compute_heatmap(5, 5, 10, 100, set())
-        # idx at ring 4: (5, 9) → vis_idx = 59
+        # idx at ring 1: (5, 6) → vis_idx = 56
         thumb_dict = dict(t)
         fullres_dict = dict(f)
-        assert thumb_dict[59] == 70   # 90 - 4*5
-        assert fullres_dict[59] == 55  # 90 - (4+3)*5
+        assert thumb_dict[56] == 87   # 90 - 1*3
+        assert fullres_dict[56] == 78  # 90 - (1+3)*3
 
     def test_no_oob_small_grid(self):
         """3x3 grid — no indices should exceed total_visible."""

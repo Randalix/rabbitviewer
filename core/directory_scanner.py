@@ -14,10 +14,12 @@ class ReconcileContext:
 
     *db_file_set* is mutated during iteration — files found on disk are
     discarded.  After the generator is exhausted, *ghost_files* contains
-    DB entries that no longer exist on disk.
+    DB entries that no longer exist on disk.  *discovered_files* accumulates
+    every file found during the walk for post-scan task creation.
     """
     db_file_set: Set[str]
     ghost_files: List[str] = field(default_factory=list)
+    discovered_files: List[str] = field(default_factory=list)
 
 class DirectoryScanner:
     """Handles scanning directories for supported image files."""
@@ -152,6 +154,7 @@ class DirectoryScanner:
         for batch in self.scan_incremental(directory_path, recursive, batch_size):
             for f in batch:
                 ctx.db_file_set.discard(f)
+            ctx.discovered_files.extend(batch)
             yield batch
 
         ctx.ghost_files = list(ctx.db_file_set)

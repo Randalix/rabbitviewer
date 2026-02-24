@@ -266,6 +266,7 @@ class ThumbnailViewWidget(QFrame):
         self._thumbnail_generated_signal.connect(self._on_thumbnail_ready, Qt.QueuedConnection)
 
         self._is_loading = False
+        self._folder_is_cached = False
         self._filter_in_flight = False
         self._filter_pending = False
 
@@ -581,6 +582,7 @@ class ThumbnailViewWidget(QFrame):
             timeout=0 # a timeout of 0 makes it persistent until the next message
         ))
         self._is_loading = True
+        self._folder_is_cached = False
         self.current_directory_path = directory_path
         self._load_directory_deferred(directory_path, recursive)
 
@@ -609,6 +611,7 @@ class ThumbnailViewWidget(QFrame):
         synchronously so placeholders paint in the same frame, then lets the
         timer handle the rest at ~60fps.
         """
+        self._folder_is_cached = len(files) > 0
         if not files:
             return
         logging.info(f"[chunking] _on_initial_files_received: {len(files)} files from DB")
@@ -1428,6 +1431,10 @@ class ThumbnailViewWidget(QFrame):
         zone) are sent, keeping the daemon call small even on single-cell moves.
         Stale IPC calls are dropped via a generation counter so the daemon never
         processes an outdated viewport position.
+
+        During a new-folder scan, all thumbnail requests are suppressed so
+        workers stay free for directory discovery.  For cached folders the
+        full visible viewport is requested at GUI_REQUEST_LOW.
         """
         if not self.socket_client or not self.labels or not self.current_files or not self._grid_layout_manager:
             return
@@ -1489,24 +1496,25 @@ class ThumbnailViewWidget(QFrame):
             if orig_idx is not None:
                 current_thumb[all_files[orig_idx]] = priority
 
-        # --- Visible-but-outside-heatmap: request at GUI_REQUEST_LOW (40) ---
-        # The heatmap diamond only covers ~221 cells; the rest of the viewport
-        # still needs requesting so cached thumbnails get previews_ready.
-        first_row, last_row = self._grid_layout_manager.get_visible_rows()
-        first_row = max(0, first_row - 1)
-        last_row += 1
-        vis_start = first_row * columns
-        vis_end = min(total_visible - 1, (last_row + 1) * columns - 1)
-        for vis_idx in range(vis_start, vis_end + 1):
-            orig_idx = vis_to_orig(vis_idx)
-            if orig_idx is None:
-                continue
-            state = self.image_states.get(orig_idx)
-            if state and state.loaded:
-                continue
-            path = all_files[orig_idx]
-            if path not in current_thumb:
-                current_thumb[path] = 40  # GUI_REQUEST_LOW
+        # --- Cached/post-scan: request full viewport at GUI_REQUEST_LOW ---
+        # When no scan is competing for workers, aggressively request the
+        # entire visible viewport so cached thumbnails appear immediately.
+        if not self._is_loading:
+            first_row, last_row = self._grid_layout_manager.get_visible_rows()
+            first_row = max(0, first_row - 1)
+            last_row += 1
+            vis_start = first_row * columns
+            vis_end = min(total_visible - 1, (last_row + 1) * columns - 1)
+            for vis_idx in range(vis_start, vis_end + 1):
+                orig_idx = vis_to_orig(vis_idx)
+                if orig_idx is None:
+                    continue
+                state = self.image_states.get(orig_idx)
+                if state and state.loaded:
+                    continue
+                path = all_files[orig_idx]
+                if path not in current_thumb:
+                    current_thumb[path] = 40  # GUI_REQUEST_LOW
 
         current_fullres: dict[str, int] = {}
         for vis_idx, priority in fullres_pairs:

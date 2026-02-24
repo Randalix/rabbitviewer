@@ -421,15 +421,43 @@ class ThumbnailSocketServer:
                     reconcile_ctx.ghost_files
                 )
 
+            # Phase 3: Now that the scan is complete, create thumbnail + metadata +
+            # view-image tasks for all discovered files at LOW priority.  The heatmap
+            # will upgrade visible ones; everything else processes in the background.
+            discovered = reconcile_ctx.discovered_files
+            if discovered:
+                logging.info(
+                    f"Post-scan: creating tasks for {len(discovered)} "
+                    f"discovered files in '{req.path}'."
+                )
+                def _discovered_batch_generator():
+                    batch = []
+                    for f in discovered:
+                        batch.append(f)
+                        if len(batch) >= 10:
+                            yield batch
+                            batch = []
+                    if batch:
+                        yield batch
+
+                task_job = SourceJob(
+                    job_id=f"post_scan::{session_id}::{req.path}",
+                    priority=Priority.LOW,
+                    task_priority=Priority.LOW,
+                    generator=_discovered_batch_generator(),
+                    task_factory=self.thumbnail_manager.create_gui_tasks_for_file,
+                    create_tasks=True,
+                )
+                rm.submit_source_job(task_job)
+
         reconcile_job = SourceJob(
             job_id=f"gui_scan::{req.session_id}::{req.path}",
             priority=Priority(80),
-            task_priority=Priority.LOW,
             generator=self.directory_scanner.scan_incremental_reconcile(
                 req.path, req.recursive, reconcile_ctx
             ),
             task_factory=self.thumbnail_manager.create_gui_tasks_for_file,
-            create_tasks=True,
+            create_tasks=False,
             on_complete=_on_reconcile_complete,
         )
         rm.submit_source_job(reconcile_job)

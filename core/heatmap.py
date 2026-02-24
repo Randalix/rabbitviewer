@@ -3,6 +3,7 @@
 Pure-function module — no Qt or daemon dependencies.
 Thumb zone: 10-ring Manhattan diamond.  Fullres zone: 4-ring diamond offset
 by FULLRES_OFFSET so the first few thumb rings render before fullres begins.
+Scan generator runs at priority 80; fullres drops below scan after ring 1.
 """
 
 from typing import List, Set, Tuple
@@ -10,7 +11,7 @@ from typing import List, Set, Tuple
 THUMB_RING_COUNT = 10
 FULLRES_RING_COUNT = 4
 BASE = 90
-STEP = 5
+STEP = 3
 FULLRES_OFFSET = 3
 
 

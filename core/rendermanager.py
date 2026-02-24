@@ -360,19 +360,20 @@ class RenderManager(QObject):
         if item is None:
             logger.info(
                 f"[chunking] generator exhausted for '{job.job_id}' at slice={slice_index}. "
-                f"Calling on_complete and emitting scan_complete."
+                f"Emitting scan_complete and calling on_complete."
             )
             with self.active_jobs_lock:
                 self.active_jobs.pop(job.job_id, None)
+
+            # Emit scan_complete BEFORE on_complete so the GUI receives it
+            # before any previews_ready from tasks created by on_complete.
+            self._emit_scan_complete(job, slice_index)
 
             if job.on_complete:
                 try:
                     job.on_complete()
                 except Exception as e:
                     logging.error(f"on_complete callback for job '{job.job_id}' failed: {e}", exc_info=True)
-
-            # Send final "scan_complete" notification.
-            self._emit_scan_complete(job, slice_index)
             return
 
         # 5. Process the yielded item and create child tasks.
@@ -383,10 +384,11 @@ class RenderManager(QObject):
         session_id = None if _is_daemon_job else (job_parts[1] if len(job_parts) > 2 else None)
         job_path = job_parts[2] if len(job_parts) > 2 else job_parts[-1]
 
-        # Suppress scan_progress for daemon indexing jobs — the GUI blindly adds
-        # every file from scan_progress to its model, which would pollute the view
-        # with files from unrelated directories.
-        if not _is_daemon_job:
+        # Suppress scan_progress for daemon indexing and post-scan task-creation
+        # jobs — the GUI blindly adds every file from scan_progress to its model,
+        # which would pollute the view or duplicate already-known entries.
+        _suppress_progress = _is_daemon_job or job.job_id.startswith("post_scan::")
+        if not _suppress_progress:
             from network import protocol
             notification_data = protocol.ScanProgressData(path=job_path, files=items_to_process)
             notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
