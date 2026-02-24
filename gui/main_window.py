@@ -235,7 +235,7 @@ class MainWindow(QMainWindow):
             
         if self.filter_dialog.isVisible():
             self.filter_dialog.hide()
-            # Clear filter when dialog is closed
+            self.filter_dialog.clear_filter()
             if self.thumbnail_view:
                 self.thumbnail_view.clear_filter()
         else:

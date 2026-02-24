@@ -630,6 +630,8 @@ class ThumbnailViewWidget(QFrame):
         timer handle the rest at ~60fps.
         """
         self._folder_is_cached = len(files) > 0
+        if self._folder_is_cached:
+            self._is_loading = False
         if not files:
             return
         logging.info(f"[chunking] _on_initial_files_received: {len(files)} files from DB")
@@ -1301,6 +1303,13 @@ class ThumbnailViewWidget(QFrame):
     def apply_star_filter(self, star_states: list):
         """Sets the star filter and applies all filters."""
         self._current_star_filter = star_states
+        self._filter_update_timer.start()
+
+    def clear_filter(self):
+        """Reset all filters to defaults."""
+        self._current_filter = ""
+        self._current_star_filter = [True, True, True, True, True, True]
+        self._hidden_indices = set()
         self._filter_update_timer.start()
 
     def reapply_filters(self):
