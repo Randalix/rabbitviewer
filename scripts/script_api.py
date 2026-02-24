@@ -193,7 +193,7 @@ class ScriptAPI:
             self._last_operation_time = time.time() - start_time
             self._operation_stats['set_selection_time'] = self._last_operation_time
             self._operation_stats['images_selected'] = len(paths_to_select)
-            logging.debug(f"set_selected_images: {len(indices_to_select)} images in {self._last_operation_time:.3f}s")
+            logging.debug(f"set_selected_images: {len(paths_to_select)} images in {self._last_operation_time:.3f}s")
             
         except Exception as e:
             logging.error(f"Error in set_selected_images: {e}", exc_info=True)
@@ -278,6 +278,7 @@ class ScriptAPI:
         elif mw.thumbnail_view:
             visible_path = mw.thumbnail_view.get_hovered_image_path()
         if visible_path and visible_path in rated:
+            mw.notify_rating_set()
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message=str(rating),

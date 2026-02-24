@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.thumbnail_view)
 
         self._hover_prefetch_path: Optional[str] = None
+        self._last_rating_set_time: float = 0.0
         self._hover_prefetch_timer = QTimer(self)
         self._hover_prefetch_timer.setSingleShot(True)
         self._hover_prefetch_timer.setInterval(150)
@@ -165,7 +166,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logging.debug(f"Hover rating fetch failed for {path}: {e}")
 
+    def notify_rating_set(self):
+        """Record that a rating was just set, suppressing stale hover results."""
+        self._last_rating_set_time = time.time()
+
     def _on_hover_rating_ready(self, path: str, rating: int):
+        # Skip stale hover results that were in-flight when a rating was just set
+        if time.time() - self._last_rating_set_time < 0.5:
+            return
         if self.thumbnail_view.get_hovered_image_path() == path:
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE,

@@ -562,9 +562,9 @@ class MetadataDatabase:
                 cursor = self.conn.cursor()
 
                 # Check for an existing entry to decide whether to INSERT or UPDATE
-                cursor.execute('SELECT id, thumbnail_path, view_image_path, content_hash FROM image_metadata WHERE file_path = ?', (file_path,))
+                cursor.execute('SELECT id, thumbnail_path, view_image_path, content_hash, rating, updated_at FROM image_metadata WHERE file_path = ?', (file_path,))
                 existing_row = cursor.fetchone()
-                
+
                 # Preserve existing paths to avoid race conditions from other tasks
                 if existing_row:
                     if not metadata.get('thumbnail_path'):
@@ -573,6 +573,17 @@ class MetadataDatabase:
                         metadata['view_image_path'] = existing_row[2]
                     if not metadata.get('content_hash'):
                         metadata['content_hash'] = existing_row[3]
+                    # Preserve user-set rating: if the DB row was updated after
+                    # the file was last modified, the rating was set explicitly
+                    # (e.g. via set_rating) and the EXIF write-back may not have
+                    # completed yet.  Don't overwrite it with stale EXIF data.
+                    # why: mtime has 1s granularity on HFS+/APFS, so a rating
+                    # set within the same second as a file write could be missed.
+                    # In practice this is rare: set_rating is user-initiated and
+                    # file writes are background tasks that don't coincide.
+                    existing_updated_at = existing_row[5]
+                    if existing_updated_at and existing_updated_at > mtime:
+                        metadata['rating'] = existing_row[4]
 
                 if existing_row:
                     # UPDATE the existing row
