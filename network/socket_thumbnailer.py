@@ -393,6 +393,23 @@ class ThumbnailSocketServer:
             f"(recursive={req.recursive}). Starting reconciliation walk."
         )
 
+        # Batch-fetch cached thumbnail paths so the GUI can load them
+        # directly from local cache without a daemon round-trip.
+        thumb_map: dict[str, str] = {}
+        if db_files:
+            t0 = time.perf_counter()
+            validity = self.thumbnail_manager.metadata_db.batch_get_cached_thumbnail_validity(db_files)
+            thumb_map = {
+                fp: info['thumbnail_path']
+                for fp, info in validity.items()
+                if info.get('valid') and info.get('thumbnail_path')
+            }
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logging.info(
+                f"[startup] batch thumbnail lookup: {len(thumb_map)}/{len(db_files)} "
+                f"cached in {elapsed_ms:.0f} ms"
+            )
+
         # Phase 2: Single reconciliation walk — discovers new files,
         # creates thumbnail + metadata + view-image tasks, and detects
         # ghost files (in DB but deleted on disk).
@@ -471,7 +488,10 @@ class ThumbnailSocketServer:
         else:
             rm.submit_source_job(reconcile_job)
 
-        return protocol.GetDirectoryFilesResponse(files=sorted(db_files))
+        return protocol.GetDirectoryFilesResponse(
+            files=sorted(db_files),
+            thumbnail_paths=thumb_map,
+        )
 
     def _handle_move_records(self, request_data: dict) -> protocol.Response:
         req = protocol.MoveRecordsRequest.model_validate(request_data)

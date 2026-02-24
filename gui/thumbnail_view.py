@@ -144,6 +144,7 @@ class ThumbnailViewWidget(QFrame):
     # Dedicated signal for the DB-response file list so it always triggers an
     # immediate layout update, regardless of what fast-scan batches arrived first.
     _initial_files_signal = Signal(list)
+    _initial_thumbs_signal = Signal(dict)
     _filtered_paths_ready = Signal(object)  # set of visible paths from daemon
 
     def __init__(self, config_manager=None, parent=None):
@@ -164,6 +165,7 @@ class ThumbnailViewWidget(QFrame):
         self.labels: Dict[int, ThumbnailLabel] = {}
         self.pending_thumbnails = set()
         self.ready_thumbnails: Dict[str, QPixmap] = {}
+        self._initial_thumb_paths: Dict[str, str] = {}  # {source_path: local_thumbnail_path}
         self.current_files = []
         self.all_files = []
         self._all_files_set: Set[str] = set()
@@ -223,6 +225,8 @@ class ThumbnailViewWidget(QFrame):
         self._startup_first_scan_progress: bool = False
         self._needs_heatmap_seed: bool = False
         self._startup_first_previews_ready: bool = False
+        self._startup_first_inline_thumb: bool = False
+        self._startup_inline_thumb_count: int = 0
 
         self._filter_update_timer = QTimer(self)
         self._filter_update_timer.setSingleShot(True)
@@ -266,6 +270,7 @@ class ThumbnailViewWidget(QFrame):
         event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._handle_daemon_notification_from_thread)
         self._daemon_notification_received.connect(self._process_daemon_notification)
         self._initial_files_signal.connect(self._on_initial_files_received)
+        self._initial_thumbs_signal.connect(self._on_initial_thumbs_received)
         self._filtered_paths_ready.connect(self._on_filtered_paths_ready)
 
         self._hovered_label: Optional[ThumbnailLabel] = None
@@ -578,6 +583,8 @@ class ThumbnailViewWidget(QFrame):
         self._startup_t0 = time.perf_counter()
         self._startup_first_scan_progress = False
         self._startup_first_previews_ready = False
+        self._startup_first_inline_thumb = False
+        self._startup_inline_thumb_count = 0
         logging.info(f"[startup] load_directory called for {directory_path}")
         self.clear_layout()
         event_system.publish(StatusMessageEventData(
@@ -607,6 +614,11 @@ class ThumbnailViewWidget(QFrame):
             # placeholders immediately, even if fast-scan notifications arrived first
             # and consumed the is_first_batch shortcut in _add_image_batch.
             self._initial_files_signal.emit(sorted(response.files))
+            # Feed cached thumbnail paths directly into the preview pipeline
+            # so the GUI loads QImages from local cache without a daemon round-trip.
+            if hasattr(response, 'thumbnail_paths') and response.thumbnail_paths:
+                logging.info(f"[startup] {len(response.thumbnail_paths)} cached thumbnail paths from initial response")
+                self._initial_thumbs_signal.emit(response.thumbnail_paths)
         else:
             logging.error(f"Failed to request file list for {directory_path} from daemon. Response: {response}")
 
@@ -629,6 +641,15 @@ class ThumbnailViewWidget(QFrame):
             self._tick_label_creation()
         if self.all_files:
             self.reapply_filters()
+
+    @Slot(dict)
+    def _on_initial_thumbs_received(self, thumb_map: dict):
+        """Store cached thumbnail paths for use during label creation.
+
+        Labels created by _tick_label_creation will pick these up and
+        load QImages inline — no second pipeline pass needed.
+        """
+        self._initial_thumb_paths.update(thumb_map)
 
     def _handle_daemon_notification_from_thread(self, event_data: DaemonNotificationEventData):
         """
@@ -769,6 +790,17 @@ class ThumbnailViewWidget(QFrame):
                     label.updateThumbnail(self.ready_thumbnails[file_path])
                     self.image_states[original_idx].loaded = True
                     del self.ready_thumbnails[file_path]
+                elif file_path in self._initial_thumb_paths:
+                    thumb_path = self._initial_thumb_paths.pop(file_path)
+                    image = QImage(thumb_path)
+                    if not image.isNull():
+                        label.updateThumbnail(QPixmap.fromImage(image))
+                        self.image_states[original_idx].loaded = True
+                        self._startup_inline_thumb_count += 1
+                        if not self._startup_first_inline_thumb and self._startup_t0 is not None:
+                            self._startup_first_inline_thumb = True
+                            elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
+                            logging.info(f"[startup] first inline thumbnail: {elapsed_ms:.0f} ms after load_directory")
                 self.labels[original_idx] = label
 
         remaining = len(self._pending_labels)
@@ -780,6 +812,12 @@ class ThumbnailViewWidget(QFrame):
 
         if not self._pending_labels:
             self._label_tick_timer.stop()
+            if self._startup_t0 is not None and self._startup_inline_thumb_count > 0:
+                elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
+                logging.info(
+                    f"[startup] label queue drained: {self._startup_inline_thumb_count} "
+                    f"inline thumbnails applied in {elapsed_ms:.0f} ms"
+                )
             logging.info("[chunking] _tick_label_creation: queue drained, timer stopped")
 
         # Trigger layout update for the labels just created.
@@ -947,6 +985,7 @@ class ThumbnailViewWidget(QFrame):
 
         self.pending_thumbnails.clear()
         self.ready_thumbnails.clear()
+        self._initial_thumb_paths.clear()
         self.current_files.clear()
         self.all_files.clear()
         self._all_files_set.clear()

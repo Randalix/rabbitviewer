@@ -91,6 +91,7 @@ class GetDirectoryFilesRequest(Request):
 @dataclasses.dataclass
 class GetDirectoryFilesResponse(Response):
     files: List[str] = dataclasses.field(default_factory=list)
+    thumbnail_paths: Dict[str, str] = dataclasses.field(default_factory=dict)
 
 # --- Request Previews ---
 @dataclasses.dataclass
