@@ -4,6 +4,7 @@ from PySide6.QtGui import QFont, QFontMetrics
 from typing import Optional
 import logging
 
+from core.event_system import EventType, event_system
 from gui.components.scrolling_label import ScrollingLabel
 
 # Sentinel: rating section is blank because no image is hovered.
@@ -12,7 +13,7 @@ _CLEARED = object()
 
 
 class CustomStatusBar(QStatusBar):
-    """3-section status bar: filepath (left), rating (centre), process (right)."""
+    """4-section status bar: filepath (left), rating (centre-left), selection count (centre-right), process (right)."""
 
     def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
@@ -31,6 +32,8 @@ class CustomStatusBar(QStatusBar):
         self._build_layout()
         self._apply_font_settings()
 
+        event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
+
     def _build_layout(self):
         container = QWidget(self)
         layout = QHBoxLayout(container)
@@ -47,6 +50,11 @@ class CustomStatusBar(QStatusBar):
         self._rating_label.setStyleSheet("padding-bottom: 3px;")
         layout.addWidget(self._rating_label)
 
+        self._selection_label = QLabel()
+        self._selection_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self._selection_label.setFixedWidth(90)
+        layout.addWidget(self._selection_label)
+
         self._process_label = QLabel()
         self._process_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self._process_label, 2)
@@ -62,7 +70,7 @@ class CustomStatusBar(QStatusBar):
                 font_family = "Arial"
                 font_size = 10
             font = QFont(font_family, font_size)
-            for label in (self._filepath_label, self._process_label):
+            for label in (self._filepath_label, self._selection_label, self._process_label):
                 label.setFont(font)
             rating_font = QFont(font_family, font_size + 4)
             self._rating_label.setFont(rating_font)
@@ -86,6 +94,9 @@ class CustomStatusBar(QStatusBar):
         self._raw_rating = _CLEARED
         self._rating_label.setText("")
 
+    def setSelectionCount(self, count: int):
+        self._selection_label.setText(f"{count} selected" if count > 0 else "")
+
     def setProcessMessage(self, message: str, timeout: int = 0):
         self._process_timer.stop()
         self._raw_process = message
@@ -96,6 +107,13 @@ class CustomStatusBar(QStatusBar):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def closeEvent(self, event):
+        event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
+        super().closeEvent(event)
+
+    def _on_selection_changed(self, event_data):
+        self.setSelectionCount(len(event_data.selected_paths))
 
     def _clear_process(self):
         self._raw_process = ""
