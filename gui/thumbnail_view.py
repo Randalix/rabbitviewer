@@ -247,10 +247,16 @@ class ThumbnailViewWidget(QFrame):
         self._label_tick_timer.setInterval(16)  # ~60 fps, same as preview timer
         self._label_tick_timer.timeout.connect(self._tick_label_creation)
 
+        # Fires periodically while scrolling so thumbnails update continuously,
+        # not just after scrolling stops.  Stopped when idle (no scroll for one
+        # full interval) to avoid unnecessary heatmap recomputation.
         self._priority_update_timer = QTimer(self)
-        self._priority_update_timer.setSingleShot(True)
-        self._priority_update_timer.setInterval(100)
+        self._priority_update_timer.setInterval(150)
         self._priority_update_timer.timeout.connect(self._prioritize_visible_thumbnails)
+        self._scroll_idle_timer = QTimer(self)
+        self._scroll_idle_timer.setSingleShot(True)
+        self._scroll_idle_timer.setInterval(200)
+        self._scroll_idle_timer.timeout.connect(self._on_scroll_idle)
 
         self._viewport_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewport")
 
@@ -1412,16 +1418,30 @@ class ThumbnailViewWidget(QFrame):
 
         # On the first layout after load, seed the heatmap immediately so
         # _last_thumb_pairs is populated before notifications start draining.
-        # Subsequent updates use the normal 100ms coalescing timer.
+        # Subsequent updates fire once after a short delay.
         if self._needs_heatmap_seed:
             self._needs_heatmap_seed = False
             self._prioritize_visible_thumbnails()
         else:
-            self._priority_update_timer.start()
+            QTimer.singleShot(100, self._prioritize_visible_thumbnails)
 
     def _on_scroll(self, value):
-        """Slot to handle scroll bar value changes."""
-        self._priority_update_timer.start()
+        """Slot to handle scroll bar value changes.
+
+        Starts a repeating heatmap timer so thumbnails update continuously
+        during scrolling.  A separate idle timer stops the repeating timer
+        200ms after the last scroll event.
+        """
+        if not self._priority_update_timer.isActive():
+            self._prioritize_visible_thumbnails()  # immediate first update
+            self._priority_update_timer.start()
+        self._scroll_idle_timer.start()  # reset idle countdown
+
+    def _on_scroll_idle(self):
+        """Called when no scroll events have fired for 200ms — stop the
+        repeating heatmap timer and fire one final update."""
+        self._priority_update_timer.stop()
+        self._prioritize_visible_thumbnails()
 
     def _prioritize_visible_thumbnails(self):
         """Computes heatmap priorities around the cursor and sends per-path
