@@ -364,14 +364,15 @@ class ThumbnailManager:
         if not image_path:
             return False
 
-        # Fast path: thumbnail already on disk — notify immediately instead of
-        # trying to upgrade a task that was never submitted for cached files.
-        if self.metadata_db.is_thumbnail_valid(image_path):
-            paths = self.metadata_db.get_thumbnail_paths(image_path)
+        # Fast path: thumbnail cached locally — notify immediately without
+        # stat-ing the source file.  Staleness is handled by the deferred
+        # reconcile walk which re-validates mtime/size in the background.
+        cached = self.metadata_db.get_cached_thumbnail_paths(image_path)
+        if cached and cached.get('thumbnail_path'):
             notification_data = protocol.PreviewsReadyData(
                 image_path=image_path,
-                thumbnail_path=paths.get('thumbnail_path'),
-                view_image_path=paths.get('view_image_path')
+                thumbnail_path=cached['thumbnail_path'],
+                view_image_path=cached.get('view_image_path')
             )
             notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
             try:
@@ -432,8 +433,8 @@ class ThumbnailManager:
         if not image_paths:
             return 0
 
-        # Single DB query for all paths.
-        validity = self.metadata_db.batch_get_thumbnail_validity(image_paths)
+        # Single DB query for all paths — trust-cache, no source file stat.
+        validity = self.metadata_db.batch_get_cached_thumbnail_validity(image_paths)
 
         # Separate cached (valid) from uncached paths.
         cached_paths = []

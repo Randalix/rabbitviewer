@@ -453,6 +453,63 @@ class MetadataDatabase:
 
         return results
 
+    def get_cached_thumbnail_paths(self, file_path: str) -> Optional[Dict[str, str]]:
+        """Returns cached thumbnail/view paths without stat-ing the source file.
+
+        Trusts the DB record — only verifies the local thumbnail file exists.
+        Returns None if no cached thumbnail is available.
+        """
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT thumbnail_path, view_image_path FROM image_metadata
+                    WHERE file_path = ?
+                ''', (file_path,))
+                result = cursor.fetchone()
+
+            if result and result[0] and os.path.exists(result[0]):
+                return {
+                    'thumbnail_path': result[0],
+                    'view_image_path': result[1],
+                }
+        except sqlite3.Error as e:
+            logging.error(f"Error in get_cached_thumbnail_paths for {file_path}: {e}")
+        return None
+
+    def batch_get_cached_thumbnail_validity(self, file_paths: List[str]) -> Dict[str, Dict]:
+        """Batch trust-cache check — no os.stat() on source files.
+
+        Like batch_get_thumbnail_validity but skips mtime/size validation
+        against the source file.  Only checks that the DB has a record and
+        the local thumbnail file exists.
+        """
+        if not file_paths:
+            return {}
+
+        results: Dict[str, Dict] = {}
+        try:
+            placeholders = ",".join("?" for _ in file_paths)
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(f'''
+                    SELECT file_path, thumbnail_path, view_image_path
+                    FROM image_metadata
+                    WHERE file_path IN ({placeholders})
+                ''', file_paths)
+                for row in cursor.fetchall():
+                    fp, thumb, view = row
+                    valid = bool(thumb and os.path.exists(thumb))
+                    results[fp] = {
+                        'thumbnail_path': thumb,
+                        'view_image_path': view,
+                        'valid': valid,
+                    }
+        except sqlite3.Error as e:
+            logging.error(f"Error in batch_get_cached_thumbnail_validity: {e}")
+
+        return results
+
     def is_thumbnail_valid(self, file_path: str) -> bool:
         """
         Checks if a valid thumbnail exists for the file. This is optimized to reduce syscalls.
