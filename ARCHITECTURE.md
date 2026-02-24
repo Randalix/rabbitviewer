@@ -112,13 +112,15 @@ Domain layer over `RenderManager`. Owns all image-specific workflows and the tas
 ```
 get_directory_files (socket command)
   │
-  ├── Response: return DB-cached files immediately (zero filesystem access)
+  ├── Response: return DB-cached files + thumbnail_paths dict immediately
+  │     (single batch SELECT, zero filesystem access on source files)
   │
   ├── Cached folder (DB has entries):
+  │     GUI receives thumbnail_paths in the initial response.
+  │     _tick_label_creation loads QImages inline as labels are born —
+  │     no daemon round-trip, no heatmap request, no notification needed.
   │     Reconcile walk deferred 3s via threading.Timer at BACKGROUND_SCAN (10).
-  │     Heatmap drives thumbnail display from local cache — request_thumbnail
-  │     uses trust-cache path (get_cached_thumbnail_paths) which skips
-  │     os.stat() on source files, checking only local thumbnail existence.
+  │     Uncached files still go through the normal heatmap → notification flow.
   │
   └── New folder (empty DB):
         Phase 1: reconcile_job (Priority(80), create_tasks=False)
@@ -267,6 +269,7 @@ Top-level coordinator. Stacks `ThumbnailViewWidget`, `PictureView`, and `VideoVi
 Grid display of file placeholders (`ThumbnailLabel`). Responsibilities:
 - Receives `scan_progress` → creates placeholders
 - Receives `previews_ready` → loads `QImage` from disk, updates label
+- **Inline thumbnail loading**: `_tick_label_creation` checks `_initial_thumb_paths` (populated from the initial `get_directory_files` response) and loads cached QImages as labels are created — labels are born with thumbnails already set, no daemon round-trip needed
 - Scroll / hover events → `_prioritize_visible_thumbnails` → heatmap computation → `update_viewport_heatmap` to daemon (delta-only IPC with generation counter for stale-request dropping)
 - Tracks `_last_thumb_pairs` and `_last_fullres_pairs` (`dict[str, int]`) for delta detection
 - Partitions `_pending_previews` so heatmap-zone items load first (O(N) partition, not sort)
