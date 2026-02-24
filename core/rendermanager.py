@@ -403,25 +403,34 @@ class RenderManager(QObject):
         # Only create backend processing tasks if the job is configured to do so.
         # For fast GUI scans, this will be false.
         if job.create_tasks:
+            effective_priority = job.task_priority if job.task_priority is not None else job.priority
             for file_path in items_to_process:
-                tasks = job.task_factory(file_path, job.priority)
+                tasks = job.task_factory(file_path, effective_priority)
                 for task in tasks:
                     self.submit_task(
                         task.task_id, task.priority, task.func, *task.args,
                         dependencies=task.dependencies, task_type=task.task_type,
                         on_complete_callback=task.on_complete_callback, **task.kwargs
                     )
-        
+
         # 6. Schedule the next slice of this job.
         next_slice_index = slice_index + 1
         next_task_id = f"job_slice::{job.job_id}::{next_slice_index}"
+        queue_depth = self.task_queue.qsize()
+        next_priority = job.priority
+        if queue_depth > self.backpressure_threshold:
+            next_priority = min(job.priority, Priority.LOW)
+            logger.debug(
+                f"[backpressure] queue depth {queue_depth} > {self.backpressure_threshold}, "
+                f"throttling next slice to {next_priority.name}"
+            )
         logger.info(
             f"[chunking] scheduling next slice: {next_task_id} "
-            f"(priority={job.priority}, queue_depth={self.task_queue.qsize()})"
+            f"(priority={next_priority}, queue_depth={queue_depth})"
         )
         success = self.submit_task(
             next_task_id,
-            job.priority,
+            next_priority,
             self._cooperative_generator_runner,
             job, next_slice_index
         )

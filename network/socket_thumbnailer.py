@@ -424,6 +424,7 @@ class ThumbnailSocketServer:
         reconcile_job = SourceJob(
             job_id=f"gui_scan::{req.session_id}::{req.path}",
             priority=Priority(80),
+            task_priority=Priority.LOW,
             generator=self.directory_scanner.scan_incremental_reconcile(
                 req.path, req.recursive, reconcile_ctx
             ),
