@@ -44,6 +44,46 @@ if 'PySide6' not in sys.modules:
     sys.modules['PySide6'] = _pyside6
     sys.modules['PySide6.QtCore'] = _qtcore
 
+# ---------------------------------------------------------------------------
+# watchdog stubs — allow filewatcher/network modules to import without watchdog
+# ---------------------------------------------------------------------------
+if 'watchdog' not in sys.modules:
+    _wd = types.ModuleType('watchdog')
+    _wd_observers = types.ModuleType('watchdog.observers')
+    _wd_events = types.ModuleType('watchdog.events')
+
+    class _Observer:
+        def __init__(self): self._alive = False
+        def is_alive(self): return self._alive
+        def schedule(self, *a, **kw): pass
+        def start(self): self._alive = True
+        def stop(self): self._alive = False
+        def join(self, timeout=None): pass
+
+    class _FileSystemEventHandler:
+        pass
+
+    _wd_observers.Observer = _Observer           # type: ignore[attr-defined]
+    _wd_events.FileSystemEventHandler = _FileSystemEventHandler  # type: ignore[attr-defined]
+
+    sys.modules['watchdog'] = _wd
+    sys.modules['watchdog.observers'] = _wd_observers
+    sys.modules['watchdog.events'] = _wd_events
+
+# ---------------------------------------------------------------------------
+# send2trash stub — raises OSError for non-existent paths (realistic behaviour)
+# ---------------------------------------------------------------------------
+if 'send2trash' not in sys.modules:
+    _s2t = types.ModuleType('send2trash')
+
+    def _send2trash(path):
+        if not os.path.exists(path):
+            raise OSError(f"[Errno 2] No such file or directory: '{path}'")
+        os.remove(path)
+
+    _s2t.send2trash = _send2trash  # type: ignore[attr-defined]
+    sys.modules['send2trash'] = _s2t
+
 import pytest
 from PIL import Image
 
