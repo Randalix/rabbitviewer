@@ -323,15 +323,41 @@ if [[ "$(uname)" == "Linux" ]]; then
 
     # Install desktop entry.
     if [[ -f "$DESKTOP_SRC" ]]; then
+        # Validate the .desktop file if the tool is available.
+        if command -v desktop-file-validate &>/dev/null; then
+            if desktop-file-validate "$DESKTOP_SRC" 2>&1; then
+                green "  desktop entry validated"
+            else
+                yellow "  desktop-file-validate reported warnings (installed anyway)"
+            fi
+        fi
+
         cp "$DESKTOP_SRC" "$DESKTOP_DIR/rabbitviewer.desktop"
         green "  desktop entry → $DESKTOP_DIR/rabbitviewer.desktop"
     else
         yellow "  desktop file not found at $DESKTOP_SRC — skipping"
     fi
 
-    # Update desktop database if available.
+    # Update desktop database so the launcher picks up the entry.
     if command -v update-desktop-database &>/dev/null; then
         update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+        green "  desktop database updated"
+    else
+        yellow "  update-desktop-database not found — you may need to log out and back in"
+        yellow "  for RabbitViewer to appear in your application launcher."
+    fi
+
+    # Verify the entry is queryable.
+    DESKTOP_INSTALLED="$DESKTOP_DIR/rabbitviewer.desktop"
+    if [[ -f "$DESKTOP_INSTALLED" ]]; then
+        if command -v xdg-desktop-menu &>/dev/null; then
+            if xdg-desktop-menu forceupdate 2>/dev/null; then
+                green "  application launcher refreshed"
+            fi
+        fi
+        if command -v gtk-update-icon-cache &>/dev/null; then
+            gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+        fi
     fi
 fi
 
