@@ -107,6 +107,8 @@ submit_source_job(job)
 
 Domain layer over `RenderManager`. Owns all image-specific workflows and the task operation registry for generic daemon task dispatch (used by `ScriptAPI.daemon_tasks()`). Registered operations: `send2trash`, `remove_records`.
 
+**Tag write-back:** `_write_tags_to_file` mirrors the rating write-back pattern — suppresses watchdog, resolves plugin, calls `plugin.write_tags()` which clears then rewrites `XMP:Subject` via exiftool. Queued at `NORMAL` priority after the DB update completes synchronously.
+
 **Two-phase scan flow for a GUI directory request:**
 
 ```
@@ -172,6 +174,7 @@ meta_full::{file_path}   — deferred full exiftool extraction (all EXIF fields,
 {file_path}              — thumbnail + view image generation task
 view::{file_path}        — speculative fullres pre-cache (has cancel_event)
 exif_rating::{file_path} — EXIF star rating write-back
+write_tags::{file_path}  — XMP:Subject tag write-back
 job_slice::{job_id}::{n} — nth cooperative slice of a SourceJob
 script_task::{counter}   — compound task from script daemon_tasks API
 
@@ -199,13 +202,15 @@ Format handlers registered in a global `PluginRegistry` singleton (`plugins/base
 | `RawPlugin` | `.nef .nrw .arw .sr2 .srf .dng .raf .orf .rw2 .pef .srw .mrw .rwl .3fr .fff .mef .mos .iiq .cap .eip .cr2` | exiftool (CLI) |
 | `VideoPlugin` | `.mp4 .mov .mkv .avi .webm .m4v .wmv .flv .mpg .mpeg .3gp .ts` | ffmpeg + ffprobe (CLI) |
 
-Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate_thumbnail()`, `generate_view_image()`, `extract_metadata()`, `write_rating()`, `is_available()`.
+Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate_thumbnail()`, `generate_view_image()`, `extract_metadata()`, `write_rating()`, `write_tags()`, `is_available()`.
 
 ---
 
 ### MetadataDatabase — `core/metadata_database.py`
 
-SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, thumbnail + view image cache paths, content hashes. Thread-safe via `threading.Lock` (single shared connection). A module-level singleton (`get_metadata_database`) prevents multiple connections to the same path.
+SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, tags, thumbnail + view image cache paths, content hashes. Thread-safe via `threading.Lock` (single shared connection). A module-level singleton (`get_metadata_database`) prevents multiple connections to the same path.
+
+**Tag system** uses a normalized schema: `tags` table (id, name, kind) + `image_tags` junction table (file_path, tag_id) with CASCADE deletes. Tags have a `kind` field (`'keyword'` or `'workflow'`). Keywords are auto-discovered from `XMP:Subject` / `IPTC:Keywords` during metadata extraction. CRUD methods: `get_or_create_tag`, `add_image_tags`, `remove_image_tags`, `set_image_tags`, `batch_set_tags`, `batch_remove_tags`, `get_image_tags`, `get_all_tags`, `get_directory_tags`. `get_filtered_file_paths` accepts an optional `tag_names` parameter that adds a junction-table subquery filter.
 
 **Thumbnail validity** has two modes:
 
@@ -250,6 +255,10 @@ Two channels:
 
 **Key request types:**
 - `update_viewport` — carries per-path `PathPriority` pairs for thumb upgrades, downgrade paths, fullres requests, and fullres cancels. See `PROTOCOL.md` for full schema.
+- `set_tags` / `remove_tags` — bulk tag assignment/removal for image paths. DB update is synchronous; XMP write-back is queued asynchronously.
+- `get_tags` — returns two-tier tag lists (directory-scoped + global) for autocomplete.
+- `get_image_tags` — returns per-path tag lists for a set of images.
+- `get_filtered_file_paths` — extended with optional `tag_names` for combined text + star + tag filtering.
 
 See `PROTOCOL.md` for full message schema reference.
 
@@ -287,6 +296,25 @@ Embedded mpv player for video files. Uses `python-mpv` with `wid=str(int(self.wi
 ### InspectorView — `gui/inspector_view.py`
 
 Pixel-level inspection window. Works for both images and videos. For images: fetches view image from daemon, renders via `PictureBase`. For videos: uses a headless mpv instance (`vo="null"`, `ao="null"`) to decode frames on demand via `screenshot_raw()` → PIL → QImage → `PictureBase`. Mode mapping: TRACKING = spatial crop (image) / timeline scrub (video), FIT = fitted display, MANUAL = user-controlled pan (image) / user-controlled scrub (video).
+
+### Modal Menu — `gui/modal_menu.py`, `gui/menu_registry.py`
+
+Floating overlay menu system triggered by hotkeys. `MenuNode` defines a tree: each node has a `key` (single-char trigger), and either `children` (submenu), `script` (runs via ScriptManager), or `action` (arbitrary callable). The menu installs an `eventFilter` on `QApplication` (LIFO order, runs before `QShortcut`) to intercept all keys while open. `MenuContext` provides visibility predicates based on current view and selection state.
+
+Menus are registered in `menu_registry.py` via `build_menus()` and bound to hotkeys with the `menu:` prefix in config (e.g., `menu:tags` → T key).
+
+**Built-in menus:**
+- `sort` — sort thumbnails by date/name/rating/size/type (thumbnail view only)
+- `tags` — tag operations: Add/Edit (A, opens `TagEditorDialog`) and Filter (F, opens `TagFilterDialog`)
+
+### Tag Dialogs — `gui/tag_editor_dialog.py`, `gui/tag_filter_dialog.py`
+
+Two non-modal dialogs for tag operations, both using the reusable `TagInput` widget (`gui/components/tag_input.py`):
+
+- **TagEditorDialog** — assignment popup for selected images. Pre-populates with the intersection of existing tags across the selection. On confirm, computes a diff (added/removed) and sends `set_tags` / `remove_tags` IPC commands.
+- **TagFilterDialog** — standalone tag filter. Emits `tags_changed` signal wired to `ThumbnailViewWidget.apply_tag_filter()`.
+
+`TagInput` is a `QLineEdit` subclass accepting comma-separated tags with two-tier `QCompleter` autocomplete (directory tags first, separator, global tags). Supports shell-style Tab completion (accepts first match) and Enter to confirm.
 
 ### Overlay System — `gui/overlay_manager.py`, `gui/overlay_renderers.py`
 
