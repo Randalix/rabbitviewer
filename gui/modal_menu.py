@@ -3,9 +3,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List
 
-from PySide6.QtWidgets import QWidget, QGraphicsDropShadowEffect
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QKeyEvent
+from PySide6.QtWidgets import QWidget, QGraphicsDropShadowEffect, QApplication
+from PySide6.QtCore import Qt, QSize, QEvent, QObject
+from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QKeyEvent, QMouseEvent
 
 
 @dataclass
@@ -31,6 +31,11 @@ class ModalMenu(QWidget):
     Each visible MenuNode is rendered as a row ``[K]  Label``.  Pressing a
     key either runs the associated script (leaf) or descends into a sub-menu
     (branch).  Escape or any unmapped key dismisses the menu.
+
+    Key interception uses a QApplication eventFilter rather than Qt.Popup +
+    keyPressEvent.  This runs before QShortcut matching and before Qt's popup
+    auto-dismiss logic, so normal hotkeys cannot leak through while the menu
+    is open.
     """
 
     _PADDING = 24
@@ -49,6 +54,7 @@ class ModalMenu(QWidget):
         self._menus = menus
         self._script_manager = script_manager
         self._hotkey_manager = hotkey_manager
+        self._is_open = False
 
         self._breadcrumb: List[str] = []
         self._current_node: Optional[MenuNode] = None
@@ -56,7 +62,7 @@ class ModalMenu(QWidget):
         self._key_map: dict = {}
         self._context: Optional[MenuContext] = None
 
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Popup)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -92,6 +98,7 @@ class ModalMenu(QWidget):
             if child.visible is None or child.visible(self._context)
         ]
         self._key_map = {item.key.lower(): item for item in self._visible_items if item.key}
+        logging.debug(f"ModalMenu._show_node: {node.label}, {len(self._visible_items)} visible, keys={list(self._key_map.keys())}")
 
         if not self._visible_items:
             self._close()
@@ -99,9 +106,17 @@ class ModalMenu(QWidget):
 
         self._resize_to_fit()
         self._position_center()
+
+        if not self._is_open:
+            self._is_open = True
+            # why: eventFilter installed on QApplication intercepts keys before
+            # QShortcut matching and before HotkeyManager's own eventFilter,
+            # because Qt calls filters in reverse installation order (LIFO).
+            app = QApplication.instance()
+            if app:
+                app.installEventFilter(self)
         self.show()
-        self.setFocus()
-        self._hotkey_manager.disable_shortcuts()
+        self.raise_()
         self.update()
 
     def _resize_to_fit(self):
@@ -114,13 +129,62 @@ class ModalMenu(QWidget):
         self.setFixedSize(QSize(w, h))
 
     def _position_center(self):
-        # why: Qt.Popup requires global screen coordinates
+        # why: Tool windows use global screen coordinates
         parent = self.parentWidget()
         if parent:
             px = parent.width() // 2 - self.width() // 2
             py = parent.height() // 2 - self.height() // 2
             self.move(parent.mapToGlobal(parent.rect().topLeft()).x() + px,
                       parent.mapToGlobal(parent.rect().topLeft()).y() + py)
+
+    # ------------------------------------------------------------------
+    # Event filter — intercepts keys/clicks at the QApplication level
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if not self._is_open:
+            return False
+
+        # why: QShortcut matching happens during ShortcutOverride, before KeyPress.
+        # Consuming ShortcutOverride prevents Qt from firing any QShortcut while
+        # the menu is open, so HotkeyManager shortcuts cannot leak through.
+        if event.type() == QEvent.Type.ShortcutOverride:
+            event.accept()
+            return True
+
+        if event.type() == QEvent.Type.KeyPress:
+            self._handle_key(event)
+            return True  # consume ALL key events while open
+
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if isinstance(event, QMouseEvent):
+                global_pos = event.globalPosition().toPoint()
+                if not self.geometry().contains(global_pos):
+                    logging.debug("ModalMenu: click outside, dismissing")
+                    self._close()
+                    return True
+
+        return False
+
+    def _handle_key(self, event: QKeyEvent):
+        logging.debug(f"ModalMenu._handle_key: key={event.key()}, text='{event.text()}'")
+        if event.key() == Qt.Key_Escape:
+            self._close()
+            return
+
+        text = event.text().lower()
+        item = self._key_map.get(text)
+        if item:
+            if item.children:
+                self._breadcrumb.append(item.label)
+                self._show_node(item)
+            elif item.script:
+                logging.debug(f"ModalMenu: running script '{item.script}'")
+                self._close()
+                self._script_manager.run_script(item.script)
+        else:
+            logging.debug(f"ModalMenu: unmapped key '{text}', dismissing")
+            self._close()
 
     # ------------------------------------------------------------------
     # Context builder
@@ -157,37 +221,18 @@ class ModalMenu(QWidget):
         )
 
     # ------------------------------------------------------------------
-    # Key handling
-    # ------------------------------------------------------------------
-
-    def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key_Escape:
-            self._close()
-            return
-
-        text = event.text().lower()
-        item = self._key_map.get(text)
-        if item:
-            if item.children:
-                self._breadcrumb.append(item.label)
-                self._show_node(item)
-            elif item.script:
-                self._close()
-                self._script_manager.run_script(item.script)
-        else:
-            self._close()
-
-    # ------------------------------------------------------------------
     # Close
     # ------------------------------------------------------------------
 
     def _close(self):
+        if not self._is_open:
+            return
+        logging.debug("ModalMenu._close")
+        self._is_open = False
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
         self.hide()
-        self._hotkey_manager.enable_shortcuts()
-
-    def hideEvent(self, event):
-        super().hideEvent(event)
-        self._hotkey_manager.enable_shortcuts()
 
     # ------------------------------------------------------------------
     # Painting

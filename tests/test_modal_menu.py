@@ -36,6 +36,34 @@ def _ensure_qt_stubs():
             def height(self): return self._h
         qtcore.QSize = _QSize
 
+    if not hasattr(qtcore, "QEvent"):
+        class _QEvent:
+            class Type:
+                KeyPress = 6
+                MouseButtonPress = 2
+                ShortcutOverride = 51
+            def __init__(self, *a): pass
+            def accept(self): pass
+        qtcore.QEvent = _QEvent
+    else:
+        # why: other test files may have created a QEvent stub without these attrs
+        if not hasattr(qtcore.QEvent, "Type"):
+            class _Type:
+                KeyPress = 6
+                MouseButtonPress = 2
+                ShortcutOverride = 51
+            qtcore.QEvent.Type = _Type
+        else:
+            if not hasattr(qtcore.QEvent.Type, "KeyPress"):
+                qtcore.QEvent.Type.KeyPress = 6
+            if not hasattr(qtcore.QEvent.Type, "MouseButtonPress"):
+                qtcore.QEvent.Type.MouseButtonPress = 2
+            if not hasattr(qtcore.QEvent.Type, "ShortcutOverride"):
+                qtcore.QEvent.Type.ShortcutOverride = 51
+
+    if not hasattr(qtcore, "QObject"):
+        qtcore.QObject = type("QObject", (), {"__init__": lambda self, *a, **kw: None})
+
     # QtGui
     qtgui = sys.modules.get("PySide6.QtGui")
     if qtgui is None:
@@ -43,7 +71,7 @@ def _ensure_qt_stubs():
         sys.modules["PySide6.QtGui"] = qtgui
         sys.modules["PySide6"].QtGui = qtgui
 
-    for name in ("QFont", "QColor", "QPainter", "QPainterPath", "QKeyEvent"):
+    for name in ("QFont", "QColor", "QPainter", "QPainterPath", "QKeyEvent", "QMouseEvent"):
         if not hasattr(qtgui, name):
             setattr(qtgui, name, type(name, (), {"__init__": lambda self, *a, **kw: None}))
 
@@ -74,6 +102,20 @@ def _ensure_qt_stubs():
             def mapToGlobal(self, p): return MagicMock(x=lambda: 0, y=lambda: 0)
         qtwidgets.QWidget = _QWidget
 
+    # why: other test files may create a generic QApplication stub without
+    # instance()/installEventFilter; patch in the methods modal_menu needs
+    if not hasattr(qtwidgets, "QApplication"):
+        qtwidgets.QApplication = type("QApplication", (), {
+            "__init__": lambda self, *a, **kw: None,
+        })
+    qapp = qtwidgets.QApplication
+    if not hasattr(qapp, "instance"):
+        qapp.instance = staticmethod(lambda: None)
+    if not hasattr(qapp, "installEventFilter"):
+        qapp.installEventFilter = lambda self, f: None
+    if not hasattr(qapp, "removeEventFilter"):
+        qapp.removeEventFilter = lambda self, f: None
+
     if not hasattr(qtwidgets, "QGraphicsDropShadowEffect"):
         class _QGraphicsDropShadowEffect:
             def __init__(self, *a): pass
@@ -85,6 +127,7 @@ def _ensure_qt_stubs():
 
 _ensure_qt_stubs()
 
+from PySide6.QtCore import QEvent
 from gui.modal_menu import MenuNode, MenuContext, ModalMenu
 from gui.menu_registry import build_menus
 
@@ -143,6 +186,7 @@ def _make_menu(parent=None, menus=None):
     menu._menus = menus
     menu._script_manager = script_mgr
     menu._hotkey_manager = hotkey_mgr
+    menu._is_open = False
     menu._breadcrumb = []
     menu._current_node = None
     menu._visible_items = []
@@ -157,7 +201,7 @@ def _make_menu(parent=None, menus=None):
     menu.setFixedSize = MagicMock()
     menu.show = MagicMock()
     menu.hide = MagicMock()
-    menu.setFocus = MagicMock()
+    menu.raise_ = MagicMock()
     menu.update = MagicMock()
     menu.move = MagicMock()
     menu.width = MagicMock(return_value=200)
@@ -229,7 +273,7 @@ class TestModalMenuOpen:
     def test_open_unknown_menu_does_nothing(self):
         menu, script_mgr, hotkey_mgr = _make_menu()
         menu.open("nonexistent")
-        hotkey_mgr.disable_shortcuts.assert_not_called()
+        assert menu._is_open is False
         menu.show.assert_not_called()
 
     def test_open_populates_visible_items(self):
@@ -251,10 +295,10 @@ class TestModalMenuOpen:
         menu.open("test")
         assert menu._breadcrumb == ["Test Menu"]
 
-    def test_open_disables_shortcuts(self):
-        menu, _, hotkey_mgr = _make_menu()
+    def test_open_sets_is_open(self):
+        menu, _, _ = _make_menu()
         menu.open("test")
-        hotkey_mgr.disable_shortcuts.assert_called_once()
+        assert menu._is_open is True
 
     def test_open_shows_widget(self):
         menu, _, _ = _make_menu()
@@ -267,36 +311,33 @@ class TestModalMenuKeyPress:
         menu, script_mgr, hotkey_mgr = _make_menu()
         menu.open("test")
         event = _make_key_event("a")
-        ModalMenu.keyPressEvent(menu, event)
+        ModalMenu._handle_key(menu, event)
         script_mgr.run_script.assert_called_once_with("do_alpha")
 
     def test_mapped_key_closes_menu(self):
         menu, _, hotkey_mgr = _make_menu()
         menu.open("test")
-        hotkey_mgr.reset_mock()
         event = _make_key_event("b")
-        ModalMenu.keyPressEvent(menu, event)
+        ModalMenu._handle_key(menu, event)
+        assert menu._is_open is False
         menu.hide.assert_called()
-        hotkey_mgr.enable_shortcuts.assert_called()
 
     def test_escape_closes_menu(self):
         from PySide6.QtCore import Qt
         menu, _, hotkey_mgr = _make_menu()
         menu.open("test")
-        hotkey_mgr.reset_mock()
         event = _make_key_event(qt_key=Qt.Key_Escape)
         event.text.return_value = ""
-        ModalMenu.keyPressEvent(menu, event)
+        ModalMenu._handle_key(menu, event)
+        assert menu._is_open is False
         menu.hide.assert_called()
-        hotkey_mgr.enable_shortcuts.assert_called()
 
     def test_unmapped_key_closes_menu(self):
         menu, script_mgr, hotkey_mgr = _make_menu()
         menu.open("test")
-        hotkey_mgr.reset_mock()
         event = _make_key_event("z")
-        ModalMenu.keyPressEvent(menu, event)
-        menu.hide.assert_called()
+        ModalMenu._handle_key(menu, event)
+        assert menu._is_open is False
         script_mgr.run_script.assert_not_called()
 
     def test_case_insensitive_keys(self):
@@ -304,10 +345,7 @@ class TestModalMenuKeyPress:
         menu.open("test")
         event = _make_key_event("A")
         event.text.return_value = "A"
-        ModalMenu.keyPressEvent(menu, event)
-        # .lower() in keyPressEvent should still not match — text is "A", .lower() = "a"
-        # But _key_map stores lowercase keys, so "a" should match
-        # event.text().lower() = "a", which is in _key_map
+        ModalMenu._handle_key(menu, event)
         script_mgr.run_script.assert_called_once_with("do_alpha")
 
 
@@ -327,10 +365,8 @@ class TestModalMenuSubMenus:
         assert menu._key_map["s"].children == [sub]
 
         event = _make_key_event("s")
-        ModalMenu.keyPressEvent(menu, event)
-        # Should NOT run a script
+        ModalMenu._handle_key(menu, event)
         script_mgr.run_script.assert_not_called()
-        # Should have descended — breadcrumb grows
         assert len(menu._breadcrumb) == 2
         assert menu._breadcrumb[1] == "Go Sub"
 
@@ -344,8 +380,73 @@ class TestModalMenuSubMenus:
         menu.open("deep")
         assert menu._breadcrumb == ["Top"]
 
-        ModalMenu.keyPressEvent(menu, _make_key_event("e"))
+        ModalMenu._handle_key(menu, _make_key_event("e"))
         assert menu._breadcrumb == ["Top", "Enter"]
+
+
+class TestModalMenuEventFilter:
+    def test_eventfilter_consumes_keypress_when_open(self):
+        menu, script_mgr, _ = _make_menu()
+        menu.open("test")
+        event = MagicMock()
+        event.type.return_value = QEvent.Type.KeyPress
+        event.key.return_value = ord("A")
+        event.text.return_value = "a"
+        consumed = ModalMenu.eventFilter(menu, MagicMock(), event)
+        assert consumed is True
+        script_mgr.run_script.assert_called_once_with("do_alpha")
+
+    def test_eventfilter_passes_through_when_closed(self):
+        menu, _, _ = _make_menu()
+        assert menu._is_open is False
+        event = MagicMock()
+        event.type.return_value = QEvent.Type.KeyPress
+        consumed = ModalMenu.eventFilter(menu, MagicMock(), event)
+        assert consumed is False
+
+    def test_eventfilter_consumes_unmapped_key(self):
+        menu, script_mgr, _ = _make_menu()
+        menu.open("test")
+        event = MagicMock()
+        event.type.return_value = QEvent.Type.KeyPress
+        event.key.return_value = ord("Z")
+        event.text.return_value = "z"
+        consumed = ModalMenu.eventFilter(menu, MagicMock(), event)
+        assert consumed is True
+        assert menu._is_open is False
+        script_mgr.run_script.assert_not_called()
+
+    def test_eventfilter_consumes_shortcut_override_when_open(self):
+        """ShortcutOverride must be consumed to prevent QShortcut from firing."""
+        menu, _, _ = _make_menu()
+        menu.open("test")
+        event = MagicMock()
+        event.type.return_value = QEvent.Type.ShortcutOverride
+        consumed = ModalMenu.eventFilter(menu, MagicMock(), event)
+        assert consumed is True
+        event.accept.assert_called_once()
+
+    def test_eventfilter_ignores_shortcut_override_when_closed(self):
+        menu, _, _ = _make_menu()
+        assert menu._is_open is False
+        event = MagicMock()
+        event.type.return_value = QEvent.Type.ShortcutOverride
+        consumed = ModalMenu.eventFilter(menu, MagicMock(), event)
+        assert consumed is False
+
+    def test_close_clears_is_open(self):
+        menu, _, _ = _make_menu()
+        menu.open("test")
+        assert menu._is_open is True
+        ModalMenu._close(menu)
+        assert menu._is_open is False
+
+    def test_double_close_is_safe(self):
+        menu, _, _ = _make_menu()
+        menu.open("test")
+        ModalMenu._close(menu)
+        ModalMenu._close(menu)
+        assert menu._is_open is False
 
 
 class TestModalMenuContextFiltering:
