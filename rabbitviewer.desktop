@@ -2,7 +2,7 @@
 Type=Application
 Name=RabbitViewer
 Comment=Daemon-powered image viewer
-Exec=rabbitviewer %F
+Exec=rabbit viewer %F
 Icon=rabbitviewer
 Terminal=false
 Categories=Graphics;Viewer;Photography;
