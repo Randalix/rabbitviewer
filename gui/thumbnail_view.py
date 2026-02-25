@@ -805,11 +805,13 @@ class ThumbnailViewWidget(QFrame):
             "[virtual] _add_image_batch: +%d new files (all_files=%d)",
             len(new_files), len(self.all_files),
         )
-        if self._is_loading and not self._hidden_indices:
+        if not self._hidden_indices:
             # Append-only fast path: no filter active, just extend the
             # mappings and sync the viewport.  Avoids a full clear+rebuild
             # which would destroy the label under the cursor and lose the
             # CSS :hover state (causing the hover indicator to jump).
+            # Works for both cached folders (is_loading=False) and uncached
+            # folders (is_loading=True) — scan_progress always appends.
             for f in new_files:
                 vis_idx = len(self.current_files)
                 orig_idx = self._path_to_idx[f]
@@ -822,11 +824,13 @@ class ThumbnailViewWidget(QFrame):
                 self._virtual_grid.update_layout()
                 self._sync_virtual_viewport()
             self._last_layout_file_count = len(self.all_files)
-        elif self._is_loading:
-            # Filter is active during scan — full rebuild needed.
-            self._apply_filter_results(set(self.all_files))
         else:
-            self._filter_update_timer.start()
+            # Filter is active — full rebuild needed to check which new
+            # files pass the filter.
+            if self._is_loading:
+                self._apply_filter_results(set(self.all_files))
+            else:
+                self._filter_update_timer.start()
 
     def add_images(self, image_paths: List[str]) -> None:
         normalized = [os.path.abspath(p) for p in image_paths]
