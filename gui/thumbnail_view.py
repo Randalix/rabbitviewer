@@ -6,21 +6,21 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, List, Set
 from PySide6.QtCore import (
-    Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QRectF, QSizeF, QEvent, QRect, QSize, Slot
+    Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QEvent, Slot
 )
-from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QKeyEvent, QCursor, QPainter
+from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QCursor, QPainter
 from PySide6.QtWidgets import (
-    QLabel, QVBoxLayout, QScrollArea, QWidget, QFrame, QMainWindow, QApplication, QHBoxLayout
+    QLabel, QVBoxLayout, QScrollArea, QWidget, QFrame
 )
 
 from network.socket_client import ThumbnailSocketClient
 from network import protocol
 _ValidationErrors = (ValueError, TypeError, KeyError)
 from gui.components.virtual_grid_manager import VirtualGridManager
-from utils.thumbnail_filters import matches_filter
-from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, ToggleSelectionCommand, RemoveFromSelectionCommand
-from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, DaemonNotificationEventData, StatusMessageEventData, EventData
+from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, RemoveFromSelectionCommand
+from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, DaemonNotificationEventData, StatusMessageEventData
 from core.heatmap import compute_heatmap, THUMB_RING_COUNT
+from core.priority import Priority
 from core.event_system import ThumbnailOverlayEventData
 from gui.overlay_manager import OverlayManager, OverlayDescriptor, BULK_THRESHOLD
 from gui.overlay_renderers import render_stars, render_badge
@@ -31,7 +31,6 @@ from dataclasses import dataclass
 class ImageState:
     loaded: bool = False
     prioritized: bool = False
-    matches_filter: bool = True # Does it match the current filter criteria?
 
 class ThumbnailLabel(QLabel):
 
@@ -90,7 +89,6 @@ class ThumbnailLabel(QLabel):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # Ignore the event so it propagates to the parent widget for handling.
             event.ignore()
         else:
             super().mousePressEvent(event)
@@ -239,7 +237,6 @@ class ThumbnailViewWidget(QFrame):
         self._startup_first_scan_progress: bool = False
         self._needs_heatmap_seed: bool = False
         self._startup_first_previews_ready: bool = False
-        self._startup_first_inline_thumb: bool = False
         self._startup_inline_thumb_count: int = 0
 
         self._filter_update_timer = QTimer(self)
@@ -270,9 +267,11 @@ class ThumbnailViewWidget(QFrame):
 
         self._viewport_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewport")
 
+        self._on_range_start = lambda _: self.start_range_selection()
+        self._on_range_end = lambda _: self.end_range_selection()
         event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
-        event_system.subscribe(EventType.RANGE_SELECTION_START, lambda _: self.start_range_selection())
-        event_system.subscribe(EventType.RANGE_SELECTION_END, lambda _: self.end_range_selection())
+        event_system.subscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
+        event_system.subscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
         event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._handle_daemon_notification_from_thread)
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
 
@@ -288,18 +287,18 @@ class ThumbnailViewWidget(QFrame):
         self._thumbnail_generated_signal.connect(self._on_thumbnail_ready, Qt.QueuedConnection)
 
         self._is_loading = False
+        # why: separate from _is_loading — cached folders clear _is_loading in
+        # _on_initial_files_received (immediate), uncached folders wait for scan_complete.
         self._folder_is_cached = False
         self._filter_in_flight = False
         self._filter_pending = False
 
 
     def _initializeLayout(self):
-        """Initialize layout calculations immediately after UI setup"""
         if self._virtual_grid:
             self._virtual_grid.update_layout()
 
     def set_socket_client(self, socket_client: ThumbnailSocketClient):
-        """Set the socket client for communication with the daemon."""
         self.socket_client = socket_client
 
     def _set_hovered_label(self, label: ThumbnailLabel):
@@ -315,15 +314,11 @@ class ThumbnailViewWidget(QFrame):
             self._priority_update_timer.start()
 
     def get_hovered_image_path(self) -> Optional[str]:
-        """
-        Returns the path of the currently hovered image.
-        """
         if self._hovered_label:
             return self._hovered_label.original_path
         return None
 
     def mouseMoveEvent(self, event):
-        """Handle mouse movement for selection and other features."""
         super().mouseMoveEvent(event)
 
         if self.middle_mouse_pressed:
@@ -458,7 +453,6 @@ class ThumbnailViewWidget(QFrame):
         super().mousePressEvent(event)
 
     def start_range_selection(self):
-        """Starts range selection mode, usually via a hotkey."""
         # This logic is now a toggle, which is more intuitive for a key press
         if not self.hotkey_range_selection_active:
             # Start selection from the currently hovered label, which is more reliable
@@ -482,7 +476,6 @@ class ThumbnailViewWidget(QFrame):
             self.end_range_selection()
 
     def end_range_selection(self):
-        """Ends the hotkey-driven range selection mode."""
         logging.debug("Ending range selection")
         if self.hotkey_range_selection_active:
             self.hotkey_range_selection_active = False
@@ -565,20 +558,17 @@ class ThumbnailViewWidget(QFrame):
         self._resize_timer.start()
 
     def _performDelayedLayoutUpdate(self):
-        """Perform layout update after resize timer expires"""
         if self._virtual_grid:
             self._virtual_grid.update_layout()
             self._sync_virtual_viewport()
         self._priority_update_timer.start()
 
     def load_directory(self, directory_path: str, recursive: bool = True):
-        """Clears the view and starts the asynchronous directory loading process."""
         self._startup_t0 = time.perf_counter()
         self._startup_first_scan_progress = False
         self._startup_first_previews_ready = False
-        self._startup_first_inline_thumb = False
         self._startup_inline_thumb_count = 0
-        logging.info(f"[startup] load_directory called for {directory_path}")
+        logging.info("[startup] load_directory called for %s", directory_path)
         self.clear_layout()
         event_system.publish(StatusMessageEventData(
             event_type=EventType.STATUS_MESSAGE,
@@ -593,19 +583,17 @@ class ThumbnailViewWidget(QFrame):
         self._load_directory_deferred(directory_path, recursive)
 
     def _load_directory_deferred(self, directory_path: str, recursive: bool = True):
-        """Starts a background thread to get files from the daemon without blocking the GUI."""
-        logging.info(f"Querying daemon for files in: {directory_path} (Recursive: {recursive})")
+        logging.info("Querying daemon for files in: %s (Recursive: %s)", directory_path, recursive)
         thread = threading.Thread(target=self._get_files_from_daemon, args=(directory_path, recursive), daemon=True)
         thread.start()
 
     def _get_files_from_daemon(self, directory_path: str, recursive: bool = True):
-        """Runs in a thread to fetch the file list from the daemon's database."""
         response = self.socket_client.get_directory_files(directory_path, recursive)
         if response and response.status == "success":
             thumb_count = len(response.thumbnail_paths) if hasattr(response, 'thumbnail_paths') and response.thumbnail_paths else 0
             logging.info(
-                f"[trace] daemon response: files={len(response.files)}, thumbs={thumb_count} "
-                f"for {directory_path}"
+                "[trace] daemon response: files=%d, thumbs=%d for %s",
+                len(response.files), thumb_count, directory_path,
             )
             # Emit via the dedicated signal so the DB-response batch always shows
             # placeholders immediately, even if fast-scan notifications arrived first
@@ -614,10 +602,10 @@ class ThumbnailViewWidget(QFrame):
             # Feed cached thumbnail paths directly into the preview pipeline
             # so the GUI loads QImages from local cache without a daemon round-trip.
             if hasattr(response, 'thumbnail_paths') and response.thumbnail_paths:
-                logging.info(f"[startup] {len(response.thumbnail_paths)} cached thumbnail paths from initial response")
+                logging.info("[startup] %d cached thumbnail paths from initial response", len(response.thumbnail_paths))
                 self._initial_thumbs_signal.emit(response.thumbnail_paths)
         else:
-            logging.error(f"Failed to request file list for {directory_path} from daemon. Response: {response}")
+            logging.error("Failed to request file list for %s from daemon. Response: %s", directory_path, response)
 
     @Slot(list)
     def _on_initial_files_received(self, files: list):
@@ -629,8 +617,8 @@ class ThumbnailViewWidget(QFrame):
         if self._folder_is_cached:
             self._is_loading = False
         logging.info(
-            f"[trace] _on_initial_files_received: {len(files)} files, "
-            f"cached={self._folder_is_cached}, is_loading={self._is_loading}"
+            "[trace] _on_initial_files_received: %d files, cached=%s, is_loading=%s",
+            len(files), self._folder_is_cached, self._is_loading,
         )
         if not files:
             return
@@ -640,7 +628,6 @@ class ThumbnailViewWidget(QFrame):
 
     @Slot(dict)
     def _on_initial_thumbs_received(self, thumb_map: dict):
-        """Store cached thumbnail paths for lazy loading on materialization."""
         for source_path, thumb_path in thumb_map.items():
             orig_idx = self._path_to_idx.get(source_path, -1)
             if orig_idx < 0:
@@ -702,19 +689,13 @@ class ThumbnailViewWidget(QFrame):
                         label.update()
 
     def _handle_daemon_notification_from_thread(self, event_data: DaemonNotificationEventData):
-        """
-        Thread-safe method to receive notifications. Emits a signal to process on the GUI thread.
-        """
         self._daemon_notification_received.emit(event_data)
 
     @Slot(object)
     def _process_daemon_notification(self, event_data: DaemonNotificationEventData):
-        """
-        Handles daemon notifications on the main GUI thread.
-        """
         logging.debug(
-            f"[trace] _process_daemon_notification: type={event_data.notification_type}, "
-            f"all_files={len(self.all_files)}, is_loading={self._is_loading}"
+            "[trace] _process_daemon_notification: type=%s, all_files=%d, is_loading=%s",
+            event_data.notification_type, len(self.all_files), self._is_loading,
         )
         if event_data.notification_type == "previews_ready":
             try:
@@ -723,8 +704,8 @@ class ThumbnailViewWidget(QFrame):
                 if not self._startup_first_previews_ready and self._startup_t0 is not None:
                     self._startup_first_previews_ready = True
                     elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                    logging.info(f"[startup] first previews_ready: {elapsed_ms:.0f} ms after load_directory")
-                logging.info(f"ThumbnailViewWidget received notification: Previews ready for {data.image_path}")
+                    logging.info("[startup] first previews_ready: %.0f ms after load_directory", elapsed_ms)
+                logging.info("ThumbnailViewWidget received notification: Previews ready for %s", data.image_path)
 
                 if data.thumbnail_path:
                     # Skip notifications for files not in the current directory.
@@ -740,9 +721,9 @@ class ThumbnailViewWidget(QFrame):
                     if not self._preview_tick_timer.isActive():
                         self._preview_tick_timer.start()
                 else:
-                    logging.debug(f"[thumb] previews_ready has no thumbnail_path for {os.path.basename(data.image_path)}")
+                    logging.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(data.image_path))
             except _ValidationErrors as e:
-                logging.error(f"Error processing 'previews_ready' notification: {e}", exc_info=True)
+                logging.error("Error processing 'previews_ready' notification: %s", e, exc_info=True)
         elif event_data.notification_type == "scan_progress":
             try:
                 # The GUI's only job is to add placeholders as they are discovered.
@@ -751,8 +732,8 @@ class ThumbnailViewWidget(QFrame):
                 if first_batch and self._startup_t0 is not None:
                     self._startup_first_scan_progress = True
                     elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                    logging.info(f"[startup] first scan_progress: {elapsed_ms:.0f} ms after load_directory ({len(data.files)} files in batch)")
-                logging.info(f"Received scan_progress batch for '{data.path}' with {len(data.files)} files.")
+                    logging.info("[startup] first scan_progress: %.0f ms after load_directory (%d files in batch)", elapsed_ms, len(data.files))
+                logging.info("Received scan_progress batch for '%s' with %d files.", data.path, len(data.files))
                 self._add_image_batch(sorted(data.files))
                 # Mark that the first layout after this batch should seed the
                 # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
@@ -761,27 +742,28 @@ class ThumbnailViewWidget(QFrame):
                 if first_batch:
                     self._needs_heatmap_seed = True
             except _ValidationErrors as e:
-                logging.error(f"Error processing 'scan_progress' notification: {e}", exc_info=True)
+                logging.error("Error processing 'scan_progress' notification: %s", e, exc_info=True)
             except Exception as e:
-                logging.error(f"[trace] UNEXPECTED exception in scan_progress handler: {e}", exc_info=True)
+                # why: protocol extensions in future daemon versions may produce
+                # unexpected field types; isolate to prevent notification loop crash.
+                logging.error("Unexpected exception in scan_progress handler: %s", e, exc_info=True)
 
         elif event_data.notification_type == "files_removed":
             try:
                 data = protocol.FilesRemovedData.model_validate(event_data.data)
                 if data.files:
-                    logging.info(f"Removing {len(data.files)} ghost files from view.")
+                    logging.info("Removing %d ghost files from view.", len(data.files))
                     self.remove_images(data.files)
             except _ValidationErrors as e:
-                logging.error(f"Error processing 'files_removed' notification: {e}", exc_info=True)
+                logging.error("Error processing 'files_removed' notification: %s", e, exc_info=True)
 
         elif event_data.notification_type == "scan_complete":
             if self._startup_t0 is not None:
                 elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                logging.info(f"[startup] scan_complete: {elapsed_ms:.0f} ms after load_directory")
+                logging.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
             logging.info(
-                f"[virtual] scan_complete: all_files={len(self.all_files)}, "
-                f"labels={len(self.labels)}, "
-                f"current_files(in layout)={len(self.current_files)}"
+                "[virtual] scan_complete: all_files=%d, labels=%d, current_files(in layout)=%d",
+                len(self.all_files), len(self.labels), len(self.current_files),
             )
             # Stop any pending batched update, as this is the final one.
             self._filter_update_timer.stop()
@@ -804,7 +786,7 @@ class ThumbnailViewWidget(QFrame):
 
         new_files = [f for f in files if f not in self._all_files_set]
         if not new_files:
-            logging.debug(f"[virtual] _add_image_batch: all {len(files)} files already known, skipping")
+            logging.debug("[virtual] _add_image_batch: all %d files already known, skipping", len(files))
             return
 
         start_idx = len(self.all_files)
@@ -821,27 +803,25 @@ class ThumbnailViewWidget(QFrame):
                 self._thumb_path_cache[orig_idx] = thumb_path
 
         logging.info(
-            f"[virtual] _add_image_batch: +{len(new_files)} new files "
-            f"(all_files={len(self.all_files)})"
+            "[virtual] _add_image_batch: +%d new files (all_files=%d)",
+            len(new_files), len(self.all_files),
         )
         if self._is_loading:
             # During scanning, layout updates are cheap (virtual scroll only
             # materializes ~50 labels), so apply immediately instead of
             # debouncing — otherwise the 200ms timer keeps getting reset by
             # each ~80ms scan batch and the view never updates mid-scan.
-            logging.debug(f"[trace] _add_image_batch: is_loading=True, applying filter immediately")
+            logging.debug("[trace] _add_image_batch: is_loading=True, applying filter immediately")
             self._apply_filter_results(set(self.all_files))
         else:
-            logging.debug(f"[trace] _add_image_batch: is_loading=False, starting debounce timer")
+            logging.debug("[trace] _add_image_batch: is_loading=False, starting debounce timer")
             self._filter_update_timer.start()
 
     def add_images(self, image_paths: List[str]) -> None:
-        """Add images to the view, deduplicating against the current file list."""
         normalized = [os.path.abspath(p) for p in image_paths]
         self._add_image_batch(normalized)
 
     def remove_images(self, paths: List[str]):
-        """Remove images with performance benchmarking"""
         if not paths:
             return
 
@@ -890,7 +870,7 @@ class ThumbnailViewWidget(QFrame):
         except (KeyError, IndexError) as e:
             # why: index/path maps can desync if a watchdog removal races with an
             # in-progress remove_images call on the same set of paths.
-            logging.error(f"Error removing images: {e}", exc_info=True)
+            logging.error("Error removing images: %s", e, exc_info=True)
 
     def reorder_files(self, ordered_paths: list):
         """Reorder all_files to match *ordered_paths* and refresh the layout.
@@ -935,7 +915,7 @@ class ThumbnailViewWidget(QFrame):
         """
         visible_idx = self._original_to_visible_mapping.get(original_idx)
         if visible_idx is None:
-            logging.debug(f"Original index {original_idx} not visible (filtered out)")
+            logging.debug("Original index %d not visible (filtered out)", original_idx)
             return
 
         if self._virtual_grid:
@@ -943,8 +923,13 @@ class ThumbnailViewWidget(QFrame):
             self._sync_virtual_viewport()
 
     def closeEvent(self, event):
-        """Clean up cache on close."""
-        # Stop timers first
+        event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
+        event_system.unsubscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
+        event_system.unsubscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
+        event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._handle_daemon_notification_from_thread)
+        event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
+
+        # Stop timers
         if hasattr(self, '_resize_timer'):
             self._resize_timer.stop()
         if hasattr(self, '_filter_update_timer'):
@@ -970,7 +955,6 @@ class ThumbnailViewWidget(QFrame):
         super().closeEvent(event)
 
     def clear_layout(self):
-        """Clear layout while maintaining cache."""
         # Stop timers and cleanup thread
         if hasattr(self, '_resize_timer'):
             self._resize_timer.stop()
@@ -1036,7 +1020,7 @@ class ThumbnailViewWidget(QFrame):
             pixmap = QPixmap.fromImage(image)
 
         if is_error:
-            logging.error(f"Thumbnail generation failed for {original_path}", exc_info=bool(error))
+            logging.error("Thumbnail generation failed for %s", original_path, exc_info=bool(error))
 
         original_idx = self._path_to_idx.get(original_path, -1)
         if original_idx >= 0:
@@ -1050,7 +1034,7 @@ class ThumbnailViewWidget(QFrame):
             label = self.labels.get(original_idx)
             if label:
                 label.updateThumbnail(pixmap)
-                logging.debug(f"[thumb] applied thumbnail for {os.path.basename(original_path)} (error={is_error})")
+                logging.debug("[thumb] applied thumbnail for %s (error=%s)", os.path.basename(original_path), is_error)
 
         if original_path in self.pending_thumbnails:
             self.pending_thumbnails.remove(original_path)
@@ -1087,13 +1071,12 @@ class ThumbnailViewWidget(QFrame):
             if not image.isNull():
                 self._thumbnail_generated_signal.emit(image_path, image, None)
             else:
-                logging.warning(f"Failed to load thumbnail: {thumbnail_path}")
+                logging.warning("Failed to load thumbnail: %s", thumbnail_path)
 
         if not self._pending_previews:
             self._preview_tick_timer.stop()
 
     def get_benchmark_results(self) -> dict:
-        """Return the latest benchmark results"""
         return {
             "Initial Load Time": self._last_load_time,
             "Redraw Time": self._last_redraw_time,
@@ -1103,7 +1086,6 @@ class ThumbnailViewWidget(QFrame):
         }
 
     def mouseReleaseEvent(self, event):
-        """Handle mouse release events."""
         if event.button() == Qt.LeftButton and self._drag_start_index != -1:
             self._commit_selection(self._drag_start_index, self._drag_last_index)
             self._drag_start_index = -1
@@ -1150,7 +1132,6 @@ class ThumbnailViewWidget(QFrame):
         self._last_preview_selected = desired
 
     def _commit_selection(self, start_idx: int, end_idx: int):
-        """Publish the appropriate command to finalize the selection."""
         paths_in_range = self._get_paths_in_range(start_idx, end_idx)
         command = None
 
@@ -1169,7 +1150,6 @@ class ThumbnailViewWidget(QFrame):
             self.selection_anchor_index = end_idx
 
     def _get_indices_in_range(self, start_idx: int, end_idx: int) -> Set[int]:
-        """Helper to get all original indices between a start and end index, respecting the visible order."""
         start_pos = self._original_to_visible_mapping.get(start_idx, -1)
         end_pos = self._original_to_visible_mapping.get(end_idx, -1)
         if start_pos == -1 or end_pos == -1:
@@ -1188,7 +1168,7 @@ class ThumbnailViewWidget(QFrame):
             hovered_path = self.get_hovered_image_path()
             if hovered_path:
                 self.doubleClicked.emit(hovered_path)
-                logging.debug(f"Double-clicked on thumbnail, emitting signal for path: {hovered_path}")
+                logging.debug("Double-clicked on thumbnail, emitting signal for path: %s", hovered_path)
             else:
                 logging.debug("Double-click, but no image path hovered.")
 
@@ -1197,7 +1177,7 @@ class ThumbnailViewWidget(QFrame):
         try:
             original_idx = self._path_to_idx.get(image_path, -1)
             if original_idx < 0:
-                logging.warning(f"Image {image_path} not found in all_files during highlight attempt.")
+                logging.warning("Image %s not found in all_files during highlight attempt.", image_path)
                 return
 
             if original_idx in self._original_to_visible_mapping:
@@ -1207,17 +1187,16 @@ class ThumbnailViewWidget(QFrame):
                     self.ensure_visible(original_idx, center=True)
                     QTimer.singleShot(1000, lambda: label_to_highlight.setSelected(False))
                 else:
-                    logging.debug(f"Label for original index {original_idx} not found.")
+                    logging.debug("Label for original index %d not found.", original_idx)
             else:
-                logging.debug(f"Image {image_path} (original index {original_idx}) not currently visible.")
+                logging.debug("Image %s (original index %d) not currently visible.", image_path, original_idx)
 
         except (AttributeError, RuntimeError) as e:
             # why: label or scroll bar can be partially torn down if a directory
             # reload races with the highlight timer firing.
-            logging.error(f"Error highlighting thumbnail: {e}", exc_info=True)
+            logging.error("Error highlighting thumbnail: %s", e, exc_info=True)
 
     def _get_thumbnail_at_pos(self, pos: QPoint) -> Optional[int]:
-        """Get the thumbnail index at the given position. Returns original_idx."""
         if not self._virtual_grid:
             return None
 
@@ -1238,24 +1217,18 @@ class ThumbnailViewWidget(QFrame):
         return None
 
     def apply_filter(self, filter_text: str):
-        """
-        Sets the text filter and applies all filters.
-        """
         self._current_filter = filter_text
         self._filter_update_timer.start()
 
     def apply_star_filter(self, star_states: list):
-        """Sets the star filter and applies all filters."""
         self._current_star_filter = star_states
         self._filter_update_timer.start()
 
     def apply_tag_filter(self, tag_names: list):
-        """Sets the tag filter and applies all filters."""
         self._current_tag_filter = list(tag_names)
         self._filter_update_timer.start()
 
     def clear_filter(self):
-        """Reset all filters to defaults."""
         self._current_filter = ""
         self._current_star_filter = [True, True, True, True, True, True]
         self._current_tag_filter = []
@@ -1269,8 +1242,8 @@ class ThumbnailViewWidget(QFrame):
         queried on a background thread so the GUI never blocks on I/O.
         """
         logging.info(
-            f"[virtual] reapply_filters: is_loading={self._is_loading}, "
-            f"all_files={len(self.all_files)}, labels={len(self.labels)}"
+            "[virtual] reapply_filters: is_loading=%s, all_files=%d, labels=%d",
+            self._is_loading, len(self.all_files), len(self.labels),
         )
 
         if not self.all_files or not self.socket_client:
@@ -1305,15 +1278,16 @@ class ThumbnailViewWidget(QFrame):
             if response and response.status == "success":
                 self._filtered_paths_ready.emit(set(response.paths))
             else:
-                logging.error(f"Failed to get filtered paths from daemon. Response: {response}")
+                logging.error("Failed to get filtered paths from daemon. Response: %s", response)
                 self._filtered_paths_ready.emit(None)
         except Exception as e:
-            logging.error(f"Error fetching filtered paths: {e}", exc_info=True)
+            # why: socket_client can raise ConnectionError/OSError/ValidationError;
+            # broad guard ensures _filtered_paths_ready always fires to unlock _filter_in_flight.
+            logging.error("Error fetching filtered paths: %s", e, exc_info=True)
             self._filtered_paths_ready.emit(None)
 
     @Slot(object)
     def _on_filtered_paths_ready(self, visible_paths):
-        """Receives the daemon's filter response on the GUI thread."""
         self._filter_in_flight = False
 
         if visible_paths is None:
@@ -1328,7 +1302,6 @@ class ThumbnailViewWidget(QFrame):
             self.reapply_filters()
 
     def _apply_filter_results(self, visible_paths: set):
-        """Common path for both sync (loading) and async (daemon) filter results."""
         new_hidden_indices = set()
         for i, file_path in enumerate(self.all_files):
             if file_path not in visible_paths:
@@ -1339,11 +1312,10 @@ class ThumbnailViewWidget(QFrame):
         will_update = hidden_changed or count_changed
 
         logging.info(
-            f"[virtual] _apply_filter_results: all_files={len(self.all_files)}, "
-            f"visible_paths={len(visible_paths)}, "
-            f"hidden={len(new_hidden_indices)}, "
-            f"hidden_changed={hidden_changed}, count_changed={count_changed}, "
-            f"will_update={will_update}"
+            "[virtual] _apply_filter_results: all_files=%d, visible_paths=%d, "
+            "hidden=%d, hidden_changed=%s, count_changed=%s, will_update=%s",
+            len(self.all_files), len(visible_paths), len(new_hidden_indices),
+            hidden_changed, count_changed, will_update,
         )
 
         if will_update:
@@ -1351,9 +1323,8 @@ class ThumbnailViewWidget(QFrame):
             self._update_filtered_layout()
             self._last_layout_file_count = len(self.all_files)
             logging.info(
-                f"[virtual] _update_filtered_layout done: "
-                f"current_files={len(self.current_files)}, "
-                f"materialized_labels={len(self.labels)}"
+                "[virtual] _update_filtered_layout done: current_files=%d, materialized_labels=%d",
+                len(self.current_files), len(self.labels),
             )
         else:
             total_count = len(self.all_files)
@@ -1412,7 +1383,6 @@ class ThumbnailViewWidget(QFrame):
             QTimer.singleShot(100, self._prioritize_visible_thumbnails)
 
     def _sync_virtual_viewport(self):
-        """Materialize/recycle labels so the visible viewport has widgets."""
         if self._virtual_grid and self.current_files:
             self._virtual_grid.sync_viewport(
                 self._materialize_label,
@@ -1420,7 +1390,6 @@ class ThumbnailViewWidget(QFrame):
             )
 
     def _materialize_label(self, visible_idx: int) -> ThumbnailLabel:
-        """Create or recycle a label for *visible_idx*."""
         original_idx = self._visible_to_original_mapping[visible_idx]
         file_path = self.all_files[original_idx]
 
@@ -1455,7 +1424,6 @@ class ThumbnailViewWidget(QFrame):
         return label
 
     def _recycle_virtual_label(self, label: ThumbnailLabel):
-        """Return a label to the pool when it scrolls out of view."""
         orig_idx = label._original_idx
         self.labels.pop(orig_idx, None)
         self._recycle_label(label)
@@ -1569,7 +1537,7 @@ class ThumbnailViewWidget(QFrame):
                     continue
                 path = all_files[orig_idx]
                 if path not in current_thumb:
-                    current_thumb[path] = 40  # GUI_REQUEST_LOW
+                    current_thumb[path] = int(Priority.GUI_REQUEST_LOW)
 
         current_fullres: dict[str, int] = {}
         for vis_idx, priority in fullres_pairs:
@@ -1604,9 +1572,10 @@ class ThumbnailViewWidget(QFrame):
         # --- Send to daemon (with stale-request protection) ---
         if delta_upgrade or paths_to_downgrade or delta_fullres or fullres_to_cancel:
             logging.debug(
-                f"[trace] heatmap IPC: upgrades={len(delta_upgrade)}, "
-                f"downgrades={len(paths_to_downgrade)}, fullres={len(delta_fullres)}, "
-                f"fullres_cancel={len(fullres_to_cancel)}, is_loading={self._is_loading}"
+                "[trace] heatmap IPC: upgrades=%d, downgrades=%d, fullres=%d, "
+                "fullres_cancel=%d, is_loading=%s",
+                len(delta_upgrade), len(paths_to_downgrade), len(delta_fullres),
+                len(fullres_to_cancel), self._is_loading,
             )
             self._viewport_generation += 1
             gen = self._viewport_generation
@@ -1625,14 +1594,11 @@ class ThumbnailViewWidget(QFrame):
         self._last_fullres_pairs = current_fullres
 
     def get_visible_count(self) -> int:
-        """Returns the number of currently visible thumbnails."""
         return len(self.current_files)
 
     def filter_affects_rating(self) -> bool:
-        """Return True if the active filter could change visibility based on image rating."""
         return not all(self._current_star_filter)
 
     def has_active_tag_filter(self) -> bool:
-        """Return True if a tag filter is active."""
         return bool(self._current_tag_filter)
 
