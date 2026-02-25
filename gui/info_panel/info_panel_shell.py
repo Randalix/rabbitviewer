@@ -2,10 +2,23 @@ from typing import Optional
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QPushButton, QHBoxLayout, QLabel
 from PySide6.QtCore import Qt, Signal, QSettings
+from PySide6.QtGui import QFont
 
 from core.event_system import event_system, EventType
 from .content_provider import ContentProvider
 from ..components.collapsible_section import CollapsibleSection
+
+# Palette — mirrors HotkeyHelpOverlay
+_BG = "#1e1e1e"
+_BG_TOOLBAR = "#181818"
+_TEXT = "#dcdcdc"
+_PIN_BG = "#464646"
+_PIN_BG_ACTIVE = "#8cb4ff"
+_PIN_FG = "#dcdcdc"
+_PIN_FG_ACTIVE = "#1e1e1e"
+_BORDER = "#2a2a2a"
+_FONT = "monospace"
+_FONT_SIZE = 12
 
 
 class InfoPanelShell(QWidget):
@@ -43,25 +56,66 @@ class InfoPanelShell(QWidget):
         event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._on_daemon_notification)
 
     def _build_ui(self):
+        self.setStyleSheet(f"""
+            InfoPanelShell {{
+                background: {_BG};
+                border: 1px solid {_BORDER};
+            }}
+        """)
+
+        font = QFont(_FONT, _FONT_SIZE)
+        font.setStyleHint(QFont.Monospace)
+        self.setFont(font)
+
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
         # Toolbar
         toolbar = QWidget()
-        toolbar.setStyleSheet("background: #1e1e1e;")
+        toolbar.setStyleSheet(f"""
+            background: {_BG_TOOLBAR};
+            border-bottom: 1px solid {_BORDER};
+        """)
         toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(6, 4, 6, 4)
+        toolbar_layout.setContentsMargins(10, 6, 10, 6)
 
         self._path_label = QLabel("")
-        self._path_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self._path_label.setStyleSheet(f"""
+            color: {_TEXT};
+            font-family: {_FONT};
+            font-size: {_FONT_SIZE}px;
+            font-weight: bold;
+        """)
         self._path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         toolbar_layout.addWidget(self._path_label, 1)
 
         self._pin_button = QPushButton("Pin")
         self._pin_button.setCheckable(True)
-        self._pin_button.setFixedHeight(24)
+        self._pin_button.setFixedHeight(22)
         self._pin_button.setToolTip("Pin to current image")
+        self._pin_button.setStyleSheet(f"""
+            QPushButton {{
+                background: {_PIN_BG};
+                color: {_PIN_FG};
+                border: none;
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-family: {_FONT};
+                font-size: {_FONT_SIZE - 1}px;
+            }}
+            QPushButton:checked {{
+                background: {_PIN_BG_ACTIVE};
+                color: {_PIN_FG_ACTIVE};
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: #555;
+            }}
+            QPushButton:checked:hover {{
+                background: #7da4e8;
+            }}
+        """)
         self._pin_button.toggled.connect(self._on_pin_toggled)
         toolbar_layout.addWidget(self._pin_button)
 
@@ -71,9 +125,28 @@ class InfoPanelShell(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: {_BG};
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background: {_BG};
+                width: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {_PIN_BG};
+                border-radius: 3px;
+                min-height: 20px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+        """)
         self._scroll_content = QWidget()
+        self._scroll_content.setStyleSheet(f"background: {_BG};")
         self._scroll_layout = QVBoxLayout(self._scroll_content)
-        self._scroll_layout.setContentsMargins(0, 0, 0, 0)
+        self._scroll_layout.setContentsMargins(0, 4, 0, 0)
         self._scroll_layout.setSpacing(1)
         self._scroll_layout.addStretch()
         self._scroll.setWidget(self._scroll_content)
