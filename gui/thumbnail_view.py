@@ -229,6 +229,7 @@ class ThumbnailViewWidget(QFrame):
         self._original_to_visible_mapping = {}
         self._visible_original_indices: List[int] = []
         self._last_layout_file_count = 0
+        self._last_layout_label_count = 0
         self._last_thumb_pairs: dict[str, int] = {}   # path → priority from last heatmap
         self._last_fullres_pairs: dict[str, int] = {}  # path → priority from last heatmap
         self._viewport_generation: int = 0  # monotonic counter; stale IPC calls check this
@@ -1097,6 +1098,7 @@ class ThumbnailViewWidget(QFrame):
         self.current_directory_path = None
         self.image_states.clear()
         self._last_layout_file_count = 0
+        self._last_layout_label_count = 0
         # Cancel any in-flight speculative fullres tasks from the old directory
         # so workers don't waste time on files no longer visible.
         if self._last_fullres_pairs and self.socket_client:
@@ -1486,7 +1488,12 @@ class ThumbnailViewWidget(QFrame):
 
         hidden_changed = self._hidden_indices != new_hidden_indices
         count_changed = len(self.all_files) != self._last_layout_file_count
-        will_update = hidden_changed or count_changed
+        # Re-layout when new labels have been created since the last update.
+        # Labels are created incrementally by _tick_label_creation; without this
+        # check the layout freezes at whatever label count existed during the
+        # first _update_filtered_layout call.
+        labels_changed = len(self.labels) != self._last_layout_label_count
+        will_update = hidden_changed or count_changed or labels_changed
 
         logging.info(
             f"[chunking] _apply_filter_results: all_files={len(self.all_files)}, "
@@ -1502,6 +1509,7 @@ class ThumbnailViewWidget(QFrame):
             self._hidden_indices = new_hidden_indices
             self._update_filtered_layout()
             self._last_layout_file_count = len(self.all_files)
+            self._last_layout_label_count = len(self.labels)
             logging.info(
                 f"[chunking] _update_filtered_layout done: "
                 f"current_files={len(self.current_files)}, "

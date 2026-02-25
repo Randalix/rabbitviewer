@@ -49,8 +49,16 @@ class DirectoryScanner:
         if ext.lower() not in self._supported_extensions:
             return False
 
-        # The slow os.path.getsize() check has been removed. It is now handled
-        # by the asynchronous ThumbnailManager worker for each individual thumbnail task.
+        # Check minimum file size — reject tiny files (web icons, favicons, etc.)
+        # so they never enter the GUI model.  Without this check the scanner
+        # discovers them and sends scan_progress to the GUI, but _passes_pre_checks
+        # later rejects them, leaving ghost placeholders with no DB record.
+        try:
+            if os.path.getsize(file_path) < self.min_file_size:
+                logging.debug(f"File too small, skipping: {file_path}")
+                return False
+        except OSError:
+            return False
 
         return True
 
