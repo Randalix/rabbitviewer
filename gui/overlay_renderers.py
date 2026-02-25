@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QRect, QRectF, Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 
@@ -29,6 +29,23 @@ def _star_path(cx: float, cy: float, outer_r: float) -> QPainterPath:
     return path
 
 
+def _dice_positions(count: int) -> list[tuple[float, float]]:
+    """Return normalised (x, y) positions in [-1, 1] using dice-face layouts."""
+    d = 0.55  # distance from centre to corner dots
+    if count == 0:
+        return []
+    if count == 1:
+        return [(0, 0)]
+    if count == 2:
+        return [(-d, -d), (d, d)]
+    if count == 3:
+        return [(-d, -d), (0, 0), (d, d)]
+    if count == 4:
+        return [(-d, -d), (d, -d), (-d, d), (d, d)]
+    # 5
+    return [(-d, -d), (d, -d), (0, 0), (-d, d), (d, d)]
+
+
 def render_stars(painter: QPainter, rect: QRect, params: dict) -> None:
     count = params.get("count", 0)
 
@@ -36,22 +53,11 @@ def render_stars(painter: QPainter, rect: QRect, params: dict) -> None:
     painter.setRenderHint(QPainter.Antialiasing)
 
     rect_w, rect_h = rect.width(), rect.height()
-    star_r = min(rect_w, rect_h) * 0.12
-    spacing = star_r * 0.4
-    total_stars = max(count, 1)
-    total_w = total_stars * star_r * 2 + (total_stars - 1) * spacing
-    pill_h = star_r * 2.8
-    pill_w = total_w + star_r * 1.6
-
     cx = rect.x() + rect_w / 2
     cy = rect.y() + rect_h / 2
 
-    pill_rect = QRectF(cx - pill_w / 2, cy - pill_h / 2, pill_w, pill_h)
-    painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor(0, 0, 0, 180))
-    painter.drawRoundedRect(pill_rect, pill_h / 2, pill_h / 2)
-
     if count == 0:
+        star_r = min(rect_w, rect_h) * 0.12
         painter.setPen(QPen(QColor(160, 160, 160), 2.0))
         dash_w = star_r * 1.6
         painter.drawLine(
@@ -59,13 +65,15 @@ def render_stars(painter: QPainter, rect: QRect, params: dict) -> None:
             int(cx + dash_w / 2), int(cy),
         )
     else:
-        start_x = cx - total_w / 2 + star_r
+        spread = min(rect_w, rect_h) * 0.28
+        star_r = min(rect_w, rect_h) * 0.10
         gold = QColor(255, 200, 50)
         painter.setPen(Qt.NoPen)
         painter.setBrush(gold)
-        for i in range(count):
-            sx = start_x + i * (star_r * 2 + spacing)
-            path = _star_path(sx, cy, star_r)
+        for dx, dy in _dice_positions(count):
+            sx = cx + dx * spread
+            sy = cy + dy * spread
+            path = _star_path(sx, sy, star_r)
             painter.drawPath(path)
 
     painter.restore()
