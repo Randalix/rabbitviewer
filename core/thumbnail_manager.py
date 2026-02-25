@@ -618,7 +618,9 @@ class ThumbnailManager:
         return view_image_path
 
     def _process_metadata_task(self, image_path: str):
-        logger.debug(f"Starting metadata extraction task for {image_path}")
+        """Fast metadata scan (orientation, rating, file_size).
+        Queues a deferred full exiftool extraction at BACKGROUND_SCAN."""
+        logger.debug(f"Starting fast metadata extraction for {image_path}")
         if not os.path.exists(image_path):
             logger.warning(f"File not found for metadata extraction: '{image_path}'. Queuing JIT database cleanup.")
             self.render_manager.submit_task(
@@ -633,10 +635,31 @@ class ThumbnailManager:
             return
 
         start_time = time.time()
-        self.metadata_db.extract_and_store_metadata(image_path)
+        self.metadata_db.extract_and_store_fast_metadata(image_path)
         duration = time.time() - start_time
-        logger.debug(f"metadata_db.extract_and_store_metadata for {os.path.basename(image_path)} took {duration:.4f} seconds.")
-        logger.debug(f"Metadata extraction finished for {image_path}")
+        logger.debug(f"Fast metadata for {os.path.basename(image_path)} took {duration:.4f}s")
+
+        if self.metadata_db.needs_full_metadata(image_path):
+            self.render_manager.submit_task(
+                f"meta_full::{image_path}",
+                Priority.BACKGROUND_SCAN,
+                self._process_full_metadata_task,
+                image_path,
+            )
+
+    def _process_full_metadata_task(self, image_path: str):
+        if not os.path.exists(image_path):
+            return
+        if not self._is_volume_accessible(image_path):
+            return
+        # Re-check: another worker may have completed this between scheduling and execution
+        if not self.metadata_db.needs_full_metadata(image_path):
+            return
+
+        start_time = time.time()
+        self.metadata_db.extract_and_store_full_metadata(image_path)
+        duration = time.time() - start_time
+        logger.debug(f"Full metadata for {os.path.basename(image_path)} took {duration:.4f}s")
 
     def _write_rating_to_file(self, file_path: str, rating: int):
         """

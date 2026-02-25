@@ -179,7 +179,98 @@ class MetadataDatabase:
         self._store_metadata(file_path, metadata, mtime)
         logging.debug(f"Metadata extracted and stored for: {file_path}")
 
-    def _extract_metadata_from_file(self, file_path: str) -> Dict[str, Any]:
+    def needs_full_metadata(self, file_path: str) -> bool:
+        """Returns True if the row is missing rich EXIF fields (camera, dimensions, etc.)."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    'SELECT camera_make, width FROM image_metadata WHERE file_path = ?',
+                    (file_path,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return True
+                return row[0] is None and (row[1] is None or row[1] == 0)
+        except sqlite3.Error:
+            return True
+
+    def extract_and_store_fast_metadata(self, file_path: str):
+        """Plugin binary scan for orientation/rating/file_size only.
+        UPDATE is scoped to fast fields; rich EXIF columns are untouched."""
+        if not os.path.exists(file_path):
+            logging.warning(f"File not found for fast metadata extraction: {file_path}")
+            return
+        _, ext = os.path.splitext(file_path)
+        plugin = plugin_registry.get_plugin_for_format(ext)
+        if not plugin or not hasattr(plugin, 'extract_metadata'):
+            return
+        try:
+            # why: plugins are user-supplied; any exception must not abort the metadata pipeline
+            plugin_meta = plugin.extract_metadata(file_path)
+        except Exception as e:
+            logging.debug(f"Fast metadata extraction failed for {file_path}: {e}")
+            return
+        if plugin_meta is None:
+            return
+
+        try:
+            mtime = os.path.getmtime(file_path)
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            return
+
+        orientation = plugin_meta.get('orientation', 1)
+        rating = plugin_meta.get('rating', 0)
+        path_hash = self._get_metadata_hash(file_path)
+        current_time = time.time()
+
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    'SELECT id, rating, updated_at FROM image_metadata WHERE file_path = ?',
+                    (file_path,),
+                )
+                existing = cursor.fetchone()
+
+                if existing:
+                    if existing[2] and existing[2] > mtime:
+                        rating = existing[1]
+                    cursor.execute('''
+                        UPDATE image_metadata SET
+                            path_hash = ?, file_size = ?, orientation = ?,
+                            rating = ?, mtime = ?, updated_at = ?
+                        WHERE id = ?
+                    ''', (path_hash, file_size, orientation, rating, mtime,
+                          current_time, existing[0]))
+                else:
+                    cursor.execute('''
+                        INSERT INTO image_metadata
+                        (file_path, path_hash, file_size, orientation, rating,
+                         mtime, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (file_path, path_hash, file_size, orientation, rating,
+                          mtime, current_time, current_time))
+                self.conn.commit()
+        except sqlite3.Error as e:
+            self.conn.rollback()
+            logging.error(f"Error storing fast metadata for {file_path}: {e}")
+
+    def extract_and_store_full_metadata(self, file_path: str):
+        """Runs the exiftool path (skipping the plugin fast path) and stores all fields."""
+        if not os.path.exists(file_path):
+            logging.warning(f"File not found for full metadata extraction: {file_path}")
+            return
+        try:
+            mtime = os.path.getmtime(file_path)
+        except OSError:
+            return
+        metadata = self._extract_metadata_from_file(file_path, _use_plugin=False)
+        self._store_metadata(file_path, metadata, mtime)
+        logging.debug(f"Full metadata extracted and stored for: {file_path}")
+
+    def _extract_metadata_from_file(self, file_path: str, _use_plugin: bool = True) -> Dict[str, Any]:
         """
         Extracts all metadata from a file using exiftool.
         It uses a plugin-specific override if available for performance.
@@ -187,7 +278,7 @@ class MetadataDatabase:
         # --- Plugin Override ---
         _, ext = os.path.splitext(file_path)
         plugin = plugin_registry.get_plugin_for_format(ext)
-        if plugin and hasattr(plugin, 'extract_metadata'):
+        if _use_plugin and plugin and hasattr(plugin, 'extract_metadata'):
             try:
                 plugin_meta = plugin.extract_metadata(file_path)
                 if plugin_meta is not None:
