@@ -35,6 +35,7 @@ class HotkeyManager(QObject):
 		self.add_action("toggle_inspector", lambda: event_system.publish(EventData(event_type=EventType.TOGGLE_INSPECTOR, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("open_filter", lambda: event_system.publish(EventData(event_type=EventType.OPEN_FILTER, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("start_range_selection", self.handle_range_selection_start)
+		self.add_action("show_hotkey_help", lambda: None)  # placeholder; main_window overrides
 
 	def _handle_zoom_in(self):
 		logging.debug("Zoom in triggered")

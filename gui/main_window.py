@@ -12,6 +12,7 @@ from .hotkey_manager import HotkeyManager
 from .inspector_view import InspectorView
 from .filter_dialog import FilterDialog
 from .modal_menu import ModalMenu
+from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
 from .status_bar import CustomStatusBar
 from scripts.script_manager import ScriptManager, ScriptAPI
@@ -89,6 +90,9 @@ class MainWindow(QMainWindow):
         self._setup_hotkeys()
         self.modal_menu = ModalMenu(self, build_menus(), self.script_manager)
         self._setup_event_subscriptions()
+
+        if show_at_startup():
+            QTimer.singleShot(0, self._toggle_hotkey_help)
 
     def _setup_thumbnail_view(self):
         self.thumbnail_view = ThumbnailViewWidget(self.config_manager)
@@ -388,7 +392,17 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("previous_image", lambda: self.navigate_to_image("previous"))
         self.hotkey_manager.add_action("undo_selection", self.selection_history.undo)
         self.hotkey_manager.add_action("redo_selection", self.selection_history.redo)
-        
+        self.hotkey_manager.add_action("show_hotkey_help", self._toggle_hotkey_help)
+
+    def _toggle_hotkey_help(self):
+        """Toggle the keyboard shortcuts overlay."""
+        if not hasattr(self, '_hotkey_help_overlay') or self._hotkey_help_overlay is None:
+            defn = self.hotkey_manager.definitions.get("show_hotkey_help")
+            trigger_key = defn.sequences[0] if defn and defn.sequences else "?"
+            self._hotkey_help_overlay = HotkeyHelpOverlay(
+                self, self.hotkey_manager.definitions, trigger_key)
+        self._hotkey_help_overlay.toggle()
+
     def load_directory(self, directory_path: str, recursive: bool = True):
         """Load a directory of images into the thumbnail view."""
         logging.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")

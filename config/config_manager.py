@@ -78,6 +78,10 @@ DEFAULT_CONFIG = {
         "menu:sort": {
             "sequence": "F",
             "description": "Open sort menu"
+        },
+        "show_hotkey_help": {
+            "sequence": "?",
+            "description": "Show keyboard shortcuts"
         }
     },
     "thumbnail_size": 128,
