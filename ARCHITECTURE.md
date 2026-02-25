@@ -121,8 +121,9 @@ get_directory_files (socket command)
   │     GUI receives thumbnail_paths in the initial response.
   │     _tick_label_creation loads QImages inline as labels are born —
   │     no daemon round-trip, no heatmap request, no notification needed.
-  │     Reconcile walk deferred 3s via threading.Timer at BACKGROUND_SCAN (10).
-  │     Uncached files still go through the normal heatmap → notification flow.
+  │     Reconcile walk submitted immediately at Priority(80) — same as
+  │     new folders — so partially cached folders discover missing files
+  │     without delay.  Uncached files go through heatmap → notification.
   │
   └── New folder (empty DB):
         Phase 1: reconcile_job (Priority(80), create_tasks=False)
@@ -142,7 +143,7 @@ get_directory_files (socket command)
 
 For new folders, Phase 1 runs at priority 80 (above `HIGH`) so directory discovery is never blocked. Phase 2 tasks start at `LOW` (30), well below any heatmap ring minimum (60). The heatmap is the only mechanism that promotes tasks into the visible priority range.
 
-For cached folders, the deferred reconcile walk detects new/deleted files after 3 seconds at `BACKGROUND_SCAN` priority. Stale thumbnails display briefly from cache until the walk re-validates and triggers regeneration. The GUI requests the full visible viewport at `GUI_REQUEST_LOW` (40) for immediate display.
+For both cached and new folders, Phase 1 runs at Priority(80) so directory discovery is never blocked. Cached folders still return DB files instantly in the response, so the GUI displays them while the reconcile scan discovers any new or deleted files in parallel.
 
 **Heatmap priority flow** (viewport scroll / hover → graduated priorities):
 

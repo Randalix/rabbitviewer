@@ -470,11 +470,9 @@ class ThumbnailSocketServer:
                 )
                 rm.submit_source_job(task_job)
 
-        is_cached = len(db_files) > 0
-        reconcile_priority = Priority.BACKGROUND_SCAN if is_cached else Priority(80)
         reconcile_job = SourceJob(
             job_id=f"gui_scan::{req.session_id}::{req.path}",
-            priority=reconcile_priority,
+            priority=Priority(80),
             generator=self.directory_scanner.scan_incremental_reconcile(
                 req.path, req.recursive, reconcile_ctx
             ),
@@ -482,14 +480,7 @@ class ThumbnailSocketServer:
             create_tasks=False,
             on_complete=_on_reconcile_complete,
         )
-        if is_cached:
-            # Cached folder: delay the reconcile walk so thumbnails display
-            # from local cache without any NAS filesystem access.
-            timer = threading.Timer(3.0, rm.submit_source_job, args=[reconcile_job])
-            timer.daemon = True
-            timer.start()
-        else:
-            rm.submit_source_job(reconcile_job)
+        rm.submit_source_job(reconcile_job)
 
         return protocol.GetDirectoryFilesResponse(
             files=sorted(db_files),

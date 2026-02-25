@@ -805,15 +805,27 @@ class ThumbnailViewWidget(QFrame):
             "[virtual] _add_image_batch: +%d new files (all_files=%d)",
             len(new_files), len(self.all_files),
         )
-        if self._is_loading:
-            # During scanning, layout updates are cheap (virtual scroll only
-            # materializes ~50 labels), so apply immediately instead of
-            # debouncing — otherwise the 200ms timer keeps getting reset by
-            # each ~80ms scan batch and the view never updates mid-scan.
-            logging.debug("[trace] _add_image_batch: is_loading=True, applying filter immediately")
+        if self._is_loading and not self._hidden_indices:
+            # Append-only fast path: no filter active, just extend the
+            # mappings and sync the viewport.  Avoids a full clear+rebuild
+            # which would destroy the label under the cursor and lose the
+            # CSS :hover state (causing the hover indicator to jump).
+            for f in new_files:
+                vis_idx = len(self.current_files)
+                orig_idx = self._path_to_idx[f]
+                self.current_files.append(f)
+                self._visible_to_original_mapping[vis_idx] = orig_idx
+                self._original_to_visible_mapping[orig_idx] = vis_idx
+                self._visible_original_indices.append(orig_idx)
+            if self._virtual_grid:
+                self._virtual_grid.set_total_items(len(self.current_files))
+                self._virtual_grid.update_layout()
+                self._sync_virtual_viewport()
+            self._last_layout_file_count = len(self.all_files)
+        elif self._is_loading:
+            # Filter is active during scan — full rebuild needed.
             self._apply_filter_results(set(self.all_files))
         else:
-            logging.debug("[trace] _add_image_batch: is_loading=False, starting debounce timer")
             self._filter_update_timer.start()
 
     def add_images(self, image_paths: List[str]) -> None:
