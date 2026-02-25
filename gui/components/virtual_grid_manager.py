@@ -3,7 +3,7 @@ from __future__ import annotations
 from math import floor
 from typing import Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QPoint, Signal
+from PySide6.QtCore import QObject, QPoint
 from PySide6.QtWidgets import QScrollArea, QWidget
 
 if TYPE_CHECKING:
@@ -17,8 +17,6 @@ class VirtualGridManager(QObject):
     absolutely via ``label.move(x, y)`` on a plain QWidget container whose
     fixed height drives the scroll range.
     """
-
-    layoutChanged = Signal()
 
     _BUFFER_ROWS = 3  # extra rows above/below the viewport
 
@@ -100,7 +98,6 @@ class VirtualGridManager(QObject):
             self._columns = new_columns
             self._update_container_height()
             self._reposition_materialized()
-            self.layoutChanged.emit()
         else:
             # Column count unchanged but viewport width may have shifted the
             # centering offset — reposition to keep the grid centered.
@@ -210,9 +207,6 @@ class VirtualGridManager(QObject):
         self._mat_labels.clear()
         self._mat_start = 0
         self._mat_end = 0
-
-    def get_position(self, visible_idx: int) -> Tuple[int, int]:
-        return divmod(visible_idx, self._columns)
 
     # ------------------------------------------------------------------
     # Internal helpers

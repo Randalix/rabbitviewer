@@ -602,7 +602,11 @@ class ThumbnailViewWidget(QFrame):
         """Runs in a thread to fetch the file list from the daemon's database."""
         response = self.socket_client.get_directory_files(directory_path, recursive)
         if response and response.status == "success":
-            logging.info(f"Daemon acknowledged scan request for {directory_path}. Waiting for progress notifications.")
+            thumb_count = len(response.thumbnail_paths) if hasattr(response, 'thumbnail_paths') and response.thumbnail_paths else 0
+            logging.info(
+                f"[trace] daemon response: files={len(response.files)}, thumbs={thumb_count} "
+                f"for {directory_path}"
+            )
             # Emit via the dedicated signal so the DB-response batch always shows
             # placeholders immediately, even if fast-scan notifications arrived first
             # and consumed the is_first_batch shortcut in _add_image_batch.
@@ -624,9 +628,12 @@ class ThumbnailViewWidget(QFrame):
         self._folder_is_cached = len(files) > 0
         if self._folder_is_cached:
             self._is_loading = False
+        logging.info(
+            f"[trace] _on_initial_files_received: {len(files)} files, "
+            f"cached={self._folder_is_cached}, is_loading={self._is_loading}"
+        )
         if not files:
             return
-        logging.info(f"[virtual] _on_initial_files_received: {len(files)} files from DB")
         self._add_image_batch(files)
         if self.all_files:
             self.reapply_filters()
@@ -641,9 +648,6 @@ class ThumbnailViewWidget(QFrame):
                 self._initial_thumb_paths[source_path] = thumb_path
                 continue
             self._thumb_path_cache[orig_idx] = thumb_path
-            state = self.image_states.get(orig_idx)
-            if state:
-                state.loaded = True
         # Re-sync viewport so newly available thumbnails get loaded for visible labels
         self._sync_virtual_viewport()
 
@@ -708,6 +712,10 @@ class ThumbnailViewWidget(QFrame):
         """
         Handles daemon notifications on the main GUI thread.
         """
+        logging.debug(
+            f"[trace] _process_daemon_notification: type={event_data.notification_type}, "
+            f"all_files={len(self.all_files)}, is_loading={self._is_loading}"
+        )
         if event_data.notification_type == "previews_ready":
             try:
                 data = protocol.PreviewsReadyData.model_validate(event_data.data)
@@ -754,6 +762,8 @@ class ThumbnailViewWidget(QFrame):
                     self._needs_heatmap_seed = True
             except _ValidationErrors as e:
                 logging.error(f"Error processing 'scan_progress' notification: {e}", exc_info=True)
+            except Exception as e:
+                logging.error(f"[trace] UNEXPECTED exception in scan_progress handler: {e}", exc_info=True)
 
         elif event_data.notification_type == "files_removed":
             try:
@@ -809,13 +819,21 @@ class ThumbnailViewWidget(QFrame):
             if f in self._initial_thumb_paths:
                 thumb_path = self._initial_thumb_paths.pop(f)
                 self._thumb_path_cache[orig_idx] = thumb_path
-                self.image_states[orig_idx].loaded = True
 
         logging.info(
             f"[virtual] _add_image_batch: +{len(new_files)} new files "
             f"(all_files={len(self.all_files)})"
         )
-        self._filter_update_timer.start()
+        if self._is_loading:
+            # During scanning, layout updates are cheap (virtual scroll only
+            # materializes ~50 labels), so apply immediately instead of
+            # debouncing — otherwise the 200ms timer keeps getting reset by
+            # each ~80ms scan batch and the view never updates mid-scan.
+            logging.debug(f"[trace] _add_image_batch: is_loading=True, applying filter immediately")
+            self._apply_filter_results(set(self.all_files))
+        else:
+            logging.debug(f"[trace] _add_image_batch: is_loading=False, starting debounce timer")
+            self._filter_update_timer.start()
 
     def add_images(self, image_paths: List[str]) -> None:
         """Add images to the view, deduplicating against the current file list."""
@@ -999,29 +1017,9 @@ class ThumbnailViewWidget(QFrame):
         self._hovered_label = None
 
         if hasattr(self, '_resize_timer'):
-            self._resize_timer.start()
+            self._resize_timer.stop()
         if hasattr(self, '_filter_update_timer'):
             self._filter_update_timer.stop()
-
-    def _thumbnail_generation_callback(self, original_path: str, result: Optional[str], error: Optional[Exception]):
-        """
-        Callback for RenderManager. Called from a worker thread.
-        Loads the generated thumbnail into a QImage off the main thread and
-        emits a signal to forward the result to the main GUI thread.
-        """
-        # QImage is safe to construct off-thread.
-        if result and not error:
-            image = QImage(result)
-            if image.isNull():
-                error = RuntimeError(f"Failed to load generated thumbnail: {result}")
-                self._thumbnail_generated_signal.emit(original_path, None, error)
-            else:
-                self._thumbnail_generated_signal.emit(original_path, image, None)
-        else:
-            # Pass along the original error or create a new one if result is missing.
-            if not error:
-                error = RuntimeError("Thumbnail generation returned no path and no error.")
-            self._thumbnail_generated_signal.emit(original_path, None, error)
 
     def _on_thumbnail_ready(self, original_path: str, image: Optional[QImage], error: Optional[Exception]):
         """Handles thumbnail generation results in the main GUI thread.
@@ -1445,9 +1443,6 @@ class ThumbnailViewWidget(QFrame):
         self._virtual_grid.update_layout()
         self._sync_virtual_viewport()
 
-        # On the first layout after load, seed the heatmap immediately so
-        # _last_thumb_pairs is populated before notifications start draining.
-        # Subsequent updates fire once after a short delay.
         if self._needs_heatmap_seed:
             self._needs_heatmap_seed = False
             self._prioritize_visible_thumbnails()
@@ -1483,6 +1478,9 @@ class ThumbnailViewWidget(QFrame):
         if pixmap:
             label.updateThumbnail(pixmap)
             label.loaded = True
+            state = self.image_states.get(original_idx)
+            if state:
+                state.loaded = True
 
         # Apply selection state
         label.setSelected(original_idx in self._selected_indices)
@@ -1524,9 +1522,8 @@ class ThumbnailViewWidget(QFrame):
         Stale IPC calls are dropped via a generation counter so the daemon never
         processes an outdated viewport position.
 
-        During a new-folder scan, all thumbnail requests are suppressed so
-        workers stay free for directory discovery.  For cached folders the
-        full visible viewport is requested at GUI_REQUEST_LOW.
+        For cached/post-scan folders the full visible viewport is requested
+        at GUI_REQUEST_LOW.
         """
         if not self.socket_client or not self.labels or not self.current_files or not self._virtual_grid:
             return
@@ -1640,6 +1637,11 @@ class ThumbnailViewWidget(QFrame):
 
         # --- Send to daemon (with stale-request protection) ---
         if delta_upgrade or paths_to_downgrade or delta_fullres or fullres_to_cancel:
+            logging.debug(
+                f"[trace] heatmap IPC: upgrades={len(delta_upgrade)}, "
+                f"downgrades={len(paths_to_downgrade)}, fullres={len(delta_fullres)}, "
+                f"fullres_cancel={len(fullres_to_cancel)}, is_loading={self._is_loading}"
+            )
             self._viewport_generation += 1
             gen = self._viewport_generation
             def _send_if_current(generation, up, down, fr, fc):
