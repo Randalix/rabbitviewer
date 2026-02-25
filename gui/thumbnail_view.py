@@ -1498,11 +1498,13 @@ class ThumbnailViewWidget(QFrame):
 
         hidden_changed = self._hidden_indices != new_hidden_indices
         count_changed = len(self.all_files) != self._last_layout_file_count
-        # Re-layout when new labels have been created since the last update.
-        # Labels are created incrementally by _tick_label_creation; without this
-        # check the layout freezes at whatever label count existed during the
-        # first _update_filtered_layout call.
-        labels_changed = len(self.labels) != self._last_layout_label_count
+        # Re-layout when new labels have been created since the last update,
+        # but only once the label queue is fully drained.  Triggering mid-creation
+        # causes repeated full layout rebuilds (~10 for 5k files) that stall the GUI.
+        labels_changed = (
+            len(self.labels) != self._last_layout_label_count
+            and not self._pending_labels
+        )
         will_update = hidden_changed or count_changed or labels_changed
 
         logging.info(

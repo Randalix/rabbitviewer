@@ -1,6 +1,6 @@
-from PySide6.QtCore import QObject, Signal, QPoint, QSize, QTimer
+from PySide6.QtCore import QObject, Signal, QPoint
 from PySide6.QtWidgets import QGridLayout, QWidget, QScrollArea
-from math import floor, ceil
+from math import floor
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -97,13 +97,11 @@ class GridLayoutManager(QObject):
     
     def clear_layout(self):
         """Clear all widgets from the layout"""
-        # Remove widgets from layout but keep them parented to grid_container
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item.widget():
-                # Don't set parent to None - just remove from layout
-                pass
-        # Don't clear labels here - let the calling code manage them
+        # Remove from the end so each takeAt is O(1) — takeAt(0) shifts the
+        # internal array on every call, making the loop O(n²).
+        count = self.grid_layout.count()
+        for i in range(count - 1, -1, -1):
+            self.grid_layout.takeAt(i)
     
     def get_widget_at_position(self, pos: QPoint) -> Optional[int]:
         """Get the widget index at a given point inside the container."""
