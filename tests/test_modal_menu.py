@@ -175,7 +175,6 @@ def _make_key_event(key_char=None, qt_key=None):
 def _make_menu(parent=None, menus=None):
     parent = parent or _make_parent_widget()
     script_mgr = MagicMock()
-    hotkey_mgr = MagicMock()
     menus = menus or {
         "test": MenuNode("Test Menu", children=[
             MenuNode("Alpha", key="a", script="do_alpha"),
@@ -185,7 +184,6 @@ def _make_menu(parent=None, menus=None):
     menu = object.__new__(ModalMenu)
     menu._menus = menus
     menu._script_manager = script_mgr
-    menu._hotkey_manager = hotkey_mgr
     menu._is_open = False
     menu._breadcrumb = []
     menu._current_node = None
@@ -209,7 +207,7 @@ def _make_menu(parent=None, menus=None):
     menu.parentWidget = MagicMock(return_value=parent)
     menu.rect = MagicMock()
 
-    return menu, script_mgr, hotkey_mgr
+    return menu, script_mgr
 
 
 # ===========================================================================
@@ -271,51 +269,51 @@ class TestMenuContext:
 
 class TestModalMenuOpen:
     def test_open_unknown_menu_does_nothing(self):
-        menu, script_mgr, hotkey_mgr = _make_menu()
+        menu, script_mgr = _make_menu()
         menu.open("nonexistent")
         assert menu._is_open is False
         menu.show.assert_not_called()
 
     def test_open_populates_visible_items(self):
-        menu, _, hotkey_mgr = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         assert len(menu._visible_items) == 2
         assert menu._visible_items[0].label == "Alpha"
         assert menu._visible_items[1].label == "Beta"
 
     def test_open_builds_key_map(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         assert "a" in menu._key_map
         assert "b" in menu._key_map
         assert menu._key_map["a"].script == "do_alpha"
 
     def test_open_sets_breadcrumb(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         assert menu._breadcrumb == ["Test Menu"]
 
     def test_open_sets_is_open(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         assert menu._is_open is True
 
     def test_open_shows_widget(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         menu.show.assert_called_once()
 
 
 class TestModalMenuKeyPress:
     def test_mapped_key_runs_script(self):
-        menu, script_mgr, hotkey_mgr = _make_menu()
+        menu, script_mgr = _make_menu()
         menu.open("test")
         event = _make_key_event("a")
         ModalMenu._handle_key(menu, event)
         script_mgr.run_script.assert_called_once_with("do_alpha")
 
     def test_mapped_key_closes_menu(self):
-        menu, _, hotkey_mgr = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         event = _make_key_event("b")
         ModalMenu._handle_key(menu, event)
@@ -324,7 +322,7 @@ class TestModalMenuKeyPress:
 
     def test_escape_closes_menu(self):
         from PySide6.QtCore import Qt
-        menu, _, hotkey_mgr = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         event = _make_key_event(qt_key=Qt.Key_Escape)
         event.text.return_value = ""
@@ -333,7 +331,7 @@ class TestModalMenuKeyPress:
         menu.hide.assert_called()
 
     def test_unmapped_key_closes_menu(self):
-        menu, script_mgr, hotkey_mgr = _make_menu()
+        menu, script_mgr = _make_menu()
         menu.open("test")
         event = _make_key_event("z")
         ModalMenu._handle_key(menu, event)
@@ -341,7 +339,7 @@ class TestModalMenuKeyPress:
         script_mgr.run_script.assert_not_called()
 
     def test_case_insensitive_keys(self):
-        menu, script_mgr, _ = _make_menu()
+        menu, script_mgr = _make_menu()
         menu.open("test")
         event = _make_key_event("A")
         event.text.return_value = "A"
@@ -359,7 +357,7 @@ class TestModalMenuSubMenus:
             MenuNode("Direct", key="d", script="direct_action"),
         ])
         # "Go Sub" has children, so pressing "s" should descend
-        menu, script_mgr, _ = _make_menu(menus={"nav": root})
+        menu, script_mgr = _make_menu(menus={"nav": root})
         menu.open("nav")
         assert "s" in menu._key_map
         assert menu._key_map["s"].children == [sub]
@@ -376,7 +374,7 @@ class TestModalMenuSubMenus:
         root = MenuNode("Top", children=[
             MenuNode("Enter", key="e", children=[mid]),
         ])
-        menu, _, _ = _make_menu(menus={"deep": root})
+        menu, _ = _make_menu(menus={"deep": root})
         menu.open("deep")
         assert menu._breadcrumb == ["Top"]
 
@@ -386,7 +384,7 @@ class TestModalMenuSubMenus:
 
 class TestModalMenuEventFilter:
     def test_eventfilter_consumes_keypress_when_open(self):
-        menu, script_mgr, _ = _make_menu()
+        menu, script_mgr = _make_menu()
         menu.open("test")
         event = MagicMock()
         event.type.return_value = QEvent.Type.KeyPress
@@ -397,7 +395,7 @@ class TestModalMenuEventFilter:
         script_mgr.run_script.assert_called_once_with("do_alpha")
 
     def test_eventfilter_passes_through_when_closed(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         assert menu._is_open is False
         event = MagicMock()
         event.type.return_value = QEvent.Type.KeyPress
@@ -405,7 +403,7 @@ class TestModalMenuEventFilter:
         assert consumed is False
 
     def test_eventfilter_consumes_unmapped_key(self):
-        menu, script_mgr, _ = _make_menu()
+        menu, script_mgr = _make_menu()
         menu.open("test")
         event = MagicMock()
         event.type.return_value = QEvent.Type.KeyPress
@@ -418,7 +416,7 @@ class TestModalMenuEventFilter:
 
     def test_eventfilter_consumes_shortcut_override_when_open(self):
         """ShortcutOverride must be consumed to prevent QShortcut from firing."""
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         event = MagicMock()
         event.type.return_value = QEvent.Type.ShortcutOverride
@@ -427,7 +425,7 @@ class TestModalMenuEventFilter:
         event.accept.assert_called_once()
 
     def test_eventfilter_ignores_shortcut_override_when_closed(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         assert menu._is_open is False
         event = MagicMock()
         event.type.return_value = QEvent.Type.ShortcutOverride
@@ -435,14 +433,14 @@ class TestModalMenuEventFilter:
         assert consumed is False
 
     def test_close_clears_is_open(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         assert menu._is_open is True
         ModalMenu._close(menu)
         assert menu._is_open is False
 
     def test_double_close_is_safe(self):
-        menu, _, _ = _make_menu()
+        menu, _ = _make_menu()
         menu.open("test")
         ModalMenu._close(menu)
         ModalMenu._close(menu)
@@ -459,7 +457,7 @@ class TestModalMenuContextFiltering:
             ])
         }
         parent = _make_parent_widget(view="picture")
-        menu, _, _ = _make_menu(parent=parent, menus=menus)
+        menu, _ = _make_menu(parent=parent, menus=menus)
         menu.open("ctx")
         labels = [item.label for item in menu._visible_items]
         assert "Always" in labels
@@ -474,7 +472,7 @@ class TestModalMenuContextFiltering:
             ])
         }
         parent = _make_parent_widget(view="thumbnail")
-        menu, _, _ = _make_menu(parent=parent, menus=menus)
+        menu, _ = _make_menu(parent=parent, menus=menus)
         menu.open("ctx")
         labels = [item.label for item in menu._visible_items]
         assert "Thumb Only" in labels
@@ -487,7 +485,7 @@ class TestModalMenuContextFiltering:
                          visible=lambda ctx: False),
             ])
         }
-        menu, _, hotkey_mgr = _make_menu(menus=menus)
+        menu, _ = _make_menu(menus=menus)
         menu.open("empty")
         # Should have closed immediately since no items are visible
         menu.show.assert_not_called()
@@ -495,7 +493,7 @@ class TestModalMenuContextFiltering:
     def test_selection_context(self):
         parent = _make_parent_widget(
             selected_paths={"/img/a.jpg", "/img/b.cr3"})
-        menu, _, _ = _make_menu(parent=parent, menus={
+        menu, _ = _make_menu(parent=parent, menus={
             "sel": MenuNode("Sel", children=[
                 MenuNode("Needs Selection", key="s", script="sel_script",
                          visible=lambda ctx: ctx.has_selection),
@@ -507,7 +505,7 @@ class TestModalMenuContextFiltering:
     def test_file_type_context(self):
         parent = _make_parent_widget(
             selected_paths={"/img/a.jpg", "/img/b.cr3"})
-        menu, _, _ = _make_menu(parent=parent, menus={
+        menu, _ = _make_menu(parent=parent, menus={
             "ft": MenuNode("FT", children=[
                 MenuNode("RAW only", key="r", script="raw_script",
                          visible=lambda ctx: ".cr3" in ctx.file_types),
@@ -520,7 +518,7 @@ class TestModalMenuContextFiltering:
     def test_hovered_fallback_for_file_types(self):
         parent = _make_parent_widget(
             selected_paths=set(), hovered="/photos/sunset.png")
-        menu, _, _ = _make_menu(parent=parent, menus={
+        menu, _ = _make_menu(parent=parent, menus={
             "hover": MenuNode("Hover", children=[
                 MenuNode("PNG", key="p", script="png_script",
                          visible=lambda ctx: ".png" in ctx.file_types),
@@ -534,19 +532,19 @@ class TestModalMenuContextFiltering:
 class TestBuildContextViewDetection:
     def test_thumbnail_view(self):
         parent = _make_parent_widget(view="thumbnail")
-        menu, _, _ = _make_menu(parent=parent)
+        menu, _ = _make_menu(parent=parent)
         ctx = ModalMenu._build_context(menu)
         assert ctx.view == "thumbnail"
 
     def test_picture_view(self):
         parent = _make_parent_widget(view="picture")
-        menu, _, _ = _make_menu(parent=parent)
+        menu, _ = _make_menu(parent=parent)
         ctx = ModalMenu._build_context(menu)
         assert ctx.view == "picture"
 
     def test_video_view(self):
         parent = _make_parent_widget(view="video")
-        menu, _, _ = _make_menu(parent=parent)
+        menu, _ = _make_menu(parent=parent)
         ctx = ModalMenu._build_context(menu)
         assert ctx.view == "video"
 
@@ -600,7 +598,7 @@ class TestMenuRegistry:
 
 
 # ===========================================================================
-# HotkeyManager disable/enable tests
+# HotkeyManager menu: prefix integration
 # ===========================================================================
 
 def _ensure_hotkey_stubs():
@@ -626,29 +624,6 @@ def _ensure_hotkey_stubs():
 
 
 class TestHotkeyManagerMenuIntegration:
-    def test_disable_enable_shortcuts(self):
-        _ensure_hotkey_stubs()
-        from gui.hotkey_manager import HotkeyManager
-
-        hm = object.__new__(HotkeyManager)
-        mock_shortcut_1 = MagicMock()
-        mock_shortcut_2 = MagicMock()
-        hm.shortcuts = {
-            "action_a": [mock_shortcut_1],
-            "action_b": [mock_shortcut_2],
-        }
-
-        hm.disable_shortcuts()
-        mock_shortcut_1.setEnabled.assert_called_with(False)
-        mock_shortcut_2.setEnabled.assert_called_with(False)
-
-        mock_shortcut_1.reset_mock()
-        mock_shortcut_2.reset_mock()
-
-        hm.enable_shortcuts()
-        mock_shortcut_1.setEnabled.assert_called_with(True)
-        mock_shortcut_2.setEnabled.assert_called_with(True)
-
     def test_menu_prefix_registered(self):
         _ensure_hotkey_stubs()
         from gui.hotkey_manager import HotkeyManager

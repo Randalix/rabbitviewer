@@ -126,20 +126,6 @@ class HotkeyManager(QObject):
 			)
 			self.shortcuts[definition.action_name].append(shortcut)
 
-	def disable_shortcuts(self):
-		count = sum(len(sl) for sl in self.shortcuts.values())
-		logging.debug(f"HotkeyManager.disable_shortcuts: disabling {count} shortcuts")
-		for shortcut_list in self.shortcuts.values():
-			for shortcut in shortcut_list:
-				shortcut.setEnabled(False)
-
-	def enable_shortcuts(self):
-		count = sum(len(sl) for sl in self.shortcuts.values())
-		logging.debug(f"HotkeyManager.enable_shortcuts: enabling {count} shortcuts")
-		for shortcut_list in self.shortcuts.values():
-			for shortcut in shortcut_list:
-				shortcut.setEnabled(True)
-
 	def add_action(self, action_name: str, callback: Callable):
 		self.actions[action_name] = callback
 		logging.debug(f"Registered action '{action_name}' with callback {callback}")

@@ -49,11 +49,10 @@ class ModalMenu(QWidget):
     _HEADER_FG = QColor(160, 160, 160)
     _CORNER_RADIUS = 10
 
-    def __init__(self, parent, menus: dict, script_manager, hotkey_manager):
+    def __init__(self, parent, menus: dict, script_manager):
         super().__init__(parent)
         self._menus = menus
         self._script_manager = script_manager
-        self._hotkey_manager = hotkey_manager
         self._is_open = False
 
         self._breadcrumb: List[str] = []
