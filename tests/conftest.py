@@ -39,10 +39,63 @@ if 'PySide6' not in sys.modules:
     _qtcore.QPointF = _QPointF        # type: ignore[attr-defined]
     _qtcore.Qt = _Qt                  # type: ignore[attr-defined]
 
+    # Permissive stub class: any attribute access returns a no-op callable / nested stub.
+    class _Stub:
+        def __init__(self, *a, **kw): pass
+        def __call__(self, *a, **kw): return _Stub()
+        def __getattr__(self, name): return _Stub()
+        def __bool__(self): return False
+
+    # QtGui stubs — enough for overlay_renderers and thumbnail_view imports
+    _qtgui = types.ModuleType('PySide6.QtGui')
+    for _name in ('QPixmap', 'QImage', 'QColor', 'QMouseEvent', 'QKeyEvent',
+                   'QCursor', 'QPainter', 'QFont', 'QPainterPath', 'QPen'):
+        setattr(_qtgui, _name, type(_name, (_Stub,), {}))
+
+    # QtWidgets stubs
+    _qtwidgets = types.ModuleType('PySide6.QtWidgets')
+    # QWidget needs real stub methods for super() calls in subclass tests
+    class _QWidget(_Stub):
+        def mousePressEvent(self, e): pass
+        def mouseReleaseEvent(self, e): pass
+        def mouseMoveEvent(self, e): pass
+        def mouseDoubleClickEvent(self, e): pass
+        def paintEvent(self, e): pass
+        def keyPressEvent(self, e): pass
+        def keyReleaseEvent(self, e): pass
+        def resizeEvent(self, e): pass
+        def showEvent(self, e): pass
+        def hideEvent(self, e): pass
+        def closeEvent(self, e): pass
+        def event(self, e): return False
+        def update(self): pass
+        def repaint(self): pass
+        def setLayout(self, l): pass
+        def setStyleSheet(self, s): pass
+        def setFixedSize(self, *a): pass
+        def setMouseTracking(self, b): pass
+        def installEventFilter(self, f): pass
+
+    _qtwidgets.QWidget = _QWidget
+    for _name in ('QLabel', 'QScrollArea', 'QFrame', 'QMainWindow'):
+        setattr(_qtwidgets, _name, type(_name, (_QWidget,), {}))
+    for _name in ('QVBoxLayout', 'QGridLayout', 'QHBoxLayout'):
+        setattr(_qtwidgets, _name, type(_name, (_Stub,), {
+            'addWidget': lambda self, *a, **kw: None,
+            'addLayout': lambda self, *a, **kw: None,
+            'setContentsMargins': lambda self, *a: None,
+            'setSpacing': lambda self, *a: None,
+        }))
+    setattr(_qtwidgets, 'QApplication', type('QApplication', (_Stub,), {}))
+
     _pyside6 = types.ModuleType('PySide6')
     _pyside6.QtCore = _qtcore         # type: ignore[attr-defined]
+    _pyside6.QtGui = _qtgui           # type: ignore[attr-defined]
+    _pyside6.QtWidgets = _qtwidgets   # type: ignore[attr-defined]
     sys.modules['PySide6'] = _pyside6
     sys.modules['PySide6.QtCore'] = _qtcore
+    sys.modules['PySide6.QtGui'] = _qtgui
+    sys.modules['PySide6.QtWidgets'] = _qtwidgets
 
 # ---------------------------------------------------------------------------
 # watchdog stubs — allow filewatcher/network modules to import without watchdog

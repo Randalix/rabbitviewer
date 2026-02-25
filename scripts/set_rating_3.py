@@ -1,5 +1,4 @@
 from scripts.script_api import ScriptAPI
-from typing import List
 import logging
 
 def run_script(api: ScriptAPI, selected_images: list[str] = None):
@@ -20,4 +19,5 @@ def run_script(api: ScriptAPI, selected_images: list[str] = None):
 
     logging.info(f"Setting rating to 3 stars for {len(selected_images)} images.")
     api.set_rating_for_images(selected_images, 3)
+    api.show_overlay(selected_images, "stars", {"count": 3}, duration=1200)
     logging.info("Rating set to 3 stars.")

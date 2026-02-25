@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Set
 from PySide6.QtCore import (
     Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QRectF, QSizeF, QEvent, QRect, QSize, Slot
 )
-from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QKeyEvent, QCursor
+from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QKeyEvent, QCursor, QPainter
 from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QScrollArea, QGridLayout, QWidget, QFrame, QMainWindow, QApplication, QHBoxLayout
 )
@@ -22,6 +22,9 @@ from utils.thumbnail_filters import matches_filter
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, ToggleSelectionCommand, RemoveFromSelectionCommand
 from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, DaemonNotificationEventData, StatusMessageEventData, EventData
 from core.heatmap import compute_heatmap, THUMB_RING_COUNT
+from core.event_system import ThumbnailOverlayEventData
+from gui.overlay_manager import OverlayManager, OverlayDescriptor, BULK_THRESHOLD
+from gui.overlay_renderers import render_stars, render_badge
 
 from dataclasses import dataclass
 
@@ -43,6 +46,7 @@ class ThumbnailLabel(QLabel):
         self.config = config
 
         self._original_idx: int = -1
+        self._overlay_manager: OverlayManager | None = None
         self.setFixedSize(size, size)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(self._makeStyleSheet())
@@ -125,6 +129,17 @@ class ThumbnailLabel(QLabel):
             normalized_position=pos,
         )
         event_system.publish(event_data)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._overlay_manager and self._overlay_manager.has_overlays(self._original_idx):
+            try:
+                painter = QPainter(self)
+                self._overlay_manager.paint(painter, self.rect(), self._original_idx)
+                painter.end()
+            except Exception:
+                # why: renderer crash must not leave QPainter open or break label rendering
+                logging.exception("[overlay] paintEvent error for idx %d", self._original_idx)
 
     def setSelected(self, selected: bool):
         if self.selected != selected:
@@ -268,6 +283,11 @@ class ThumbnailViewWidget(QFrame):
         event_system.subscribe(EventType.RANGE_SELECTION_START, lambda _: self.start_range_selection())
         event_system.subscribe(EventType.RANGE_SELECTION_END, lambda _: self.end_range_selection())
         event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._handle_daemon_notification_from_thread)
+        event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
+
+        self.overlay_manager = OverlayManager(request_update=self._request_label_update)
+        self.overlay_manager.register_renderer("stars", render_stars)
+        self.overlay_manager.register_renderer("badge", render_badge)
         self._daemon_notification_received.connect(self._process_daemon_notification)
         self._initial_files_signal.connect(self._on_initial_files_received)
         self._initial_thumbs_signal.connect(self._on_initial_thumbs_received)
@@ -346,6 +366,7 @@ class ThumbnailViewWidget(QFrame):
                 label.setPixmap(QPixmap())
             label.loaded = False
             label.selected = False
+            self.overlay_manager.remove_all_for_idx(label._original_idx)
             label._original_idx = -1
             # why: cancel any pending inspector-throttle tick so the recycled label
             # cannot emit a stale INSPECTOR_UPDATE after being reassigned a new path.
@@ -375,6 +396,7 @@ class ThumbnailViewWidget(QFrame):
             label = ThumbnailLabel(file_path, self.display_size, self.gui_config)
 
         label._original_idx = original_idx
+        label._overlay_manager = self.overlay_manager
         label.setParent(self._grid_container)
         # why: ThumbnailViewWidget must be the event filter so Enter/Leave events
         # reach _set_hovered_label / _clear_hovered_label on the parent widget.
@@ -652,6 +674,56 @@ class ThumbnailViewWidget(QFrame):
         load QImages inline — no second pipeline pass needed.
         """
         self._initial_thumb_paths.update(thumb_map)
+
+    def _request_label_update(self, idx: int) -> None:
+        label = self.labels.get(idx)
+        if label:
+            label.update()
+
+    def _on_overlay_event(self, event_data: ThumbnailOverlayEventData) -> None:
+        action = event_data.action
+        paths = event_data.paths
+        logging.debug("[overlay] _on_overlay_event: action=%s, paths=%d, renderer=%s",
+                      action, len(paths), event_data.renderer_name)
+
+        if action == "show":
+            # Degradation gate: for large transient batches, fall back to a status message.
+            if event_data.duration is not None and len(paths) > BULK_THRESHOLD:
+                event_system.publish(StatusMessageEventData(
+                    event_type=EventType.STATUS_MESSAGE,
+                    source="overlay_manager",
+                    timestamp=time.time(),
+                    message=f"{event_data.renderer_name} overlay applied to {len(paths)} images",
+                    timeout=2000,
+                ))
+                return
+
+            descriptor = OverlayDescriptor(
+                overlay_id=event_data.overlay_id,
+                renderer_name=event_data.renderer_name,
+                params=event_data.params,
+                position=event_data.position,
+                duration=event_data.duration,
+            )
+            matched = 0
+            for path in paths:
+                idx = self._path_to_idx.get(path)
+                if idx is not None:
+                    self.overlay_manager.show(idx, descriptor)
+                    label = self.labels.get(idx)
+                    if label:
+                        label.update()
+                        matched += 1
+            logging.debug("[overlay] show: %d/%d paths matched to labels", matched, len(paths))
+
+        elif action == "remove":
+            for path in paths:
+                idx = self._path_to_idx.get(path)
+                if idx is not None:
+                    self.overlay_manager.remove(idx, event_data.overlay_id)
+                    label = self.labels.get(idx)
+                    if label:
+                        label.update()
 
     def _handle_daemon_notification_from_thread(self, event_data: DaemonNotificationEventData):
         """
