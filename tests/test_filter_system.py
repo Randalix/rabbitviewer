@@ -270,15 +270,13 @@ def _make_filter_view(all_files=None, is_loading=False, socket_client=None):
     view._filter_pending = False
 
     view._filter_update_timer = MagicMock()
-    view._grid_layout_manager = None
+    view._virtual_grid = None
     view.labels = {}
     view.socket_client = socket_client
 
     view.filtersApplied = MagicMock()
     view._filtered_paths_ready = MagicMock()
     view._viewport_executor = MagicMock()
-    view._label_tick_timer = MagicMock()
-    view._pending_labels = []
     view.image_states = {}
 
     return view
@@ -310,18 +308,16 @@ class TestIsLoadingCachedFolder:
         from gui.thumbnail_view import ThumbnailViewWidget
 
         view = _make_filter_view(is_loading=True)
-        view._pending_labels = []
         view._startup_t0 = None
         view._startup_first_scan_progress = False
         view._startup_inline_thumb_count = 0
-        view._startup_first_inline_thumb = False
         view._initial_thumb_paths = {}
         view._path_to_idx = {}
+        view._pixmap_cache = {}
 
         files = ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
 
-        with patch("gui.thumbnail_view.event_system"), \
-             patch.object(ThumbnailViewWidget, "_tick_label_creation"):
+        with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._on_initial_files_received(view, files)
 
         assert view._folder_is_cached is True
@@ -332,16 +328,14 @@ class TestIsLoadingCachedFolder:
         from gui.thumbnail_view import ThumbnailViewWidget
 
         view = _make_filter_view(is_loading=True)
-        view._pending_labels = []
         view._startup_t0 = None
         view._startup_first_scan_progress = False
         view._startup_inline_thumb_count = 0
-        view._startup_first_inline_thumb = False
         view._initial_thumb_paths = {}
         view._path_to_idx = {}
+        view._pixmap_cache = {}
 
-        with patch("gui.thumbnail_view.event_system"), \
-             patch.object(ThumbnailViewWidget, "_tick_label_creation"):
+        with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._on_initial_files_received(view, [])
 
         assert view._folder_is_cached is False
