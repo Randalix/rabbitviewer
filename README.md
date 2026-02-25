@@ -2,49 +2,66 @@
 
 A fast, daemon-backed image viewer for photographers and power users — built with Python and Qt6.
 
-RabbitViewer separates rendering and metadata work from the interface. Heavy operations run in a persistent background process, while the GUI remains responsive even with very large libraries.
+RabbitViewer doesn’t just display images.
+It orchestrates them.
+
+Rendering, metadata extraction, hashing, and file watching run in a persistent background daemon. The interface stays fluid — even when you point it at a massive RAW archive.
+
+[![RabbitViewer Demo](https://img.youtube.com/vi/XzhZ5Wn1O8U/maxresdefault.jpg)](https://youtu.be/XzhZ5Wn1O8U)
 
 ---
 
 ## Overview
 
-RabbitViewer is designed around a strict separation of concerns:
+RabbitViewer is built on a strict separation of concerns:
 
-* The **daemon** performs thumbnail generation, EXIF extraction, database writes, hashing, and file watching.
-* The **GUI** focuses purely on interaction and presentation.
+* The **daemon** handles thumbnail generation, EXIF extraction, database writes, hashing, and file watching.
+* The **GUI** is dedicated purely to interaction and presentation.
 
-This architecture ensures predictable latency, smooth scrolling, and immediate UI feedback — even during large recursive scans or RAW-heavy workloads.
+The result is predictable latency, smooth scrolling, and immediate feedback — even during large recursive scans or RAW-heavy workloads.
+
+You can scroll aggressively through thousands of files and the interface never stalls. The heavy lifting happens elsewhere.
 
 ---
 
 ## Core Features
 
-### Responsive by Design
+### Responsive by Architecture
 
-Heavy work runs in a background daemon process. The GUI never blocks on decoding, hashing, or metadata extraction.
+Decoding, hashing, and metadata extraction never block the UI thread.
+The viewer remains interactive under load — always.
 
 ### Progressive Thumbnails
 
-Images render as they are decoded.
-A heatmap radiates from the mouse cursor — thumbnails closest to the pointer load first, with priority decreasing outward across a 10-ring Manhattan diamond. Nearby images also get speculative fullres pre-caching (4-ring zone) that cancels cooperatively when the cursor moves away.
+Images appear as soon as they’re decoded.
+
+A heatmap radiates from the mouse cursor. Thumbnails closest to your pointer load first, decreasing outward across a 10-ring Manhattan diamond. Nearby images receive speculative full-resolution pre-caching within a 4-ring zone, with cooperative cancellation when you move.
+
+The viewer anticipates you.
 
 ### Star Ratings
 
+Ratings are:
+
 * Written back to file EXIF via ExifTool
-* Persisted locally in SQLite
-* Filterable in real time
+* Stored locally in SQLite
+* Filterable instantly
+
+No proprietary lock-in. Your metadata stays with your files.
 
 ### EXIF Metadata Display
 
-Shutter speed, aperture, ISO, focal length, lens, camera body, and more.
+Shutter speed, aperture, ISO, focal length, lens, camera body — immediately visible without leaving the viewer.
 
 ### Live File Watching
 
-Library updates automatically when files are added, moved, or deleted.
+Add, move, or delete files — the library updates automatically.
+
+No manual refresh. No rescans required.
 
 ### Recursive Directory Scanning
 
-Scan entire directory trees with optional recursive mode.
+Scan entire directory trees, or stay flat. Your workflow, your choice.
 
 ### Advanced Selection
 
@@ -53,31 +70,45 @@ Scan entire directory trees with optional recursive mode.
 * Invert selection
 * Undo / redo
 
+Designed for high-volume culling sessions.
+
 ### Video Playback
 
-* Embedded mpv player for MP4, MOV, MKV, AVI, WebM, and more
-* Space to pause, M to mute, `[`/`]` to seek
-* Timeline scrubbing in the inspector via mouse position
+Integrated mpv playback supports modern video formats.
+Scrub the timeline directly from the inspector using mouse position.
+
+Switch seamlessly between stills and motion.
 
 ### Full Image Viewer
 
-* Zoom
-* Pan
-* Fast switching
+* Smooth zoom
+* Fluid panning
+* Fast image switching
 * Pixel-level inspector overlay (images and videos)
 
-### Fully Rebindable Hotkeys
-
-Every action is configurable in `config.yaml`.
-Multiple key sequences per action are supported.
+Zero friction between browsing and inspection.
 
 ### Python Script Automation
 
-Drop plain Python files into `scripts/` and bind them to hotkeys.
+Drop plain Python files into `scripts/` and bind them to actions.
+
+RabbitViewer exposes a clean API surface for automation. You can batch-edit ratings, reorganize selections, or implement custom workflows in minutes.
 
 ### Plugin System
 
-Add support for new formats by dropping a file into `plugins/`.
+Extend format support by adding a file to `plugins/`.
+
+Implement three functions:
+
+```
+get_thumbnail()
+get_metadata()
+set_rating()
+```
+
+Plugins are auto-discovered at startup.
+
+RabbitViewer is designed to be extended — not forked.
 
 ---
 
@@ -113,56 +144,15 @@ Add support for new formats by dropping a file into `plugins/`.
 * MP4, MOV, MKV, AVI, WebM, M4V
 * WMV, FLV, MPG, MPEG, 3GP, TS
 
-New formats can be added by implementing:
-
-```
-get_thumbnail()
-get_metadata()
-set_rating()
-```
-
-Plugins are auto-discovered at startup.
-
----
-
-## Hotkeys
-
-All hotkeys are defined in `config.yaml`.
-
-| Action               | Default         |
-| -------------------- | --------------- |
-| Next image           | D / →           |
-| Previous image       | A / ←           |
-| Return to thumbnails | Esc / Q         |
-| Zoom in / out        | Ctrl++ / Ctrl+- |
-| Toggle inspector     | I               |
-| Filter               | Ctrl+F          |
-| Range selection      | S (hold)        |
-| Select all           | Ctrl+A          |
-| Invert selection     | Shift+I         |
-| Set rating 0–4       | 0 – 4           |
-| Delete selected      | Del / R         |
-| Pause / resume video | Space           |
-| Mute / unmute video  | M               |
-| Seek forward 5s      | ]               |
-| Seek backward 5s     | [               |
-
-You can bind any hotkey to a script:
-
-```yaml
-hotkeys:
-  script:my_script:
-    sequence: Ctrl+M
-    description: Run my custom script
-```
+New formats can be added through plugins.
 
 ---
 
 ## Scripts
 
-Scripts are plain Python files inside `scripts/`.
+Scripts are plain Python files placed inside `scripts/`.
 
-Each must expose:
+Each script must expose:
 
 ```python
 def run_script(api, selected_images):
@@ -186,7 +176,7 @@ Bundled scripts include:
 * delete_selected
 * sort_by_name
 
-The hotkey system acts as the automation entry point.
+Automation is a first-class feature — not an afterthought.
 
 ---
 
@@ -216,82 +206,78 @@ sudo apt install libimage-exiftool-perl ffmpeg libmpv-dev
 ### Install / Update
 
 ```
-git clone https://github.com/yourname/RabbitViewer.git
+git clone https://github.com/Randalix/rabbitviewer.git
 cd RabbitViewer
 ./install.sh
 ```
 
 The install script:
 
-* Creates a virtualenv inside the repo using a compatible Python (3.10–3.13)
-* Checks that ExifTool is installed and prints install instructions if not
-* Installs the package in editable mode (source changes take effect immediately)
-* Writes a `rabbit` CLI wrapper into `~/.local/bin/` (see [CLI Tools](#cli-tools) below)
-* Sets up shell completions for `rabbit` (bash and zsh)
-* Installs a `.desktop` entry (Linux) or `.app` bundle (macOS) for the application launcher
-* Adds `~/.local/bin` to your shell's PATH automatically if it isn't there already
+* Creates a virtualenv using a compatible Python (3.10–3.13)
+* Verifies dependencies
+* Installs in editable mode
+* Writes a `rabbit` CLI wrapper into `~/.local/bin/`
+* Sets up shell completion
+* Installs a launcher entry
 
-**To update**, just re-run the script from the repo directory:
+To update:
 
 ```
 ./install.sh
 ```
 
-**To do a clean reinstall** (wipes and rebuilds the virtualenv):
+Clean reinstall:
 
 ```
 ./install.sh --clean
 ```
 
-**To uninstall** the CLI wrappers:
+Optional extras:
 
 ```
-./install.sh --uninstall
-```
-
-Optional extras can be installed afterwards:
-
-```
-venv/bin/pip install ".[cr3]"     # Canon CR3 RAW support
-venv/bin/pip install ".[video]"   # Video playback (python-mpv)
+venv/bin/pip install ".[cr3]"
+venv/bin/pip install ".[video]"
 ```
 
 ---
 
 ## Getting Started
 
-Once installed, run from any directory:
+From any directory:
 
 ```
 rabbit /path/to/photos
 ```
 
-The daemon starts automatically if it is not already running. Thumbnails render progressively as the daemon processes files.
+The daemon starts automatically if needed. Thumbnails appear progressively as files are processed.
 
 Options:
 
 ```
-rabbit /path/to/photos --no-recursive   # flat scan only
-rabbit /path/to/photos --restart-daemon  # force a fresh daemon
+rabbit /path/to/photos --no-recursive
+rabbit /path/to/photos --restart-daemon
 ```
 
-Logs are written to `~/.rabbitviewer/rabbitviewer.log`.
+Logs:
+
+```
+~/.rabbitviewer/rabbitviewer.log
+```
 
 ---
 
 ## CLI Tools
 
-The `rabbit` command provides access to standalone CLI utilities:
+The `rabbit` command also exposes standalone utilities:
 
 ```
-rabbit --help              # list available commands
-rabbit move-selected /dst  # move the current GUI selection to a directory
-rabbit send-stop-signal    # gracefully shut down the daemon
+rabbit --help
+rabbit move-selected /dst
+rabbit send-stop-signal
 ```
 
-Tab completion works in both bash and zsh after running `install.sh`.
-
-New tools are added by dropping a `.py` file into `cli/` — they are discovered automatically as subcommands (underscores become hyphens, e.g. `my_tool.py` → `rabbit my-tool`).
+New subcommands are added by dropping `.py` files into `cli/`.
+They are auto-discovered at startup.
 
 ---
 
@@ -305,19 +291,24 @@ RabbitViewer runs as two cooperating processes:
 ### IPC
 
 * Unix domain socket
-* `/tmp/rabbitviewer_thumbnailer.sock`
 * Length-prefixed JSON protocol
 
 ### Scheduling
 
-The `RenderManager` uses a priority queue with heatmap-based graduated priorities.
-A 10-ring Manhattan diamond around the cursor assigns priorities from 90 (under cursor) to 40 (ring 10). Speculative fullres pre-caching covers a 4-ring zone with cooperative cancellation. Delta-only IPC ensures only changed priorities are sent, and a generation counter drops stale updates during fast scrolling.
+The `RenderManager` uses a heatmap-driven priority queue:
+
+* 10-ring Manhattan diamond around the cursor
+* Priorities from 90 (under cursor) to 40 (outer ring)
+* 4-ring speculative full-resolution pre-cache zone
+* Cooperative cancellation
+* Delta-only IPC updates
+* Generation counters drop stale updates during fast scroll
 
 ### Work Model
 
-* SourceJob pattern discovers file paths
+* SourceJob discovers file paths
 * Task factory converts paths into render tasks
-* RenderTask supports cooperative cancellation via `cancel_event` (threading.Event)
+* RenderTask supports cooperative cancellation via `threading.Event`
 
 ### Database
 
@@ -331,11 +322,7 @@ SQLite (WAL mode) stores:
 ### File Watching
 
 Based on watchdog.
-Startup delay (30 seconds) avoids race conditions during large initial scans.
-
-### Internal Communication
-
-GUI uses an internal pub/sub EventSystem.
+Startup delay avoids race conditions during large initial scans.
 
 ### Stack
 
@@ -360,8 +347,9 @@ pytest tests/
 
 RabbitViewer is built for speed, determinism, and extensibility.
 
-* No blocking UI.
-* No opaque automation.
-* No hidden state.
+No blocking UI.
+No opaque automation.
+No hidden state.
 
-Just a clean, inspectable system that scales from a small shoot to a multi-terabyte archive.
+Just a fast, inspectable system that scales from a small shoot to a multi-terabyte archive.
+
