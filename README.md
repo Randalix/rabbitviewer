@@ -203,14 +203,12 @@ The hotkey system acts as the automation entry point.
 
 ```
 brew install exiftool ffmpeg mpv
-pip install python-mpv
 ```
 
 **Debian / Ubuntu**
 
 ```
 sudo apt install libimage-exiftool-perl ffmpeg libmpv-dev
-pip install python-mpv
 ```
 
 ---
@@ -228,9 +226,9 @@ The install script:
 * Creates a virtualenv inside the repo using a compatible Python (3.10–3.13)
 * Checks that ExifTool is installed and prints install instructions if not
 * Installs the package in editable mode (source changes take effect immediately)
-* Writes `rabbitviewer` and `rabbitviewer-daemon` wrappers into `~/.local/bin/`
-* Installs the `rabbit` CLI dispatcher (see [CLI Tools](#cli-tools) below)
+* Writes a `rabbit` CLI wrapper into `~/.local/bin/` (see [CLI Tools](#cli-tools) below)
 * Sets up shell completions for `rabbit` (bash and zsh)
+* Installs a `.desktop` entry (Linux) or `.app` bundle (macOS) for the application launcher
 * Adds `~/.local/bin` to your shell's PATH automatically if it isn't there already
 
 **To update**, just re-run the script from the repo directory:
@@ -251,10 +249,11 @@ The install script:
 ./install.sh --uninstall
 ```
 
-With Canon CR3 support, install the optional extras afterwards:
+Optional extras can be installed afterwards:
 
 ```
-venv/bin/pip install ".[cr3]"
+venv/bin/pip install ".[cr3]"     # Canon CR3 RAW support
+venv/bin/pip install ".[video]"   # Video playback (python-mpv)
 ```
 
 ---
@@ -264,7 +263,7 @@ venv/bin/pip install ".[cr3]"
 Once installed, run from any directory:
 
 ```
-rabbitviewer /path/to/photos
+rabbit /path/to/photos
 ```
 
 The daemon starts automatically if it is not already running. Thumbnails render progressively as the daemon processes files.
@@ -272,8 +271,8 @@ The daemon starts automatically if it is not already running. Thumbnails render 
 Options:
 
 ```
-rabbitviewer /path/to/photos --no-recursive   # flat scan only
-rabbitviewer /path/to/photos --restart-daemon  # force a fresh daemon
+rabbit /path/to/photos --no-recursive   # flat scan only
+rabbit /path/to/photos --restart-daemon  # force a fresh daemon
 ```
 
 Logs are written to `~/.rabbitviewer/rabbitviewer.log`.
