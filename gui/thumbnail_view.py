@@ -179,6 +179,7 @@ class ThumbnailViewWidget(QFrame):
         self.labels: Dict[int, ThumbnailLabel] = {}  # original_idx → materialized label (viewport only)
         self.pending_thumbnails = set()
         self._pixmap_cache: Dict[int, QPixmap] = {}  # original_idx → thumbnail pixmap
+        self._thumb_path_cache: Dict[int, str] = {}  # original_idx → thumbnail file path (lazy-loaded)
         self._pixmap_cache_limit = 5000
         self._initial_thumb_paths: Dict[str, str] = {}  # {source_path: local_thumbnail_path}
         self.current_files = []
@@ -632,25 +633,18 @@ class ThumbnailViewWidget(QFrame):
 
     @Slot(dict)
     def _on_initial_thumbs_received(self, thumb_map: dict):
-        """Load cached thumbnails into _pixmap_cache for instant display."""
+        """Store cached thumbnail paths for lazy loading on materialization."""
         for source_path, thumb_path in thumb_map.items():
             orig_idx = self._path_to_idx.get(source_path, -1)
             if orig_idx < 0:
                 # Files not yet in all_files — store for later
                 self._initial_thumb_paths[source_path] = thumb_path
                 continue
-            image = QImage(thumb_path)
-            if not image.isNull():
-                self._pixmap_cache[orig_idx] = QPixmap.fromImage(image)
-                state = self.image_states.get(orig_idx)
-                if state:
-                    state.loaded = True
-                if not self._startup_first_inline_thumb and self._startup_t0 is not None:
-                    self._startup_first_inline_thumb = True
-                    elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                    logging.info(f"[startup] first inline thumbnail: {elapsed_ms:.0f} ms after load_directory")
-                self._startup_inline_thumb_count += 1
-        # Re-sync viewport so newly cached pixmaps appear on materialized labels
+            self._thumb_path_cache[orig_idx] = thumb_path
+            state = self.image_states.get(orig_idx)
+            if state:
+                state.loaded = True
+        # Re-sync viewport so newly available thumbnails get loaded for visible labels
         self._sync_virtual_viewport()
 
     def _request_label_update(self, idx: int) -> None:
@@ -811,18 +805,11 @@ class ThumbnailViewWidget(QFrame):
             self._path_to_idx[f] = orig_idx
             self.image_states[orig_idx] = ImageState()
 
-            # Load cached inline thumbnails into _pixmap_cache
+            # Store cached inline thumbnail paths for lazy loading
             if f in self._initial_thumb_paths:
                 thumb_path = self._initial_thumb_paths.pop(f)
-                image = QImage(thumb_path)
-                if not image.isNull():
-                    self._pixmap_cache[orig_idx] = QPixmap.fromImage(image)
-                    self.image_states[orig_idx].loaded = True
-                    self._startup_inline_thumb_count += 1
-                    if not self._startup_first_inline_thumb and self._startup_t0 is not None:
-                        self._startup_first_inline_thumb = True
-                        elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                        logging.info(f"[startup] first inline thumbnail: {elapsed_ms:.0f} ms after load_directory")
+                self._thumb_path_cache[orig_idx] = thumb_path
+                self.image_states[orig_idx].loaded = True
 
         logging.info(
             f"[virtual] _add_image_batch: +{len(new_files)} new files "
@@ -847,6 +834,7 @@ class ThumbnailViewWidget(QFrame):
             new_all_files = []
             new_image_states = {}
             new_pixmap_cache = {}
+            new_thumb_path_cache = {}
 
             current_new_idx = 0
             for original_idx, file_path in enumerate(self.all_files):
@@ -856,6 +844,8 @@ class ThumbnailViewWidget(QFrame):
                         new_image_states[current_new_idx] = self.image_states[original_idx]
                     if original_idx in self._pixmap_cache:
                         new_pixmap_cache[current_new_idx] = self._pixmap_cache[original_idx]
+                    if original_idx in self._thumb_path_cache:
+                        new_thumb_path_cache[current_new_idx] = self._thumb_path_cache[original_idx]
                     current_new_idx += 1
 
             # Recycle all materialized labels — they'll be re-materialized
@@ -869,6 +859,7 @@ class ThumbnailViewWidget(QFrame):
             self._path_to_idx = {path: idx for idx, path in enumerate(new_all_files)}
             self.image_states = new_image_states
             self._pixmap_cache = new_pixmap_cache
+            self._thumb_path_cache = new_thumb_path_cache
 
             cmd = ReplaceSelectionCommand(paths=set(), source="thumbnail_view", timestamp=time.time())
             event_system.publish(cmd)
@@ -896,12 +887,15 @@ class ThumbnailViewWidget(QFrame):
 
         new_image_states = {}
         new_pixmap_cache = {}
+        new_thumb_path_cache = {}
         for new_idx, path in enumerate(new_all_files):
             old_idx = old_idx_map[path]
             if old_idx in self.image_states:
                 new_image_states[new_idx] = self.image_states[old_idx]
             if old_idx in self._pixmap_cache:
                 new_pixmap_cache[new_idx] = self._pixmap_cache[old_idx]
+            if old_idx in self._thumb_path_cache:
+                new_thumb_path_cache[new_idx] = self._thumb_path_cache[old_idx]
 
         # Recycle all materialized labels — re-materialized with new indices
         if self._virtual_grid:
@@ -913,6 +907,7 @@ class ThumbnailViewWidget(QFrame):
         self._path_to_idx = {path: idx for idx, path in enumerate(new_all_files)}
         self.image_states = new_image_states
         self._pixmap_cache = new_pixmap_cache
+        self._thumb_path_cache = new_thumb_path_cache
 
         self._update_filtered_layout()
 
@@ -945,8 +940,9 @@ class ThumbnailViewWidget(QFrame):
             # socket client handles broken-pipe errors on its own after widget teardown.
             self._viewport_executor.shutdown(wait=False)
 
-        # Clear pixmap cache
+        # Clear pixmap/path caches
         self._pixmap_cache.clear()
+        self._thumb_path_cache.clear()
 
         # Clear widget pool
         for label in self._widget_pool:
@@ -981,6 +977,7 @@ class ThumbnailViewWidget(QFrame):
 
         self.pending_thumbnails.clear()
         self._pixmap_cache.clear()
+        self._thumb_path_cache.clear()
         self._initial_thumb_paths.clear()
         self.current_files.clear()
         self.all_files.clear()
@@ -1474,8 +1471,15 @@ class ThumbnailViewWidget(QFrame):
         label._original_idx = original_idx
         label._overlay_manager = self.overlay_manager
 
-        # Apply cached pixmap
+        # Apply cached pixmap (lazy-load from thumb path if needed)
         pixmap = self._pixmap_cache.get(original_idx)
+        if pixmap is None:
+            thumb_path = self._thumb_path_cache.get(original_idx)
+            if thumb_path:
+                image = QImage(thumb_path)
+                if not image.isNull():
+                    pixmap = QPixmap.fromImage(image)
+                    self._pixmap_cache[original_idx] = pixmap
         if pixmap:
             label.updateThumbnail(pixmap)
             label.loaded = True
