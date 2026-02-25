@@ -18,7 +18,10 @@ class VirtualGridManager(QObject):
     fixed height drives the scroll range.
     """
 
-    _BUFFER_ROWS = 3  # extra rows above/below the viewport
+    # Extra rows materialized above/below the viewport.  3 rows keeps
+    # recycling infrequent during small scrolls (~18-30 labels at typical
+    # column counts) without wasting memory on off-screen widgets.
+    _BUFFER_ROWS = 3
 
     def __init__(
         self,
@@ -91,17 +94,15 @@ class VirtualGridManager(QObject):
         self._update_container_height()
 
     def update_layout(self) -> None:
-        """Recalculate column count from current width; reposition labels if columns changed."""
+        """Recalculate column count from current width; reposition labels."""
         available_width = self._get_available_width()
         new_columns = self.calculate_columns(available_width)
         if new_columns != self._columns:
             self._columns = new_columns
             self._update_container_height()
-            self._reposition_materialized()
-        else:
-            # Column count unchanged but viewport width may have shifted the
-            # centering offset — reposition to keep the grid centered.
-            self._reposition_materialized()
+        # Always reposition: even when columns are unchanged the centering
+        # x-offset may have shifted due to a viewport width change.
+        self._reposition_materialized()
 
     def get_visible_rows(self) -> Tuple[int, int]:
         """First and last visible rows, based on scroll position."""

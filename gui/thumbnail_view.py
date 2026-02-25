@@ -178,7 +178,6 @@ class ThumbnailViewWidget(QFrame):
         self.pending_thumbnails = set()
         self._pixmap_cache: Dict[int, QPixmap] = {}  # original_idx → thumbnail pixmap
         self._thumb_path_cache: Dict[int, str] = {}  # original_idx → thumbnail file path (lazy-loaded)
-        self._pixmap_cache_limit = 5000
         self._initial_thumb_paths: Dict[str, str] = {}  # {source_path: local_thumbnail_path}
         self.current_files = []
         self.all_files = []
@@ -213,7 +212,7 @@ class ThumbnailViewWidget(QFrame):
 
         self._initializeLayout()
         self._widget_pool = []
-        self._pool_size = 300
+        self._pool_size = 150  # ~2x max materialized labels (buffer + visible rows)
 
         self._last_resize_size = self.size()
 

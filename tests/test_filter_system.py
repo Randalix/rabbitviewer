@@ -311,7 +311,6 @@ class TestIsLoadingCachedFolder:
         view._startup_t0 = None
         view._startup_first_scan_progress = False
         view._startup_inline_thumb_count = 0
-        view._startup_first_inline_thumb = False
         view._initial_thumb_paths = {}
         view._path_to_idx = {}
         view._pixmap_cache = {}
@@ -332,7 +331,6 @@ class TestIsLoadingCachedFolder:
         view._startup_t0 = None
         view._startup_first_scan_progress = False
         view._startup_inline_thumb_count = 0
-        view._startup_first_inline_thumb = False
         view._initial_thumb_paths = {}
         view._path_to_idx = {}
         view._pixmap_cache = {}
