@@ -82,6 +82,10 @@ DEFAULT_CONFIG = {
         "show_hotkey_help": {
             "sequence": "?",
             "description": "Show keyboard shortcuts"
+        },
+        "toggle_info_panel": {
+            "sequence": "M",
+            "description": "Open metadata info panel"
         }
     },
     "thumbnail_size": 128,

@@ -10,6 +10,8 @@ from .picture_view import PictureView
 from .thumbnail_view import ThumbnailViewWidget
 from .hotkey_manager import HotkeyManager
 from .inspector_view import InspectorView
+from .metadata_cache import MetadataCache
+from .info_panel import InfoPanelShell, MetadataProvider
 from .filter_dialog import FilterDialog
 from .modal_menu import ModalMenu
 from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
@@ -31,6 +33,7 @@ def _is_video(path: str) -> bool:
 
 class MainWindow(QMainWindow):
     _hover_rating_ready = Signal(str, int)  # (path, rating)
+    _hover_metadata_ready = Signal(str)  # path — emitted after cache populated
 
     def __init__(self, config_manager, socket_client: ThumbnailSocketClient):
         super().__init__()
@@ -54,6 +57,9 @@ class MainWindow(QMainWindow):
         self.current_hovered_image = None
         self.inspector_views: List[InspectorView] = []
         self._inspector_slot = 0
+        self.metadata_cache = MetadataCache(self.socket_client)
+        self.info_panels: List[InfoPanelShell] = []
+        self._info_panel_slot = 0
 
         self._setup_thumbnail_view()
 
@@ -115,6 +121,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_view.thumbnailLeft.connect(self._on_thumbnail_left)
         self.thumbnail_view.filtersApplied.connect(self._on_filters_applied)
         self._hover_rating_ready.connect(self._on_hover_rating_ready)
+        self._hover_metadata_ready.connect(self._on_hover_metadata_ready)
 
     def _handle_benchmark_result(self, operation: str, time: float):
         logging.info(f"Benchmark - {operation}: {time:.3f} seconds")
@@ -138,12 +145,17 @@ class MainWindow(QMainWindow):
                 message=path,
                 section=StatusSection.FILEPATH,
             ))
+        # Notify info panels immediately (reads from cache, may be stale/empty)
+        for panel in self.info_panels:
+            panel.on_thumbnail_hovered(path)
         self._hover_prefetch_path = path
         self._hover_prefetch_timer.start()
 
     def _on_thumbnail_left(self):
         if self._is_detail_view_active():
             return
+        for panel in self.info_panels:
+            panel.on_thumbnail_left()
         # Defer clear: if cursor enters another thumbnail within 100 ms the
         # timer is cancelled in _on_thumbnail_hovered, avoiding flicker.
         self._hover_clear_timer.start()
@@ -165,11 +177,12 @@ class MainWindow(QMainWindow):
         if not self.socket_client:
             return
         try:
-            resp = self.socket_client.get_metadata_batch([path])
+            result = self.metadata_cache.fetch_and_cache([path])
             rating = 0
-            if resp and path in resp.metadata:
-                rating = resp.metadata[path].get("rating", 0) or 0
+            if path in result:
+                rating = result[path].get("rating", 0) or 0
             self._hover_rating_ready.emit(path, int(rating))
+            self._hover_metadata_ready.emit(path)
         except Exception as e:
             logging.debug(f"Hover rating fetch failed for {path}: {e}")
 
@@ -189,6 +202,11 @@ class MainWindow(QMainWindow):
                 message=str(rating),
                 section=StatusSection.RATING,
             ))
+
+    def _on_hover_metadata_ready(self, path: str):
+        """Refresh info panels after the background fetch populated the cache."""
+        for panel in self.info_panels:
+            panel.refresh_if_showing(path)
 
     def _prefetch_view_image_async(self, path: str):
         if not self.socket_client or not path:
@@ -232,6 +250,26 @@ class MainWindow(QMainWindow):
             return  # already removed by closeEvent teardown loop
         if not self.inspector_views:
             self._inspector_slot = 0
+
+    def _open_info_panel(self):
+        """Create and show a new metadata info panel."""
+        provider = MetadataProvider(self.metadata_cache)
+        panel = InfoPanelShell(provider, self.metadata_cache,
+                               panel_index=self._info_panel_slot,
+                               config_manager=self.config_manager)
+        self._info_panel_slot += 1
+        self.info_panels.append(panel)
+        panel.closed.connect(lambda: self._on_info_panel_closed(panel))
+        panel.show()
+        logging.info("Opened new Info panel.")
+
+    def _on_info_panel_closed(self, panel):
+        try:
+            self.info_panels.remove(panel)
+        except ValueError:
+            return
+        if not self.info_panels:
+            self._info_panel_slot = 0
 
     def open_filter_dialog(self):
         """Create and show the filter dialog."""
@@ -344,10 +382,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_gui_server'):
             self._gui_server.stop()
 
-        # Close any other windows like inspectors
+        # Close any other windows like inspectors and info panels
         for inspector in list(self.inspector_views):
             inspector.close()
-        self.inspector_views.clear()  # safety net: closed signal may not fire for all inspectors
+        self.inspector_views.clear()
+        for panel in list(self.info_panels):
+            panel.close()
+        self.info_panels.clear()
         settings = QSettings("RabbitViewer", "MainWindow")
         settings.setValue("geometry", self.saveGeometry())
         settings.sync()
@@ -393,6 +434,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("undo_selection", self.selection_history.undo)
         self.hotkey_manager.add_action("redo_selection", self.selection_history.redo)
         self.hotkey_manager.add_action("show_hotkey_help", self._toggle_hotkey_help)
+        self.hotkey_manager.add_action("toggle_info_panel", self._open_info_panel)
 
     def _toggle_hotkey_help(self):
         """Toggle the keyboard shortcuts overlay."""
@@ -484,13 +526,15 @@ class MainWindow(QMainWindow):
             logging.error(f"Exception when opening Picture View: {e}", exc_info=True)
             
     def _handle_close_or_quit(self):
-        """Cascade: close media view → close last inspector → quit."""
+        """Cascade: close media view → close last inspector → close last info panel → quit."""
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             self.close_picture_view()
         elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
             self.close_video_view()
         elif self.inspector_views:
             self.inspector_views[-1].close()
+        elif self.info_panels:
+            self.info_panels[-1].close()
         else:
             self.close()
 
