@@ -1,9 +1,12 @@
 # scripts/script_api.py
+import itertools
 import logging
 import time
 from pathlib import Path
 from typing import List, Optional, Set, Dict
-from core.event_system import event_system, EventType, StatusMessageEventData, StatusSection
+from core.event_system import event_system, EventType, StatusMessageEventData, StatusSection, ThumbnailOverlayEventData
+
+_overlay_id_counter = itertools.count()
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand
 from core.priority import Priority
 
@@ -294,6 +297,34 @@ class ScriptAPI:
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message="Failed to set rating for images.", timeout=5000
             ))
+
+    def show_overlay(self, image_paths: List[str], renderer: str,
+                     params: dict = None, position: str = "center",
+                     duration: int = 1500, overlay_id: str = None) -> None:
+        """duration=None for permanent overlays."""
+        overlay_id = overlay_id or f"{renderer}_{next(_overlay_id_counter)}"
+        event_system.publish(ThumbnailOverlayEventData(
+            event_type=EventType.THUMBNAIL_OVERLAY,
+            source="script_api",
+            timestamp=time.time(),
+            action="show",
+            paths=list(image_paths),
+            overlay_id=overlay_id,
+            renderer_name=renderer,
+            params=params or {},
+            position=position,
+            duration=duration,
+        ))
+
+    def remove_overlay(self, image_paths: List[str], overlay_id: str) -> None:
+        event_system.publish(ThumbnailOverlayEventData(
+            event_type=EventType.THUMBNAIL_OVERLAY,
+            source="script_api",
+            timestamp=time.time(),
+            action="remove",
+            paths=list(image_paths),
+            overlay_id=overlay_id,
+        ))
 
     def _update_status_bar_rating_if_visible(self, image_paths: List[str], rating: int) -> None:
         """If the currently displayed image was just rated, push the new rating to the status bar."""

@@ -1,6 +1,6 @@
 from PySide6.QtCore import QObject, QPointF
 from typing import Dict, List, Callable, Optional, Set, FrozenSet
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import deque
 from enum import Enum
 import logging
@@ -55,6 +55,9 @@ class EventType(Enum):
     RANGE_SELECTION_START = "range_selection_start"
     RANGE_SELECTION_END = "range_selection_end"
     TOGGLE_INSPECTOR = "toggle_inspector"
+
+    # Overlay events
+    THUMBNAIL_OVERLAY = "thumbnail_overlay"
 
     # Status messages
     STATUS_MESSAGE = "status_message"
@@ -145,6 +148,16 @@ class SelectionChangedEventData(EventData):
     selected_paths: FrozenSet[str]
 
 @dataclass
+class ThumbnailOverlayEventData(EventData):
+    action: str  # "show" or "remove"
+    paths: list
+    overlay_id: str
+    renderer_name: str = ""
+    params: dict = field(default_factory=dict)
+    position: str = "center"
+    duration: Optional[int] = None  # ms; None = permanent
+
+@dataclass
 class DaemonNotificationEventData(EventData):
     notification_type: str
     data: dict  # intentional: loose contract — daemon payloads vary by notification_type
@@ -152,7 +165,7 @@ class DaemonNotificationEventData(EventData):
 
 # High-frequency events that are not appended to history to avoid evicting
 # genuinely useful events and to reduce lock hold time.
-_EPHEMERAL_EVENT_TYPES: frozenset = frozenset({EventType.INSPECTOR_UPDATE})
+_EPHEMERAL_EVENT_TYPES: frozenset = frozenset({EventType.INSPECTOR_UPDATE, EventType.THUMBNAIL_OVERLAY})
 
 
 class EventSystem(QObject):
