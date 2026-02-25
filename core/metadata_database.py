@@ -48,6 +48,7 @@ class MetadataDatabase:
                 
                 # Enable Write-Ahead Logging for better concurrency
                 cursor.execute("PRAGMA journal_mode=WAL;")
+                cursor.execute("PRAGMA foreign_keys=ON;")
                 
                 # Create metadata table
                 cursor.execute('''
@@ -108,7 +109,27 @@ class MetadataDatabase:
                 # drop their indexes to reduce write overhead.
                 cursor.execute('DROP INDEX IF EXISTS idx_thumbnail_path')
                 cursor.execute('DROP INDEX IF EXISTS idx_view_image_path')
-                
+
+                # Tag system: normalized junction table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS tags (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL,
+                        kind TEXT NOT NULL DEFAULT 'keyword'
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS image_tags (
+                        file_path TEXT NOT NULL,
+                        tag_id INTEGER NOT NULL,
+                        PRIMARY KEY (file_path, tag_id),
+                        FOREIGN KEY (file_path) REFERENCES image_metadata(file_path) ON DELETE CASCADE,
+                        FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_file ON image_tags(file_path)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id)')
+
                 self.conn.commit()
                 
                 logging.info(f"Metadata database initialized: {self.db_path}")
@@ -398,6 +419,17 @@ class MetadataDatabase:
 
                 # Color space
                 metadata['color_space'] = data.get('ColorSpace')
+
+                # Extract keywords/tags from XMP:Subject and IPTC:Keywords
+                keywords = set()
+                for field in ('Subject', 'Keywords'):
+                    val = data.get(field)
+                    if isinstance(val, list):
+                        keywords.update(str(v) for v in val if v)
+                    elif isinstance(val, str) and val:
+                        keywords.add(val)
+                if keywords:
+                    metadata['_keywords'] = list(keywords)
 
                 # Store full EXIF data
                 metadata['exif_data'] = data
@@ -711,10 +743,16 @@ class MetadataDatabase:
                 
                 self.conn.commit()
                 logging.debug(f"Committed full metadata for {file_path}. Rows affected: {cursor.rowcount}")
-                
+
         except sqlite3.Error as e:
             self.conn.rollback()
             logging.error(f"Error storing metadata for {file_path}: {e}", exc_info=True)
+
+        # Populate tag junction table from EXIF keywords (outside the main
+        # transaction so a tag-write failure doesn't roll back metadata).
+        exif_keywords = metadata.get('_keywords')
+        if exif_keywords:
+            self.add_image_tags(file_path, exif_keywords)
 
     def set_rating(self, file_path: str, rating: int) -> bool:
         """
@@ -876,9 +914,10 @@ class MetadataDatabase:
             logging.error(f"Error searching by camera: {e}")
             return []
             
-    def get_filtered_file_paths(self, text_filter: str, star_states: List[bool]) -> List[str]:
+    def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
+                               tag_names: Optional[List[str]] = None) -> List[str]:
         """
-        Gets file paths that match the text and star filters
+        Gets file paths that match the text, star, and tag filters
         by performing the filtering directly within the database.
         """
         try:
@@ -886,7 +925,7 @@ class MetadataDatabase:
                 cursor = self.conn.cursor()
 
                 query = "SELECT file_path FROM image_metadata WHERE 1=1"
-                params = []
+                params: list = []
 
                 # Add text filter
                 if text_filter:
@@ -902,6 +941,16 @@ class MetadataDatabase:
                 elif not enabled_ratings:
                     # If no ratings are selected, match no files
                     query += " AND 1=0"
+
+                # Add tag filter
+                if tag_names:
+                    tag_placeholders = ", ".join("?" for _ in tag_names)
+                    query += f""" AND file_path IN (
+                        SELECT it.file_path FROM image_tags it
+                        JOIN tags t ON t.id = it.tag_id
+                        WHERE t.name IN ({tag_placeholders})
+                    )"""
+                    params.extend(tag_names)
 
                 cursor.execute(query, params)
                 results = cursor.fetchall()
@@ -1119,6 +1168,152 @@ class MetadataDatabase:
         except sqlite3.Error as e:
             logging.error(f"Error in move_records: {e}", exc_info=True)
         return updated
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  Tag CRUD
+    # ──────────────────────────────────────────────────────────────────────
+
+    def get_or_create_tag(self, name: str, kind: str = 'keyword') -> int:
+        """Returns the tag id, creating the row if needed. Caller must hold _lock."""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT id FROM tags WHERE name = ?', (name,))
+        row = cursor.fetchone()
+        if row:
+            return row[0]
+        cursor.execute('INSERT INTO tags (name, kind) VALUES (?, ?)', (name, kind))
+        return cursor.lastrowid
+
+    def add_image_tags(self, file_path: str, tag_names: List[str]) -> None:
+        """Adds tags to an image without removing existing ones."""
+        if not tag_names:
+            return
+        try:
+            with self._lock:
+                with self.conn:
+                    for name in tag_names:
+                        tag_id = self.get_or_create_tag(name)
+                        self.conn.execute(
+                            'INSERT OR IGNORE INTO image_tags (file_path, tag_id) VALUES (?, ?)',
+                            (file_path, tag_id),
+                        )
+        except sqlite3.Error as e:
+            logging.error(f"Error adding tags for {file_path}: {e}")
+
+    def remove_image_tags(self, file_path: str, tag_names: List[str]) -> None:
+        """Removes specific tags from an image."""
+        if not tag_names:
+            return
+        try:
+            with self._lock:
+                with self.conn:
+                    placeholders = ','.join('?' for _ in tag_names)
+                    self.conn.execute(f'''
+                        DELETE FROM image_tags
+                        WHERE file_path = ?
+                          AND tag_id IN (SELECT id FROM tags WHERE name IN ({placeholders}))
+                    ''', [file_path] + list(tag_names))
+        except sqlite3.Error as e:
+            logging.error(f"Error removing tags for {file_path}: {e}")
+
+    def set_image_tags(self, file_path: str, tag_names: List[str]) -> None:
+        """Replaces all tags for an image with the given list."""
+        try:
+            with self._lock:
+                with self.conn:
+                    self.conn.execute('DELETE FROM image_tags WHERE file_path = ?', (file_path,))
+                    for name in tag_names:
+                        tag_id = self.get_or_create_tag(name)
+                        self.conn.execute(
+                            'INSERT OR IGNORE INTO image_tags (file_path, tag_id) VALUES (?, ?)',
+                            (file_path, tag_id),
+                        )
+        except sqlite3.Error as e:
+            logging.error(f"Error setting tags for {file_path}: {e}")
+
+    def batch_set_tags(self, file_paths: List[str], tag_names: List[str]) -> bool:
+        """Adds tags to multiple images in a single transaction."""
+        if not file_paths or not tag_names:
+            return False
+        try:
+            with self._lock:
+                with self.conn:
+                    tag_ids = [self.get_or_create_tag(name) for name in tag_names]
+                    for fp in file_paths:
+                        for tid in tag_ids:
+                            self.conn.execute(
+                                'INSERT OR IGNORE INTO image_tags (file_path, tag_id) VALUES (?, ?)',
+                                (fp, tid),
+                            )
+            return True
+        except sqlite3.Error as e:
+            logging.error(f"Error in batch_set_tags: {e}")
+            return False
+
+    def batch_remove_tags(self, file_paths: List[str], tag_names: List[str]) -> bool:
+        """Removes specific tags from multiple images in a single transaction."""
+        if not file_paths or not tag_names:
+            return False
+        try:
+            with self._lock:
+                with self.conn:
+                    tag_placeholders = ','.join('?' for _ in tag_names)
+                    file_placeholders = ','.join('?' for _ in file_paths)
+                    self.conn.execute(f'''
+                        DELETE FROM image_tags
+                        WHERE file_path IN ({file_placeholders})
+                          AND tag_id IN (SELECT id FROM tags WHERE name IN ({tag_placeholders}))
+                    ''', list(file_paths) + list(tag_names))
+            return True
+        except sqlite3.Error as e:
+            logging.error(f"Error in batch_remove_tags: {e}")
+            return False
+
+    def get_image_tags(self, file_path: str) -> List[str]:
+        """Returns tag names for a single image."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT t.name FROM tags t
+                    JOIN image_tags it ON it.tag_id = t.id
+                    WHERE it.file_path = ?
+                    ORDER BY t.name
+                ''', (file_path,))
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logging.error(f"Error getting tags for {file_path}: {e}")
+            return []
+
+    def get_all_tags(self, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Returns all tags as [{id, name, kind}], optionally filtered by kind."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                if kind:
+                    cursor.execute('SELECT id, name, kind FROM tags WHERE kind = ? ORDER BY name', (kind,))
+                else:
+                    cursor.execute('SELECT id, name, kind FROM tags ORDER BY name')
+                return [{'id': r[0], 'name': r[1], 'kind': r[2]} for r in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logging.error(f"Error getting all tags: {e}")
+            return []
+
+    def get_directory_tags(self, directory_path: str) -> List[Dict[str, Any]]:
+        """Returns tags used by images under a directory (for autocomplete prioritization)."""
+        try:
+            search_path = os.path.join(directory_path, '')
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT DISTINCT t.id, t.name, t.kind FROM tags t
+                    JOIN image_tags it ON it.tag_id = t.id
+                    WHERE it.file_path LIKE ?
+                    ORDER BY t.name
+                ''', (search_path + '%',))
+                return [{'id': r[0], 'name': r[1], 'kind': r[2]} for r in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logging.error(f"Error getting directory tags for {directory_path}: {e}")
+            return []
 
     def close(self):
         """Closes the database connection."""

@@ -168,10 +168,48 @@ class GetFilteredFilePathsRequest(Request):
     command: str = "get_filtered_file_paths"
     text_filter: str = ""
     star_states: List[bool] = dataclasses.field(default_factory=list)
+    tag_names: List[str] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class GetFilteredFilePathsResponse(Response):
     paths: List[str] = dataclasses.field(default_factory=list)
+
+# --- Tags ---
+@dataclasses.dataclass
+class SetTagsRequest(Request):
+    command: str = "set_tags"
+    image_paths: List[str] = dataclasses.field(default_factory=list)
+    tags: List[str] = dataclasses.field(default_factory=list)
+
+@dataclasses.dataclass
+class RemoveTagsRequest(Request):
+    command: str = "remove_tags"
+    image_paths: List[str] = dataclasses.field(default_factory=list)
+    tags: List[str] = dataclasses.field(default_factory=list)
+
+@dataclasses.dataclass
+class TagInfo(Message):
+    name: str = ""
+    kind: str = "keyword"
+
+@dataclasses.dataclass
+class GetTagsRequest(Request):
+    command: str = "get_tags"
+    directory_path: str = ""
+
+@dataclasses.dataclass
+class GetTagsResponse(Response):
+    directory_tags: List[TagInfo] = dataclasses.field(default_factory=list)
+    global_tags: List[TagInfo] = dataclasses.field(default_factory=list)
+
+@dataclasses.dataclass
+class GetImageTagsRequest(Request):
+    command: str = "get_image_tags"
+    image_paths: List[str] = dataclasses.field(default_factory=list)
+
+@dataclasses.dataclass
+class GetImageTagsResponse(Response):
+    tags: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
 
 @dataclasses.dataclass
 class Notification(Message):

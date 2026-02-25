@@ -86,6 +86,10 @@ DEFAULT_CONFIG = {
         "toggle_info_panel": {
             "sequence": "M",
             "description": "Open metadata info panel"
+        },
+        "menu:tags": {
+            "sequence": "T",
+            "description": "Open tags menu"
         }
     },
     "thumbnail_size": 128,

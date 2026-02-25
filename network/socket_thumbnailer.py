@@ -45,6 +45,10 @@ class ThumbnailSocketServer:
             "get_directory_files":   self._handle_get_directory_files,
             "move_records":          self._handle_move_records,
             "run_tasks":             self._handle_run_tasks,
+            "set_tags":              self._handle_set_tags,
+            "remove_tags":           self._handle_remove_tags,
+            "get_tags":              self._handle_get_tags,
+            "get_image_tags":        self._handle_get_image_tags,
         }
 
         self.directory_scanner = DirectoryScanner(thumbnail_manager, thumbnail_manager.config_manager)
@@ -368,10 +372,9 @@ class ThumbnailSocketServer:
 
     def _handle_get_filtered_file_paths(self, request_data: dict) -> protocol.Response:
         req = protocol.GetFilteredFilePathsRequest.model_validate(request_data)
-        # This is a simplification. A truly robust implementation would wait for metadata
-        # extraction to complete. For now, we proceed with what's in the DB.
         visible_paths = self.thumbnail_manager.metadata_db.get_filtered_file_paths(
-            req.text_filter, req.star_states
+            req.text_filter, req.star_states,
+            tag_names=req.tag_names if req.tag_names else None,
         )
         return protocol.GetFilteredFilePathsResponse(paths=visible_paths)
 
@@ -517,6 +520,56 @@ class ThumbnailSocketServer:
         if not queued:
             return protocol.ErrorResponse(message=f"Failed to queue compound task: {task_id}")
         return protocol.RunTasksResponse(task_id=task_id, queued_count=len(req.operations))
+
+    def _handle_set_tags(self, request_data: dict) -> protocol.Response:
+        req = protocol.SetTagsRequest.model_validate(request_data)
+        db = self.thumbnail_manager.metadata_db
+        success = db.batch_set_tags(req.image_paths, req.tags)
+        if success:
+            for path in req.image_paths:
+                all_tags = db.get_image_tags(path)
+                self.thumbnail_manager.render_manager.submit_task(
+                    f"write_tags::{path}",
+                    Priority.NORMAL,
+                    self.thumbnail_manager._write_tags_to_file,
+                    path, all_tags,
+                    task_type=TaskType.SIMPLE,
+                )
+            return protocol.Response(message="Tags updated and queued for file write.")
+        return protocol.ErrorResponse(message="Failed to update tags in database.")
+
+    def _handle_remove_tags(self, request_data: dict) -> protocol.Response:
+        req = protocol.RemoveTagsRequest.model_validate(request_data)
+        db = self.thumbnail_manager.metadata_db
+        success = db.batch_remove_tags(req.image_paths, req.tags)
+        if success:
+            for path in req.image_paths:
+                all_tags = db.get_image_tags(path)
+                self.thumbnail_manager.render_manager.submit_task(
+                    f"write_tags::{path}",
+                    Priority.NORMAL,
+                    self.thumbnail_manager._write_tags_to_file,
+                    path, all_tags,
+                    task_type=TaskType.SIMPLE,
+                )
+            return protocol.Response(message="Tags removed and queued for file write.")
+        return protocol.ErrorResponse(message="Failed to remove tags from database.")
+
+    def _handle_get_tags(self, request_data: dict) -> protocol.Response:
+        req = protocol.GetTagsRequest.model_validate(request_data)
+        db = self.thumbnail_manager.metadata_db
+        all_tags = db.get_all_tags()
+        dir_tags = db.get_directory_tags(req.directory_path) if req.directory_path else []
+        return protocol.GetTagsResponse(
+            directory_tags=[protocol.TagInfo(name=t['name'], kind=t['kind']) for t in dir_tags],
+            global_tags=[protocol.TagInfo(name=t['name'], kind=t['kind']) for t in all_tags],
+        )
+
+    def _handle_get_image_tags(self, request_data: dict) -> protocol.Response:
+        req = protocol.GetImageTagsRequest.model_validate(request_data)
+        db = self.thumbnail_manager.metadata_db
+        result = {path: db.get_image_tags(path) for path in req.image_paths}
+        return protocol.GetImageTagsResponse(tags=result)
 
     def send_notification(self, notification: protocol.Notification):
         """Sends a JSON notification to all registered listener clients."""

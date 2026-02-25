@@ -242,14 +242,40 @@ class ThumbnailSocketClient:
         request = protocol.GetMetadataBatchRequest(image_paths=image_paths, priority=priority)
         return self._send_request(request, protocol.GetMetadataBatchResponse)
 
-    def get_filtered_file_paths(self, text_filter: str, star_states: List[bool]) -> Optional[protocol.GetFilteredFilePathsResponse]:
+    def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
+                               tag_names: Optional[List[str]] = None) -> Optional[protocol.GetFilteredFilePathsResponse]:
         """Ask the daemon to return a filtered set of file paths."""
         protocol = _lazy_protocol()
         request = protocol.GetFilteredFilePathsRequest(
-            text_filter=text_filter, 
-            star_states=star_states
+            text_filter=text_filter,
+            star_states=star_states,
+            tag_names=tag_names or [],
         )
         return self._send_request(request, protocol.GetFilteredFilePathsResponse)
+
+    def set_tags(self, image_paths: List[str], tags: List[str]) -> Optional[protocol.Response]:
+        """Adds tags to the given images."""
+        protocol = _lazy_protocol()
+        request = protocol.SetTagsRequest(image_paths=image_paths, tags=tags)
+        return self._send_request(request, protocol.Response)
+
+    def remove_tags(self, image_paths: List[str], tags: List[str]) -> Optional[protocol.Response]:
+        """Removes tags from the given images."""
+        protocol = _lazy_protocol()
+        request = protocol.RemoveTagsRequest(image_paths=image_paths, tags=tags)
+        return self._send_request(request, protocol.Response)
+
+    def get_tags(self, directory_path: str = "") -> Optional[protocol.GetTagsResponse]:
+        """Fetches all tags, with directory-scoped tags separated for autocomplete."""
+        protocol = _lazy_protocol()
+        request = protocol.GetTagsRequest(directory_path=directory_path)
+        return self._send_request(request, protocol.GetTagsResponse)
+
+    def get_image_tags(self, image_paths: List[str]) -> Optional[protocol.GetImageTagsResponse]:
+        """Gets the tags currently assigned to each image."""
+        protocol = _lazy_protocol()
+        request = protocol.GetImageTagsRequest(image_paths=image_paths)
+        return self._send_request(request, protocol.GetImageTagsResponse)
 
     def move_records(self, moves: List[protocol.MoveRecord]) -> Optional[protocol.MoveRecordsResponse]:
         """Tell the daemon to update file_path entries for a batch of moved files."""

@@ -298,6 +298,35 @@ class ScriptAPI:
                 timestamp=time.time(), message="Failed to set rating for images.", timeout=5000
             ))
 
+    def set_tags_for_images(self, image_paths: List[str], tags: List[str]) -> None:
+        """Adds tags to the given images via the daemon."""
+        if not image_paths or not tags:
+            return
+        response = self.socket_client.set_tags(image_paths, tags)
+        if response and response.status == "success":
+            logging.debug(f"set_tags_for_images: {len(tags)} tags set on {len(image_paths)} images.")
+        else:
+            logging.error(f"ScriptAPI: Failed to set tags. Response: {response}")
+
+    def remove_tags_from_images(self, image_paths: List[str], tags: List[str]) -> None:
+        """Removes tags from the given images via the daemon."""
+        if not image_paths or not tags:
+            return
+        response = self.socket_client.remove_tags(image_paths, tags)
+        if response and response.status == "success":
+            logging.debug(f"remove_tags_from_images: {len(tags)} tags removed from {len(image_paths)} images.")
+        else:
+            logging.error(f"ScriptAPI: Failed to remove tags. Response: {response}")
+
+    def get_image_tags(self, image_paths: List[str]) -> dict:
+        """Returns {path: [tag_names]} for the given images."""
+        if not image_paths:
+            return {}
+        response = self.socket_client.get_image_tags(image_paths)
+        if response and response.status == "success":
+            return response.tags
+        return {}
+
     def show_overlay(self, image_paths: List[str], renderer: str,
                      params: dict = None, position: str = "center",
                      duration: int = 1500, overlay_id: str = None) -> None:

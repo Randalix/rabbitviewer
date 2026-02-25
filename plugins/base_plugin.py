@@ -247,6 +247,27 @@ class BasePlugin(ABC):
             logging.error("Failed to write rating to %s: %s", file_path, e)
             return False
 
+    def write_tags(self, file_path: str, tag_names: list) -> bool:
+        """Writes tags to the file's XMP:Subject metadata via the persistent exiftool process.
+
+        Replaces the entire Subject list to keep DB and file in sync.
+        """
+        try:
+            args = ["-XMP:Subject="]  # clear existing
+            for tag in tag_names:
+                args.append(f"-XMP:Subject+={tag}")
+            args.extend(["-overwrite_original", file_path])
+            output = self._get_exiftool().execute(args)
+            if b"image files updated" in output and b"0 image files updated" not in output:
+                logging.info("Wrote %d tags to %s.", len(tag_names), file_path)
+                return True
+            logging.error("exiftool reported no update writing tags to %s: %s",
+                          file_path, output.decode("utf-8", "replace").strip())
+            return False
+        except (RuntimeError, TimeoutError) as e:
+            logging.error("Failed to write tags to %s: %s", file_path, e)
+            return False
+
     def _apply_orientation(self, img: Image.Image, orientation: int) -> Image.Image:
         """Apply rotation/flip to a PIL Image based on the EXIF Orientation tag value."""
         T = Image.Transpose

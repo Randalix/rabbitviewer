@@ -1,4 +1,5 @@
 import os
+import stat
 import logging
 import time
 import fnmatch
@@ -35,32 +36,33 @@ class DirectoryScanner:
         )
 
     def is_supported_file(self, file_path: str) -> bool:
-        """Check if file is supported by any plugin based on its name and extension."""
+        """Single-stat check: regular file, not ignored, supported extension, big enough.
+
+        Combines the is-file and min-size checks into one os.stat() call so
+        NAS paths only incur a single network round-trip per candidate.
+        """
         filename = os.path.basename(file_path)
         _, ext = os.path.splitext(file_path)
 
-        # Check ignore patterns first (fastest check)
+        # Cheap string checks first — no I/O.
         for pattern in self.ignore_patterns:
             if fnmatch.fnmatch(filename, pattern):
-                logging.debug(f"Skipping file {file_path}: matches ignore pattern '{pattern}'")
                 return False
 
-        # Check file extension
         if ext.lower() not in self._supported_extensions:
             return False
 
-        # Check minimum file size — reject tiny files (web icons, favicons, etc.)
-        # so they never enter the GUI model.  Without this check the scanner
-        # discovers them and sends scan_progress to the GUI, but _passes_pre_checks
-        # later rejects them, leaving ghost placeholders with no DB record.
+        # Single stat() for both is-regular-file and min-size.
         # why: intentional double-stat with _passes_pre_checks — scanner and task
         # factory run in different contexts; the scanner gate prevents model pollution
         # while the task factory gate handles files submitted outside the scanner path.
         try:
-            if os.path.getsize(file_path) < self.min_file_size:
-                logging.debug(f"File too small, skipping: {file_path}")
-                return False
+            st = os.stat(file_path)
         except OSError:
+            return False
+        if not stat.S_ISREG(st.st_mode):
+            return False
+        if st.st_size < self.min_file_size:
             return False
 
         return True
@@ -82,7 +84,7 @@ class DirectoryScanner:
             try:
                 for filename in os.listdir(directory_path):
                     full_path = os.path.join(directory_path, filename)
-                    if os.path.isfile(full_path) and self.is_supported_file(full_path):
+                    if self.is_supported_file(full_path):
                         found_files.append(full_path)
             except OSError as e:
                 logging.error(f"Error scanning directory {directory_path}: {e}")
@@ -132,7 +134,7 @@ class DirectoryScanner:
                 for filename in files:
                     try:
                         full_path = os.path.join(root, filename)
-                        if os.path.isfile(full_path) and self.is_supported_file(full_path):
+                        if self.is_supported_file(full_path):
                             current_batch.append(full_path)
                             if len(current_batch) >= batch_size:
                                 total_yielded += len(current_batch)

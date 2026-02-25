@@ -224,6 +224,7 @@ class ThumbnailViewWidget(QFrame):
         # Filter state
         self._current_filter = ""
         self._current_star_filter = [True, True, True, True, True, True]
+        self._current_tag_filter: List[str] = []
         self._hidden_indices = set()
         self._visible_to_original_mapping = {}
         self._original_to_visible_mapping = {}
@@ -1409,10 +1410,16 @@ class ThumbnailViewWidget(QFrame):
         self._current_star_filter = star_states
         self._filter_update_timer.start()
 
+    def apply_tag_filter(self, tag_names: list):
+        """Sets the tag filter and applies all filters."""
+        self._current_tag_filter = list(tag_names)
+        self._filter_update_timer.start()
+
     def clear_filter(self):
         """Reset all filters to defaults."""
         self._current_filter = ""
         self._current_star_filter = [True, True, True, True, True, True]
+        self._current_tag_filter = []
         self._hidden_indices = set()
         self._filter_update_timer.start()
 
@@ -1448,12 +1455,15 @@ class ThumbnailViewWidget(QFrame):
         # the background call with half-old / half-new state.
         text_filter = self._current_filter
         star_filter = list(self._current_star_filter)
-        self._viewport_executor.submit(self._fetch_filtered_paths, text_filter, star_filter)
+        tag_filter = list(self._current_tag_filter)
+        self._viewport_executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter)
 
-    def _fetch_filtered_paths(self, text_filter: str, star_filter: list):
+    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list):
         """Runs on _viewport_executor thread — never blocks the GUI."""
         try:
-            response = self.socket_client.get_filtered_file_paths(text_filter, star_filter)
+            response = self.socket_client.get_filtered_file_paths(
+                text_filter, star_filter, tag_names=tag_filter or None
+            )
             if response and response.status == "success":
                 self._filtered_paths_ready.emit(set(response.paths))
             else:
@@ -1752,4 +1762,8 @@ class ThumbnailViewWidget(QFrame):
     def filter_affects_rating(self) -> bool:
         """Return True if the active filter could change visibility based on image rating."""
         return not all(self._current_star_filter)
+
+    def has_active_tag_filter(self) -> bool:
+        """Return True if a tag filter is active."""
+        return bool(self._current_tag_filter)
 

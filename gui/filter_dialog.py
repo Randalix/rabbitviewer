@@ -8,30 +8,30 @@ from gui.components.star_button import StarButton, StarDragContext
 
 class FilterDialog(QDialog):
     """Pop-up filter dialog for image search."""
-    
+
     filter_changed = Signal(str)  # Signal emitted when the filter text changes
     stars_changed = Signal(list)  # Signal emitted when the star selection changes
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Filter")
         self.setModal(False)  # Non-modal to allow interaction with the main window
         self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
-        self.resize(400, 150)
-        
+        self.resize(400, 200)
+
         # Debounce timer for text input
         self.debounce_timer = QTimer(self)
         self.debounce_timer.setSingleShot(True)
         self.debounce_timer.setInterval(300) # 300 ms delay
         self.debounce_timer.timeout.connect(self._emit_filter_text)
-        
+
         # Star button states (all active by default)
         # Index 0: 0 stars (no rating), Index 1: 1 star, ..., Index 5: 5 stars
         self.star_states = [True, True, True, True, True, True]
 
         self.setup_ui()
         self.setup_shortcuts()
-        
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
 
@@ -58,11 +58,11 @@ class FilterDialog(QDialog):
         layout.addWidget(self.filter_input)
 
         self.filter_input.setFocus()
-        
+
     def setup_shortcuts(self):
         escape_shortcut = QShortcut(QKeySequence("Esc"), self)
         escape_shortcut.activated.connect(self.close)
-        
+
     def on_filter_changed(self, text):
         self.debounce_timer.start()
 
@@ -98,7 +98,7 @@ class FilterDialog(QDialog):
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self.accept()
+            self.filter_changed.emit(self.filter_input.text())
+            self.hide()
             return
         super().keyPressEvent(event)
-

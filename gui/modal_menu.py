@@ -23,6 +23,7 @@ class MenuNode:
     script: str = ""
     children: list = field(default_factory=list)
     visible: Optional[Callable] = None
+    action: Optional[Callable] = None
 
 
 class ModalMenu(QWidget):
@@ -177,6 +178,10 @@ class ModalMenu(QWidget):
             if item.children:
                 self._breadcrumb.append(item.label)
                 self._show_node(item)
+            elif item.action:
+                logging.debug(f"ModalMenu: running action for '{item.label}'")
+                self._close()
+                item.action()
             elif item.script:
                 logging.debug(f"ModalMenu: running script '{item.script}'")
                 self._close()

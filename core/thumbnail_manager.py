@@ -686,6 +686,30 @@ class ThumbnailManager:
         logger.warning(f"No plugin found or available for format {ext} to write rating for {file_path}")
         return False
 
+    def _write_tags_to_file(self, file_path: str, tag_names: list):
+        """Writes the full tag list to the file's XMP:Subject via the appropriate plugin.
+
+        Mirrors _write_rating_to_file: watchdog suppression, plugin lookup, exiftool write.
+        """
+        if self.watchdog_handler:
+            self.watchdog_handler.ignore_next_modification(file_path)
+
+        if not os.path.exists(file_path):
+            logger.warning(f"File not found, cannot write tags: {file_path}")
+            return False
+
+        ext = os.path.splitext(file_path)[1].lower()
+        plugin = self.plugin_registry.get_plugin_for_format(ext)
+
+        if plugin and plugin.is_available():
+            success = plugin.write_tags(file_path, tag_names)
+            if not success:
+                logger.error(f"Plugin failed to write tags for {file_path}")
+            return success
+
+        logger.warning(f"No plugin found or available for format {ext} to write tags for {file_path}")
+        return False
+
     def get_cached_thumbnail_path(self, md5_hash: str) -> str:
         """Get the path where a thumbnail should be stored."""
         return os.path.join(self.thumbnail_cache_dir, f"{md5_hash}.jpg")

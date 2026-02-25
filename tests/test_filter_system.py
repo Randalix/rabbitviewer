@@ -191,15 +191,35 @@ def _ensure_qt_stubs():
 
     if not hasattr(qtwidgets, "QLineEdit"):
         class _QLineEdit(qtwidgets.QWidget):
-            def __init__(self, *a): pass
+            def __init__(self, *a, **kw): pass
             def setPlaceholderText(self, t): pass
             @property
             def textEdited(self): return MagicMock()
             def setFocus(self): pass
             def selectAll(self): pass
             def text(self): return ""
+            def setText(self, t): pass
             def clear(self): pass
+            def setCompleter(self, c): pass
+            def cursorPosition(self): return 0
+            def setCursorPosition(self, p): pass
         qtwidgets.QLineEdit = _QLineEdit
+
+    if not hasattr(qtwidgets, "QCompleter"):
+        class _QCompleter:
+            PopupCompletion = 0
+            def __init__(self, *a, **kw): pass
+            def setCaseSensitivity(self, v): pass
+            def setCompletionMode(self, m): pass
+            @property
+            def activated(self): return MagicMock()
+        qtwidgets.QCompleter = _QCompleter
+
+    if not hasattr(qtcore, "QStringListModel"):
+        class _QStringListModel:
+            def __init__(self, *a, **kw): pass
+            def setStringList(self, lst): pass
+        qtcore.QStringListModel = _QStringListModel
 
     # Qt namespace constants
     qt = qtcore.Qt
@@ -208,7 +228,7 @@ def _ensure_qt_stubs():
                       ("WindowStaysOnTopHint", 0), ("WA_DeleteOnClose", 0),
                       ("WA_Hover", 0), ("Key_Return", 0), ("Key_Enter", 0),
                       ("QueuedConnection", 0), ("Horizontal", 1),
-                      ("AlignCenter", 0x84)]:
+                      ("AlignCenter", 0x84), ("CaseInsensitive", 0)]:
         if not hasattr(qt, attr):
             setattr(qt, attr, val)
 
@@ -239,6 +259,7 @@ def _make_filter_view(all_files=None, is_loading=False, socket_client=None):
 
     view._current_filter = ""
     view._current_star_filter = [True, True, True, True, True, True]
+    view._current_tag_filter = []
     view._hidden_indices = set()
     view._visible_to_original_mapping = {}
     view._original_to_visible_mapping = {}

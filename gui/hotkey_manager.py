@@ -34,6 +34,7 @@ class HotkeyManager(QObject):
 		self.add_action("previous_image", lambda: event_system.publish(EventData(event_type=EventType.NAVIGATE_PREVIOUS, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("toggle_inspector", lambda: event_system.publish(EventData(event_type=EventType.TOGGLE_INSPECTOR, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("open_filter", lambda: event_system.publish(EventData(event_type=EventType.OPEN_FILTER, source="hotkey_manager", timestamp=time.time())))
+		self.add_action("open_tag_editor", lambda: event_system.publish(EventData(event_type=EventType.OPEN_TAG_EDITOR, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("start_range_selection", self.handle_range_selection_start)
 		self.add_action("show_hotkey_help", lambda: None)  # placeholder; main_window overrides
 		self.add_action("toggle_info_panel", lambda: None)  # placeholder; main_window overrides

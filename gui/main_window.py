@@ -13,6 +13,8 @@ from .inspector_view import InspectorView
 from .metadata_cache import MetadataCache
 from .info_panel import InfoPanelShell, MetadataProvider
 from .filter_dialog import FilterDialog
+from .tag_editor_dialog import TagEditorDialog
+from .tag_filter_dialog import TagFilterDialog
 from .modal_menu import ModalMenu
 from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
@@ -75,6 +77,8 @@ class MainWindow(QMainWindow):
             self.resize(800, 600)
 
         self.filter_dialog = None
+        self.tag_editor_dialog = None
+        self.tag_filter_dialog = None
         self._removed_images = []
 
         QTimer.singleShot(0, self._deferred_init)
@@ -287,7 +291,7 @@ class MainWindow(QMainWindow):
             self.filter_dialog.show()
             self.filter_dialog.raise_()
             self.filter_dialog.activateWindow()
-            
+
     def _handle_filter_changed(self, filter_text: str):
         """Handle filter text changes from the filter dialog."""
         logging.debug(f"Filter changed: {filter_text}")
@@ -303,6 +307,82 @@ class MainWindow(QMainWindow):
             self.thumbnail_view.apply_star_filter(star_states)
         else:
             logging.warning("Stars changed but no thumbnail_view available")
+
+    def _handle_tags_filter_changed(self, tag_names: list):
+        """Handle tag filter changes from the tag filter dialog."""
+        logging.debug(f"Tag filter changed: {tag_names}")
+        if self.thumbnail_view:
+            self.thumbnail_view.apply_tag_filter(tag_names)
+
+    def open_tag_filter(self):
+        """Open or toggle the standalone tag filter dialog."""
+        if not self.tag_filter_dialog:
+            self.tag_filter_dialog = TagFilterDialog(self)
+            self.tag_filter_dialog.tags_changed.connect(self._handle_tags_filter_changed)
+
+        if self.tag_filter_dialog.isVisible():
+            self.tag_filter_dialog.hide()
+            self.tag_filter_dialog.clear_filter()
+            if self.thumbnail_view:
+                self.thumbnail_view.apply_tag_filter([])
+        else:
+            if self.thumbnail_view and self.thumbnail_view.socket_client:
+                dir_path = self.thumbnail_view.current_directory_path or ""
+                tags_resp = self.thumbnail_view.socket_client.get_tags(dir_path)
+                if tags_resp:
+                    dir_tags = [t.name for t in tags_resp.directory_tags] if tags_resp.directory_tags else []
+                    global_tags = [t.name for t in tags_resp.global_tags] if tags_resp.global_tags else []
+                    self.tag_filter_dialog.set_available_tags(dir_tags, global_tags)
+            self.tag_filter_dialog.show()
+            self.tag_filter_dialog.raise_()
+            self.tag_filter_dialog.activateWindow()
+
+    def open_tag_editor(self):
+        """Open the tag assignment popup for selected images."""
+        if not self.thumbnail_view or not self.thumbnail_view.socket_client:
+            return
+        selected = list(self.thumbnail_view._current_selection)
+        if not selected:
+            return
+
+        sc = self.thumbnail_view.socket_client
+
+        if not self.tag_editor_dialog:
+            self.tag_editor_dialog = TagEditorDialog(self)
+            self.tag_editor_dialog.tags_confirmed.connect(self._on_tags_confirmed)
+
+        # Fetch existing tags for the selection and autocomplete lists
+        dir_path = self.thumbnail_view.current_directory_path or ""
+        existing_resp = sc.get_image_tags(selected)
+        tags_resp = sc.get_tags(dir_path)
+
+        # Intersection of tags across all selected images
+        if existing_resp and existing_resp.status == "success" and existing_resp.tags:
+            tag_sets = [set(v) for v in existing_resp.tags.values()]
+            common_tags = sorted(set.intersection(*tag_sets)) if tag_sets else []
+        else:
+            common_tags = []
+
+        dir_tags = [t.name for t in tags_resp.directory_tags] if tags_resp and tags_resp.directory_tags else []
+        global_tags = [t.name for t in tags_resp.global_tags] if tags_resp and tags_resp.global_tags else []
+
+        self.tag_editor_dialog.open_for_images(len(selected), common_tags, dir_tags, global_tags)
+
+    def _on_tags_confirmed(self, tags_to_add: list, tags_to_remove: list):
+        """Handle tag editor confirmation."""
+        if not self.thumbnail_view or not self.thumbnail_view.socket_client:
+            return
+        selected = list(self.thumbnail_view._current_selection)
+        if not selected:
+            return
+        sc = self.thumbnail_view.socket_client
+        if tags_to_add:
+            sc.set_tags(selected, tags_to_add)
+        if tags_to_remove:
+            sc.remove_tags(selected, tags_to_remove)
+        # Reapply filters in case tag filter is active
+        if self.thumbnail_view.has_active_tag_filter():
+            self.thumbnail_view.reapply_filters()
 
     def _on_filters_applied(self):
         """After filter re-applies, refresh UI state for the currently active media."""
@@ -403,6 +483,8 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.REDO_SELECTION, lambda data: self.selection_history.redo())
         event_system.subscribe(EventType.STATUS_MESSAGE, self._handle_status_message)
         event_system.subscribe(EventType.OPEN_FILTER, lambda _: self.open_filter_dialog())
+        event_system.subscribe(EventType.OPEN_TAG_EDITOR, lambda _: self.open_tag_editor())
+        event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
 
     def _handle_status_message(self, event_data: StatusMessageEventData):
         """Route a status message to the appropriate section."""
