@@ -53,6 +53,9 @@ class DirectoryScanner:
         # so they never enter the GUI model.  Without this check the scanner
         # discovers them and sends scan_progress to the GUI, but _passes_pre_checks
         # later rejects them, leaving ghost placeholders with no DB record.
+        # why: intentional double-stat with _passes_pre_checks — scanner and task
+        # factory run in different contexts; the scanner gate prevents model pollution
+        # while the task factory gate handles files submitted outside the scanner path.
         try:
             if os.path.getsize(file_path) < self.min_file_size:
                 logging.debug(f"File too small, skipping: {file_path}")
@@ -148,7 +151,7 @@ class DirectoryScanner:
                 yield current_batch
             elapsed = time.monotonic() - scan_start
             logging.info(f"[chunking] scan_incremental: generator exhausting for '{directory_path}' (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
-        except Exception as e:
+        except Exception as e:  # why: os.walk can raise PermissionError or unexpected filesystem errors; must not abort the generator and stall the SourceJob
             logging.error(f"Error during directory scan of {directory_path}: {e}", exc_info=True)
 
     def scan_incremental_reconcile(self, directory_path: str, recursive: bool,
