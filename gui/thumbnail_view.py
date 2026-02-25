@@ -352,7 +352,7 @@ class ThumbnailViewWidget(QFrame):
             label.hide()
             label.setPixmap(QPixmap())
             label.loaded = False
-            label.selected = False
+            label.setSelected(False)
             self.overlay_manager.remove_all_for_idx(label._original_idx)
             label._original_idx = -1
             # why: cancel any pending inspector-throttle tick so the recycled label
@@ -1102,45 +1102,6 @@ class ThumbnailViewWidget(QFrame):
             "Pending Images": len(self.pending_thumbnails)
         }
 
-    def handleSelection(self, label: ThumbnailLabel, modifiers: Qt.KeyboardModifiers):
-        """Handle selection when user clicks on a thumbnail by publishing a command."""
-        if self.hotkey_range_selection_active:
-            self.hotkey_range_selection_active = False
-            self.setCursor(Qt.ArrowCursor)
-            # The selection was already made by mouseMove, so we just exit the mode.
-            return
-
-        original_idx = self._label_to_original_idx(label)
-        if original_idx is None:
-            logging.warning(f"Clicked label {label.original_path} not found in self.labels.")
-            return
-
-        paths_to_act_on = set()
-        command = None
-
-        if modifiers & Qt.ShiftModifier and self.selection_anchor_index is not None:
-            start_pos = self._original_to_visible_mapping.get(self.selection_anchor_index)
-            end_pos = self._original_to_visible_mapping.get(original_idx)
-
-            if start_pos is not None and end_pos is not None:
-                start, end = min(start_pos, end_pos), max(start_pos, end_pos)
-                for i in range(start, end + 1):
-                    mapped_idx = self._visible_to_original_mapping.get(i)
-                    if mapped_idx is not None:
-                        paths_to_act_on.add(self.all_files[mapped_idx])
-            command = AddToSelectionCommand(paths=paths_to_act_on, source="thumbnail_view", timestamp=time.time())
-        elif modifiers & Qt.ControlModifier:
-            paths_to_act_on = {self.all_files[original_idx]}
-            command = ToggleSelectionCommand(paths=paths_to_act_on, source="thumbnail_view", timestamp=time.time())
-            self.selection_anchor_index = original_idx # Ctrl-click also updates anchor
-        else:
-            paths_to_act_on = {self.all_files[original_idx]}
-            command = ReplaceSelectionCommand(paths=paths_to_act_on, source="thumbnail_view", timestamp=time.time())
-            self.selection_anchor_index = original_idx # Plain click sets the anchor
-
-        if command:
-            event_system.publish(command)
-
     def mouseReleaseEvent(self, event):
         """Handle mouse release events."""
         if event.button() == Qt.LeftButton and self._drag_start_index != -1:
@@ -1205,6 +1166,7 @@ class ThumbnailViewWidget(QFrame):
 
         if command:
             event_system.publish(command)
+            self.selection_anchor_index = end_idx
 
     def _get_indices_in_range(self, start_idx: int, end_idx: int) -> Set[int]:
         """Helper to get all original indices between a start and end index, respecting the visible order."""
@@ -1482,8 +1444,12 @@ class ThumbnailViewWidget(QFrame):
             if state:
                 state.loaded = True
 
-        # Apply selection state
-        label.setSelected(original_idx in self._selected_indices)
+        # Apply selection state — during an active drag, use the preview set
+        # so recycled labels re-appear with the correct highlight.
+        if self._drag_start_index != -1 and self._last_preview_selected:
+            label.setSelected(original_idx in self._last_preview_selected)
+        else:
+            label.setSelected(original_idx in self._selected_indices)
 
         self.labels[original_idx] = label
         return label
