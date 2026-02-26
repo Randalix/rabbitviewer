@@ -32,16 +32,6 @@ def setup_logging(log_level):
     )
 
 
-def _wait_for_socket(client, until_running: bool, timeout: float = 10.0) -> bool:
-    # why: socket file presence is a proxy; a stale file from a crashed daemon
-    # resolves when the new daemon binds the same path
-    deadline = time.time() + timeout
-    while client.is_socket_file_present() != until_running:
-        if time.time() > deadline:
-            return False
-        time.sleep(0.2)
-    return True
-
 def main():
     parser = argparse.ArgumentParser(description="RabbitViewer: A fast image viewer.")
     parser.add_argument('directory', nargs='?', default=None, help='The directory to open.')
@@ -119,13 +109,8 @@ def main():
         )
         log_file.close()
 
-    if not _wait_for_socket(socket_client, until_running=True):
-        msg = "Daemon not available after 10 seconds."
-        if _daemon_log_path:
-            msg += f" See daemon log: {_daemon_log_path}"
-        logging.error(msg)
-        return 1
-
+    # Start notification listener immediately — it retries with backoff
+    # until the daemon socket appears, so daemon lateness is fine.
     notification_listener = NotificationListener(socket_path, event_system)
     notification_listener.start()
     logging.info("Notification listener thread started.")
@@ -147,14 +132,39 @@ def main():
     app.aboutToQuit.connect(notification_listener.stop)
 
     window.show()
-    # why: ensures first paint completes before the daemon request goes out, preventing blank-window flash
     app.processEvents()
     logging.info("[startup] window shown")
 
-    # Kick off directory loading in the next event-loop tick so the empty
-    # window is already on screen when the daemon request goes out.
-    if target_dir:
-        QTimer.singleShot(0, lambda: window.load_directory(target_dir, recursive_scan))
+    # Poll for daemon socket non-blockingly so the window stays responsive.
+    # Once the socket appears, fire load_directory; on timeout, log an error.
+    _poll_deadline = time.time() + 10.0
+    _poll_target_dir = target_dir
+    _poll_recursive = recursive_scan
+
+    def _poll_for_daemon():
+        if socket_client.is_socket_file_present():
+            _daemon_poll.stop()
+            logging.info("[startup] daemon socket ready")
+            if _poll_target_dir:
+                window.load_directory(_poll_target_dir, _poll_recursive)
+            return
+        if time.time() > _poll_deadline:
+            _daemon_poll.stop()
+            msg = "Daemon not available after 10 seconds."
+            if _daemon_log_path:
+                msg += f" See daemon log: {_daemon_log_path}"
+            logging.error(msg)
+
+    _daemon_poll = QTimer()
+    _daemon_poll.setInterval(200)
+    _daemon_poll.timeout.connect(_poll_for_daemon)
+    # If daemon is already running, skip the timer entirely.
+    if socket_client.is_socket_file_present():
+        logging.info("[startup] daemon socket ready")
+        if target_dir:
+            QTimer.singleShot(0, lambda: window.load_directory(target_dir, recursive_scan))
+    else:
+        _daemon_poll.start()
 
     exit_code = app.exec()
 
