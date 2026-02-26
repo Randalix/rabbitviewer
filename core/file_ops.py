@@ -49,7 +49,7 @@ def trash_with_sidecars(file_paths: List[str]) -> Dict[str, Any]:
                     import shutil
                     shutil.move(path, home_trash)
                     succeeded += 1
-                except Exception as fallback_e:
+                except Exception as fallback_e:  # why: shutil.move raises shutil.Error (not OSError) on cross-device failure
                     logger.warning(f"Home trash fallback also failed for {path}: {fallback_e}")
                     failed += 1
                     continue
@@ -57,7 +57,7 @@ def trash_with_sidecars(file_paths: List[str]) -> Dict[str, Any]:
                 logger.warning(f"Failed to trash {path}: {e}")
                 failed += 1
                 continue
-        except Exception as e:
+        except Exception as e:  # why: send2trash raises platform-specific exceptions beyond OSError
             logger.warning(f"Failed to trash {path}: {e}")
             failed += 1
             continue
@@ -67,7 +67,7 @@ def trash_with_sidecars(file_paths: List[str]) -> Dict[str, Any]:
             try:
                 _send2trash(sidecar)
                 logger.debug(f"Trashed sidecar: {sidecar}")
-            except Exception as e:
+            except Exception as e:  # why: sidecar trash failure is non-fatal; continue with remaining files
                 logger.warning(f"Failed to trash sidecar {sidecar}: {e}")
 
     logger.info(f"send2trash: {succeeded} trashed, {failed} failed out of {len(file_paths)}")

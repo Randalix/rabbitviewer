@@ -202,7 +202,7 @@ class TestExiftoolAtomicReplace:
         assert paths[0] in filtered
 
     def test_write_tags_propagates_ignore_to_watcher(self, tmp_env, sample_images):
-        """_write_tags_to_file must call ignore_next_modification on the watcher.
+        """write_tags_to_file must call ignore_next_modification on the watcher.
 
         This is the exact wiring that failed in production: ThumbnailManager was
         created without a watchdog_handler reference, so the ignore call was
@@ -223,7 +223,7 @@ class TestExiftoolAtomicReplace:
         # Wire the back-reference the way the daemon must.
         tm.watchdog_handler = handler
 
-        # Stub the plugin so _write_tags_to_file reaches the ignore call
+        # Stub the plugin so write_tags_to_file reaches the ignore call
         # but doesn't need a real exiftool binary.
         mock_plugin = MagicMock()
         mock_plugin.is_available.return_value = True
@@ -231,7 +231,7 @@ class TestExiftoolAtomicReplace:
         tm.plugin_registry = MagicMock()
         tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
 
-        tm._write_tags_to_file(path, ["animal"])
+        tm.write_tags_to_file(path, ["animal"])
 
         # The watcher must now suppress the exiftool atomic-replace events.
         handler.dispatch(_make_event("deleted", path))
@@ -241,7 +241,7 @@ class TestExiftoolAtomicReplace:
         tm.shutdown()
 
     def test_write_rating_propagates_ignore_to_watcher(self, tmp_env, sample_images):
-        """_write_rating_to_file must call ignore_next_modification on the watcher."""
+        """write_rating_to_file must call ignore_next_modification on the watcher."""
         from core.thumbnail_manager import ThumbnailManager
         db = tmp_env["db"]
         path = sample_images[0]
@@ -261,7 +261,7 @@ class TestExiftoolAtomicReplace:
         tm.plugin_registry = MagicMock()
         tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
 
-        tm._write_rating_to_file(path, 5)
+        tm.write_rating_to_file(path, 5)
 
         handler.dispatch(_make_event("deleted", path))
         handler.dispatch(_make_event("created", path))

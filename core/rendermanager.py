@@ -35,7 +35,7 @@ class RenderManager(QObject):
         self.task_callbacks: Dict[str, List[Callable]] = {}
         self.task_callbacks_lock = threading.Lock()
 
-        # --- NEW: Tracking for active jobs ---
+        # Tracking for active jobs
         self.active_jobs: Dict[str, SourceJob] = {}
         self.active_jobs_lock = threading.Lock()
         
@@ -44,7 +44,6 @@ class RenderManager(QObject):
         self.notification_queue: Queue = Queue(maxsize=5000)
 
     def start(self):
-        """Starts the worker threads."""
         if self._running:
             return
         logger.info(f"RenderManager: Starting with {self.num_workers} workers.")
@@ -59,7 +58,6 @@ class RenderManager(QObject):
         # The pipeline processor thread is removed, as SourceJobs are now cooperative tasks.
 
     def get_all_job_ids(self) -> List[str]:
-        """Returns a list of all active source job IDs."""
         with self.active_jobs_lock:
             return list(self.active_jobs.keys())
 
@@ -252,7 +250,7 @@ class RenderManager(QObject):
         if _done_callback is not None:
             try:
                 _done_callback(task_id, None, None)
-            except Exception as e:
+            except Exception as e:  # why: callbacks are user-supplied; exceptions must not re-enter the task graph
                 logging.error(f"Late callback for already-done task '{task_id}' failed: {e}", exc_info=True)
 
         if callback:
@@ -381,7 +379,7 @@ class RenderManager(QObject):
             if job.on_complete:
                 try:
                     job.on_complete()
-                except Exception as e:
+                except Exception as e:  # why: on_complete is caller-supplied; exceptions must not abort the generator dispatch loop
                     logging.error(f"on_complete callback for job '{job.job_id}' failed: {e}", exc_info=True)
             return
 
@@ -517,8 +515,7 @@ class RenderManager(QObject):
             except Empty:
                 # No tasks in queue within the timeout, continue waiting/checking shutdown flag
                 continue
-            except Exception as e:
-                # Catch any unexpected errors in the worker loop itself
+            except Exception as e:  # why: worker loop guard; unexpected exceptions must not kill the thread
                 logging.error(f"RenderManager: Worker {worker_id} ({thread_name}) encountered general error: {e}", exc_info=True)
                 # task_done() is called unconditionally in the finally block below.
             finally:
@@ -542,7 +539,7 @@ class RenderManager(QObject):
 
             result = task.func(*task.args, **task.kwargs)
             with self.graph_lock: task.state = TaskState.COMPLETED
-        except Exception as e:
+        except Exception as e:  # why: task func is arbitrary user/plugin code; exceptions mark task FAILED without killing the worker
             error = e
             with self.graph_lock: task.state = TaskState.FAILED
             logger.error(f"Task '{task.task_id}' failed: {e}", exc_info=True)
@@ -555,7 +552,7 @@ class RenderManager(QObject):
                 try:
                     logging.debug(f"Executing on_complete_callback for task '{task.task_id}'.")
                     task.on_complete_callback()
-                except Exception as e:
+                except Exception as e:  # why: on_complete_callback is caller-supplied; must not propagate into the worker
                     logger.error(f"on_complete_callback for '{task.task_id}' failed: {e}", exc_info=True)
 
     def _execute_generator_task(self, task: RenderTask):
@@ -600,7 +597,7 @@ class RenderManager(QObject):
                 try:
                     logging.debug(f"Executing on_complete_callback for generator task '{task.task_id}'.")
                     task.on_complete_callback()
-                except Exception as e:
+                except Exception as e:  # why: on_complete_callback is caller-supplied; must not propagate into the worker
                     logger.error(f"on_complete_callback for '{task.task_id}' failed: {e}", exc_info=True)
 
 
@@ -623,7 +620,7 @@ class RenderManager(QObject):
                     callback(task_id, result, None)
                 else:
                     callback(task_id, None, error)
-            except Exception as e:
+            except Exception as e:  # why: callbacks are user-supplied; one failure must not prevent remaining callbacks
                 logging.error(f"RenderManager: Callback for task '{task_id}' failed: {e}", exc_info=True)
 
     def prepare_for_shutdown(self):

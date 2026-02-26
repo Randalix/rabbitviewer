@@ -661,7 +661,7 @@ class ThumbnailManager:
         duration = time.time() - start_time
         logger.debug(f"Full metadata for {os.path.basename(image_path)} took {duration:.4f}s")
 
-    def _write_rating_to_file(self, file_path: str, rating: int):
+    def write_rating_to_file(self, file_path: str, rating: int):
         """
         Finds the correct plugin and uses it to write the rating to the file's EXIF data.
         This method is intended to be called by the RenderManager.
@@ -686,10 +686,10 @@ class ThumbnailManager:
         logger.warning(f"No plugin found or available for format {ext} to write rating for {file_path}")
         return False
 
-    def _write_tags_to_file(self, file_path: str, tag_names: list):
+    def write_tags_to_file(self, file_path: str, tag_names: list):
         """Writes the full tag list to the file's XMP:Subject via the appropriate plugin.
 
-        Mirrors _write_rating_to_file: watchdog suppression, plugin lookup, exiftool write.
+        Mirrors write_rating_to_file: watchdog suppression, plugin lookup, exiftool write.
         """
         if self.watchdog_handler:
             self.watchdog_handler.ignore_next_modification(file_path)
@@ -1055,7 +1055,7 @@ class ThumbnailManager:
         self.render_manager.submit_task(
             task_id=task_id,
             priority=Priority.LOW,
-            func=self._write_rating_to_file,
+            func=self.write_rating_to_file,
             file_path=file_path,
             rating=rating
         )

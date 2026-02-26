@@ -42,7 +42,6 @@ class MetadataDatabase:
         self._init_database()
         
     def _init_database(self):
-        """Initializes the database tables."""
         with self._lock:
             try:
                 cursor = self.conn.cursor()
@@ -178,9 +177,6 @@ class MetadataDatabase:
             logging.debug(f"Error updating sidecars for {file_path}: {e}")
 
     def get_rating(self, file_path: str) -> int:
-        """
-        Gets the rating for a file from the database. This is a fast, non-blocking operation.
-        """
         metadata = self.get_metadata(file_path)
         return metadata.get('rating', 0) if metadata else 0
         
@@ -220,9 +216,6 @@ class MetadataDatabase:
         guaranteed to be fast and non-blocking. It may return stale data if the
         file has been modified since the last background scan.
         """
-        if not os.path.exists(file_path):
-            return None
-            
         try:
             with self._lock:
                 cursor = self.conn.cursor()
@@ -279,9 +272,6 @@ class MetadataDatabase:
     def extract_and_store_fast_metadata(self, file_path: str):
         """Plugin binary scan for orientation/rating/file_size only.
         UPDATE is scoped to fast fields; rich EXIF columns are untouched."""
-        if not os.path.exists(file_path):
-            logging.warning(f"File not found for fast metadata extraction: {file_path}")
-            return
         _, ext = os.path.splitext(file_path)
         plugin = plugin_registry.get_plugin_for_format(ext)
         if not plugin or not hasattr(plugin, 'extract_metadata'):
@@ -381,7 +371,7 @@ class MetadataDatabase:
                         except OSError:
                             pass
                     return metadata
-            except Exception as e:
+            except Exception as e:  # why: plugins are user-supplied; any exception must not abort the metadata pipeline
                 logging.error(f"Plugin extractor '{plugin.__class__.__name__}' failed for {file_path}: {e}. Falling back to default.")
 
         # --- Default Exiftool Fallback ---
@@ -504,22 +494,17 @@ class MetadataDatabase:
         """
         Sets the thumbnail and view image paths for a file.
         """
-        if not os.path.exists(file_path):
-            return False
-            
         try:
             current_time = time.time()
-            
+
             with self._lock:
                 cursor = self.conn.cursor()
-                
-                # Check if entry exists
+
                 cursor.execute('''
                     SELECT id FROM image_metadata WHERE file_path = ?
                 ''', (file_path,))
-                
+
                 if cursor.fetchone():
-                    # Update existing entry
                     update_fields = []
                     params = []
                     
@@ -821,17 +806,12 @@ class MetadataDatabase:
         Sets a rating for a file *only* in the database.
         This method is fast and does not block the UI.
         """
-        if not os.path.exists(file_path):
-            logging.warning(f"File not found for setting rating in DB: {file_path}")
-            return False
-            
         try:
             current_time = time.time()
-            
+
             with self._lock:
                 cursor = self.conn.cursor()
-                
-                # Check if entry exists
+
                 cursor.execute('SELECT id FROM image_metadata WHERE file_path = ?', (file_path,))
                 
                 if cursor.fetchone():
@@ -932,21 +912,19 @@ class MetadataDatabase:
         try:
             with self._lock:
                 cursor = self.conn.cursor()
-                
                 cursor.execute('''
-                    SELECT file_path FROM image_metadata 
+                    SELECT file_path FROM image_metadata
                     WHERE rating = ?
                     ORDER BY updated_at DESC
                 ''', (rating,))
-                
                 results = cursor.fetchall()
-                
-                return [row[0] for row in results if os.path.exists(row[0])]
-                
+
+            return [row[0] for row in results if os.path.exists(row[0])]
+
         except sqlite3.Error as e:
             logging.error(f"Error getting files by rating {rating}: {e}")
             return []
-            
+
     def search_by_camera(self, make: Optional[str] = None, model: Optional[str] = None) -> List[str]:
         """
         Searches for images by camera make and/or model.
@@ -954,24 +932,19 @@ class MetadataDatabase:
         try:
             with self._lock:
                 cursor = self.conn.cursor()
-                
                 query = "SELECT file_path FROM image_metadata WHERE 1=1"
                 params = []
-                
                 if make:
                     query += " AND camera_make LIKE ?"
                     params.append(f"%{make}%")
-                
                 if model:
                     query += " AND camera_model LIKE ?"
                     params.append(f"%{model}%")
-                
                 query += " ORDER BY date_taken DESC"
-                
                 cursor.execute(query, params)
                 results = cursor.fetchall()
-                
-                return [row[0] for row in results if os.path.exists(row[0])]
+
+            return [row[0] for row in results if os.path.exists(row[0])]
                 
         except sqlite3.Error as e:
             logging.error(f"Error searching by camera: {e}")
@@ -1076,30 +1049,33 @@ class MetadataDatabase:
             with self.conn:  # Transaction
                 cursor = self.conn.cursor()
 
-                # Find which paths are genuinely new to avoid constraint violations
                 placeholders = ','.join('?' * len(file_paths))
                 cursor.execute(f'SELECT file_path FROM image_metadata WHERE file_path IN ({placeholders})', file_paths)
                 existing_paths = {row[0] for row in cursor.fetchall()}
                 new_paths = [p for p in file_paths if p not in existing_paths]
 
-                if not new_paths:
-                    return
+        if not new_paths:
+            return
 
-                logging.info(f"Batch inserting {len(new_paths)} new minimal records into database.")
-                for path in new_paths:
-                    try:
-                        stat = os.stat(path)
-                        path_hash = self._get_metadata_hash(path, stat_result=stat)
-                        records_to_insert.append((
-                            path, path_hash, stat.st_size, stat.st_mtime,
-                            current_time, current_time
-                        ))
-                    except OSError:
-                        continue  # Skip files that might have been deleted during the scan
+        # Stat outside the lock to avoid blocking DB on NAS round-trips
+        logging.info(f"Batch inserting {len(new_paths)} new minimal records into database.")
+        for path in new_paths:
+            try:
+                st = os.stat(path)
+                path_hash = self._get_metadata_hash(path, stat_result=st)
+                records_to_insert.append((
+                    path, path_hash, st.st_size, st.st_mtime,
+                    current_time, current_time
+                ))
+            except OSError:
+                continue
 
-                if records_to_insert:
+        if records_to_insert:
+            with self._lock:
+                with self.conn:
+                    cursor = self.conn.cursor()
                     cursor.executemany("""
-                        INSERT INTO image_metadata (file_path, path_hash, file_size, mtime, created_at, updated_at)
+                        INSERT OR IGNORE INTO image_metadata (file_path, path_hash, file_size, mtime, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, records_to_insert)
 

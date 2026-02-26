@@ -20,8 +20,7 @@ class WatchdogHandler(FileSystemEventHandler):
         self.thumbnail_manager = thumbnail_manager
         self._watch_paths = watch_paths
         self.observer = Observer()
-        self.is_daemon_mode = is_daemon_mode
-        self._ignore_until: dict[str, float] = {}  # path → monotonic deadline
+        self._ignore_until: dict[str, float] = {}  # path → monotonic deadline; dict key access is atomic under CPython GIL
 
     @property
     def watch_paths(self):

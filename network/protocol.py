@@ -93,13 +93,11 @@ class Response(Message):
 
 @dataclasses.dataclass
 class ErrorResponse(Response):
-    """Standardized error response."""
     status: str = "error"
     message: str = ""
 
 @dataclasses.dataclass
 class PreviewStatus(Message):
-    """Represents the readiness of previews for a single image."""
     thumbnail_ready: bool = False
     thumbnail_path: Optional[str] = None
     view_image_ready: bool = False

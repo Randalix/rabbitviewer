@@ -49,7 +49,6 @@ class PictureView(QWidget):
             self.escapePressed.emit()
 
     def _updateInspector(self, event_pos: QPointF) -> None:
-        """Update inspector view with current mouse position via event system."""
         if not self._current_path or not self._picture_base.has_image():
             return
             
@@ -159,7 +158,6 @@ class PictureView(QWidget):
         
     @property
     def current_path(self) -> str:
-        """Get the current image path (original path)."""
         return self._current_path
 
     def _fetch_rating(self, path: str):
@@ -170,7 +168,7 @@ class PictureView(QWidget):
                 resp = self.socket_client.get_metadata_batch([path])
                 if resp and path in resp.metadata:
                     rating = resp.metadata[path].get("rating", 0) or 0
-            except Exception as e:
+            except Exception as e:  # why: socket calls can raise ConnectionError/OSError/TimeoutError; emit zero so status bar gets a value
                 logging.debug(f"Rating fetch failed for {path}: {e}")
         self._rating_ready.emit(path, int(rating))
 
@@ -192,7 +190,6 @@ class PictureView(QWidget):
 
     @Slot(object)
     def _process_daemon_notification(self, event_data: DaemonNotificationEventData):
-        """Handle daemon notifications on the main GUI thread."""
         if event_data.notification_type == "previews_ready":
             try:
                 data = protocol.PreviewsReadyData.model_validate(event_data.data)

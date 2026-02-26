@@ -107,7 +107,6 @@ class SocketConnection:
             self.connected = False
 
 class ConnectionPool:
-    """Manages a pool of socket connections"""
     def __init__(self, socket_path: str, pool_size: int = 3):
         self.socket_path = socket_path
         self.pool_size = pool_size
@@ -130,10 +129,7 @@ class ConnectionPool:
             return None
 
     def return_connection(self, conn: SocketConnection):
-        try:
-            self.available.put(conn)
-        except queue.Full:
-            pass
+        self.available.put(conn)
 
     def close_all(self):
         with self.lock:
@@ -147,7 +143,6 @@ class ConnectionPool:
                     break
 
 class ThumbnailSocketClient:
-    """Client for interacting with the thumbnail generation service"""
     def __init__(self, socket_path: str):
         self.socket_path = socket_path
         self.connection_pool = ConnectionPool(socket_path)
@@ -231,19 +226,16 @@ class ThumbnailSocketClient:
         return self._send_request(request, protocol.RequestViewImageResponse)
 
     def get_previews_status(self, image_paths: List[str]) -> Optional[protocol.GetPreviewsStatusResponse]:
-        """Checks the generation status for a list of image paths."""
         protocol = _lazy_protocol()
         request = protocol.GetPreviewsStatusRequest(image_paths=self._to_entry_models(image_paths))
         return self._send_request(request, protocol.GetPreviewsStatusResponse)
 
     def set_rating(self, image_paths: List[str], rating: int) -> Optional[protocol.Response]:
-        """Sets the star rating for a list of images."""
         protocol = _lazy_protocol()
         request = protocol.SetRatingRequest(image_paths=self._to_entry_models(image_paths), rating=rating)
         return self._send_request(request, protocol.Response)
 
     def get_metadata_batch(self, image_paths: List[str], priority: bool = False) -> Optional[protocol.GetMetadataBatchResponse]:
-        """Retrieves all known metadata for a list of images."""
         protocol = _lazy_protocol()
         request = protocol.GetMetadataBatchRequest(image_paths=self._to_entry_models(image_paths), priority=priority)
         return self._send_request(request, protocol.GetMetadataBatchResponse)
@@ -260,13 +252,11 @@ class ThumbnailSocketClient:
         return self._send_request(request, protocol.GetFilteredFilePathsResponse)
 
     def set_tags(self, image_paths: List[str], tags: List[str]) -> Optional[protocol.Response]:
-        """Adds tags to the given images."""
         protocol = _lazy_protocol()
         request = protocol.SetTagsRequest(image_paths=self._to_entry_models(image_paths), tags=tags)
         return self._send_request(request, protocol.Response)
 
     def remove_tags(self, image_paths: List[str], tags: List[str]) -> Optional[protocol.Response]:
-        """Removes tags from the given images."""
         protocol = _lazy_protocol()
         request = protocol.RemoveTagsRequest(image_paths=self._to_entry_models(image_paths), tags=tags)
         return self._send_request(request, protocol.Response)
@@ -278,7 +268,6 @@ class ThumbnailSocketClient:
         return self._send_request(request, protocol.GetTagsResponse)
 
     def get_image_tags(self, image_paths: List[str]) -> Optional[protocol.GetImageTagsResponse]:
-        """Gets the tags currently assigned to each image."""
         protocol = _lazy_protocol()
         request = protocol.GetImageTagsRequest(image_paths=self._to_entry_models(image_paths))
         return self._send_request(request, protocol.GetImageTagsResponse)
@@ -297,7 +286,6 @@ class ThumbnailSocketClient:
 
     # --- Daemon Control Methods ---
     def is_socket_file_present(self) -> bool:
-        """Check if the thumbnailer server socket file exists."""
         return os.path.exists(self.socket_path)
 
     def _send_simple_command(self, command: str) -> bool:
@@ -313,9 +301,7 @@ class ThumbnailSocketClient:
             self.connection_pool.return_connection(conn)
 
     def shutdown_daemon(self) -> bool:
-        """Send a command to shut down the daemon."""
         return self._send_simple_command("shutdown")
 
     def shutdown(self):
-        """Clean up resources"""
         self.connection_pool.close_all()

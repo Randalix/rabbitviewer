@@ -15,12 +15,8 @@ _ValidationErrors = (ValueError, TypeError, KeyError)
 import queue
 
 class ThumbnailSocketServer:
-    """Server that handles thumbnail generation and rating requests via Unix domain socket."""
 
     def __init__(self, socket_path: str, thumbnail_manager, watchdog_handler: Optional[WatchdogHandler] = None):
-        """
-        Initialize the thumbnail socket server.
-        """
         self.socket_path = socket_path
         self.thumbnail_manager = thumbnail_manager
         self.watchdog_handler = watchdog_handler
@@ -33,6 +29,7 @@ class ThumbnailSocketServer:
         self.active_gui_session_id: Optional[str] = None
         self.session_lock = threading.Lock()
         self._compound_task_counter = 0
+        self._counter_lock = threading.Lock()
         self._command_handlers = {
             "request_previews":      self._handle_request_previews,
             "get_previews_status":   self._handle_get_previews_status,
@@ -117,7 +114,7 @@ class ThumbnailSocketServer:
                     if self.running:
                         logging.error(f"Error accepting connection: {e}")
                         time.sleep(0.1)  # Avoid busy-loop if the socket is in a bad state
-        except Exception as e:
+        except Exception as e:  # why: catches fatal OS errors on server socket (e.g. EMFILE, ENOBUFS) that escape the accept loop
             logging.error(f"Socket error: {e}")
         finally:
             self.shutdown()
@@ -186,8 +183,10 @@ class ThumbnailSocketServer:
                     # If a GUI client disconnects, demote session-scoped jobs
                     # to ORPHAN_SCAN so they finish in the background and
                     # populate the DB cache for the next connect.
-                    with self.session_lock:
+                    with self.session_lock:  # why: held for full read+clear to prevent new-session wipe during connect/disconnect race
                         active_session = self.active_gui_session_id
+                        if active_session:
+                            self.active_gui_session_id = None
                     if active_session:
                         render_manager = self.thumbnail_manager.render_manager
                         _GUI_JOB_PREFIXES = ("gui_scan", "post_scan")
@@ -198,10 +197,6 @@ class ThumbnailSocketServer:
                         for job_id in jobs_to_demote:
                             logging.info(f"Client for session {active_session[:8]} disconnected. Demoting job: {job_id}")
                             render_manager.demote_job(job_id, Priority.ORPHAN_SCAN)
-
-                        # Clear the active session, as the GUI is gone.
-                        with self.session_lock:
-                            self.active_gui_session_id = None
 
             conn.close()
 
@@ -293,6 +288,7 @@ class ThumbnailSocketServer:
             if cached_paths:
                 thumbnail_path = cached_paths.get('thumbnail_path')
                 view_image_path = cached_paths.get('view_image_path')
+                # why: must verify cache files exist because worker may have written DB before file flush completed
                 if view_image_path and os.path.exists(view_image_path):
                     view_image_ready = True
                 if thumbnail_path and os.path.exists(thumbnail_path):
@@ -332,7 +328,7 @@ class ThumbnailSocketServer:
                 self.thumbnail_manager.render_manager.submit_task(
                     f"write_rating::{path}",
                     Priority.NORMAL,
-                    self.thumbnail_manager._write_rating_to_file,
+                    self.thumbnail_manager.write_rating_to_file,
                     path, req.rating,
                     task_type=TaskType.SIMPLE
                 )
@@ -518,8 +514,9 @@ class ThumbnailSocketServer:
         for op in req.operations:
             if self.thumbnail_manager.get_task_operation(op.name) is None:
                 return protocol.ErrorResponse(message=f"Unknown task operation: {op.name}")
-        self._compound_task_counter += 1
-        task_id = f"script_task::{self._compound_task_counter}"
+        with self._counter_lock:
+            self._compound_task_counter += 1
+            task_id = f"script_task::{self._compound_task_counter}"
         operations = [(op.name, self._extract_paths(op.file_paths)) for op in req.operations]
         queued = self.thumbnail_manager.render_manager.submit_task(
             task_id,
@@ -542,7 +539,7 @@ class ThumbnailSocketServer:
                 self.thumbnail_manager.render_manager.submit_task(
                     f"write_tags::{path}",
                     Priority.NORMAL,
-                    self.thumbnail_manager._write_tags_to_file,
+                    self.thumbnail_manager.write_tags_to_file,
                     path, all_tags,
                     task_type=TaskType.SIMPLE,
                 )
@@ -560,7 +557,7 @@ class ThumbnailSocketServer:
                 self.thumbnail_manager.render_manager.submit_task(
                     f"write_tags::{path}",
                     Priority.NORMAL,
-                    self.thumbnail_manager._write_tags_to_file,
+                    self.thumbnail_manager.write_tags_to_file,
                     path, all_tags,
                     task_type=TaskType.SIMPLE,
                 )
