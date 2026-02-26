@@ -7,7 +7,7 @@ It orchestrates them.
 
 Rendering, metadata extraction, hashing, and file watching run in a persistent background daemon. The interface stays fluid — even when you point it at a massive RAW archive.
 
-[![RabbitViewer Demo](https://img.youtube.com/vi/XzhZ5Wn1O8U/maxresdefault.jpg)](https://youtu.be/XzhZ5Wn1O8U)
+[![RabbitViewer Demo](https://img.youtube.com/vi/1OTcSATjnmw/maxresdefault.jpg)](https://youtu.be/1OTcSATjnmw)
 
 ---
 
