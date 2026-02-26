@@ -311,11 +311,7 @@ class ThumbnailSocketServer:
                 task_type=TaskType.SIMPLE
             )
 
-        metadata_results = {}
-        for path in req.image_paths:
-            metadata = self.thumbnail_manager.metadata_db.get_metadata(path)
-            metadata_results[path] = metadata if metadata else {}
-
+        metadata_results = self.thumbnail_manager.metadata_db.get_metadata_batch(req.image_paths)
         return protocol.GetMetadataBatchResponse(metadata=metadata_results)
 
     def _handle_set_rating(self, request_data: dict) -> protocol.Response:

@@ -155,6 +155,36 @@ class MetadataDatabase:
         metadata = self.get_metadata(file_path)
         return metadata.get('rating', 0) if metadata else 0
         
+    def get_metadata_batch(self, file_paths: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Return metadata for multiple files in a single DB query.
+
+        Skips the per-path ``os.path.exists()`` check so this stays fast on
+        network volumes.  Paths not found in the DB map to ``{}``.
+        """
+        if not file_paths:
+            return {}
+        results: Dict[str, Dict[str, Any]] = {p: {} for p in file_paths}
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                placeholders = ",".join("?" * len(file_paths))
+                cursor.execute(
+                    f"SELECT * FROM image_metadata WHERE file_path IN ({placeholders})",
+                    file_paths,
+                )
+                columns = [desc[0] for desc in cursor.description]
+                for row in cursor.fetchall():
+                    metadata = dict(zip(columns, row))
+                    if metadata.get("exif_data"):
+                        try:
+                            metadata["exif_data"] = json.loads(metadata["exif_data"])
+                        except json.JSONDecodeError:
+                            metadata["exif_data"] = {}
+                    results[metadata["file_path"]] = metadata
+        except sqlite3.Error as e:
+            logging.debug(f"Error in get_metadata_batch: {e}")
+        return results
+
     def get_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
         """
         Gets all metadata for a file strictly from the database. This method is
