@@ -80,16 +80,14 @@ class WatchdogHandler(FileSystemEventHandler):
             logging.debug(f"Watchdog: Ignoring temporary file creation/modification: {event.src_path}")
             return
 
-        if event.event_type == 'modified' and event.src_path in self._ignore_next_mod:
+        # why: exiftool -overwrite_original does delete-original + rename-tmp,
+        # producing a transient FileDeletedEvent for the real path followed by
+        # a FileMovedEvent (src=tmp, already caught above).  Suppress all
+        # events for the real path while it is in the ignore set and clear the
+        # flag so subsequent real events proceed normally.
+        if event.src_path in self._ignore_next_mod:
             self._ignore_next_mod.discard(event.src_path)
-            try:
-                rating = self.thumbnail_manager.metadata_db.get_rating(event.src_path)
-                logging.info(f"Rating for '{event.src_path}' confirmed in database: {rating}. Ignoring self-inflicted modification event.")
-            except AttributeError:
-                logging.warning(f"Watchdog: Could not verify rating for '{event.src_path}'. Ignoring self-inflicted modification.")
-            except Exception as e:
-                # why: watchdog callbacks run on observer thread; DB error must not crash the observer
-                logging.error(f"Watchdog: Error while verifying rating for '{event.src_path}': {e}")
+            logging.debug(f"Watchdog: Ignoring self-inflicted {event.event_type}: {event.src_path}")
             return
 
         if event.event_type in ['created', 'modified']:
