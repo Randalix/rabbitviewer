@@ -1,4 +1,6 @@
-from typing import Optional, Set, List
+from __future__ import annotations
+
+from typing import Optional, Set, List, TYPE_CHECKING
 import threading
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QApplication, QFileDialog, QMessageBox
 from PySide6.QtCore import Qt, Slot, QPointF, QSize, QPoint, QTimer, QEvent, QObject, Signal, QSettings
@@ -6,10 +8,8 @@ import logging
 import os
 import time
 
-from .picture_view import PictureView
 from .thumbnail_view import ThumbnailViewWidget
 from .hotkey_manager import HotkeyManager
-from .inspector_view import InspectorView
 from .metadata_cache import MetadataCache
 from .info_panel import InfoPanelShell, MetadataProvider
 from .filter_dialog import FilterDialog
@@ -18,15 +18,20 @@ from .tag_filter_dialog import TagFilterDialog
 from .modal_menu import ModalMenu
 from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
-from .status_bar import CustomStatusBar
 from scripts.script_manager import ScriptManager, ScriptAPI
 from core.event_system import event_system, EventType, InspectorEventData, MouseEventData, KeyEventData, ViewEventData, EventData, StatusMessageEventData, StatusSection
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
 from network.socket_client import ThumbnailSocketClient
 from network.gui_server import GuiServer
-from plugins.video_plugin import VIDEO_EXTENSIONS
 
-_VIDEO_EXTENSIONS = frozenset(VIDEO_EXTENSIONS)
+if TYPE_CHECKING:
+    from .inspector_view import InspectorView
+    from .picture_view import PictureView
+
+_VIDEO_EXTENSIONS = frozenset([
+    '.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v',
+    '.wmv', '.flv', '.mpg', '.mpeg', '.3gp', '.ts',
+])
 
 
 def _is_video(path: str) -> bool:
@@ -50,8 +55,7 @@ class MainWindow(QMainWindow):
         self.stacked_widget = QStackedWidget()
         self._layout.addWidget(self.stacked_widget)
 
-        self.status_bar = CustomStatusBar(self.config_manager, self)
-        self.setStatusBar(self.status_bar)
+        self.status_bar = None
 
         self.thumbnail_view = None
         self.picture_view = None
@@ -85,6 +89,10 @@ class MainWindow(QMainWindow):
 
     def _deferred_init(self):
         """Heavy initialisation deferred until after the first frame is painted."""
+        from .status_bar import CustomStatusBar
+        self.status_bar = CustomStatusBar(self.config_manager, self)
+        self.setStatusBar(self.status_bar)
+
         self.selection_state = SelectionState()
         self.selection_processor = SelectionProcessor(self.selection_state)
         self.selection_history = SelectionHistory(self.selection_processor)
@@ -237,6 +245,7 @@ class MainWindow(QMainWindow):
 
     def _open_inspector_window(self):
         """Create and show a new inspector window."""
+        from .inspector_view import InspectorView
         inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot)
         self._inspector_slot += 1
         inspector.set_socket_client(self.socket_client)
@@ -595,6 +604,7 @@ class MainWindow(QMainWindow):
             self.video_view = None
         try:
             if not self.picture_view:
+                from .picture_view import PictureView
                 self.picture_view = PictureView()
                 self.picture_view.escapePressed.connect(self.close_picture_view)
                 self.picture_view.set_socket_client(self.socket_client)
