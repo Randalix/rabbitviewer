@@ -222,12 +222,10 @@ class MetadataDatabase:
         Extracts metadata from a file and stores it in the database.
         This method is intended to be called from a background worker.
         """
-        if not os.path.exists(file_path):
-            logging.warning(f"File not found for metadata extraction: {file_path}")
-            return
         try:
             st = os.stat(file_path)
         except OSError:
+            logging.warning(f"File not found for metadata extraction: {file_path}")
             return
         metadata = self._extract_metadata_from_file(file_path, file_size=st.st_size)
         self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
@@ -314,12 +312,10 @@ class MetadataDatabase:
 
     def extract_and_store_full_metadata(self, file_path: str):
         """Runs the exiftool path (skipping the plugin fast path) and stores all fields."""
-        if not os.path.exists(file_path):
-            logging.warning(f"File not found for full metadata extraction: {file_path}")
-            return
         try:
             st = os.stat(file_path)
         except OSError:
+            logging.warning(f"File not found for full metadata extraction: {file_path}")
             return
         metadata = self._extract_metadata_from_file(file_path, _use_plugin=False, file_size=st.st_size)
         self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
