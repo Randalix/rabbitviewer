@@ -202,16 +202,16 @@ class TestExiftoolAtomicReplace:
         assert paths[0] in filtered
 
     def test_write_tags_propagates_ignore_to_watcher(self, tmp_env, sample_images):
-        """_write_tags_to_file must call ignore_next_modification on the watcher.
+        """_write_tags_to_file must call ignore_next_modification on the sidecar path.
 
-        This is the exact wiring that failed in production: ThumbnailManager was
-        created without a watchdog_handler reference, so the ignore call was
-        silently skipped and the exiftool atomic-replace events cascade-deleted
-        the tags.
+        With sidecar writes, exiftool's atomic-replace events happen on the
+        .xmp file, not the image.  The ignore window must cover that path.
         """
         from core.thumbnail_manager import ThumbnailManager
+        from plugins.base_plugin import sidecar_path_for
         db = tmp_env["db"]
         path = sample_images[0]
+        xmp = sidecar_path_for(path)
 
         db.batch_ensure_records_exist([path])
         db.batch_set_tags([path], ["animal"])
@@ -220,11 +220,8 @@ class TestExiftoolAtomicReplace:
         tm = ThumbnailManager(config, db, num_workers=1)
 
         handler = _make_handler_with_db(db)
-        # Wire the back-reference the way the daemon must.
         tm.watchdog_handler = handler
 
-        # Stub the plugin so _write_tags_to_file reaches the ignore call
-        # but doesn't need a real exiftool binary.
         mock_plugin = MagicMock()
         mock_plugin.is_available.return_value = True
         mock_plugin.write_tags.return_value = True
@@ -233,18 +230,23 @@ class TestExiftoolAtomicReplace:
 
         tm._write_tags_to_file(path, ["animal"])
 
-        # The watcher must now suppress the exiftool atomic-replace events.
-        handler.dispatch(_make_event("deleted", path))
-        handler.dispatch(_make_event("created", path))
+        # Verify the ignore is on the sidecar path.
+        assert xmp in handler._ignore_until
+
+        # Sidecar events during the ignore window must be suppressed.
+        handler.dispatch(_make_event("deleted", xmp))
+        handler.dispatch(_make_event("created", xmp))
 
         assert db.get_image_tags(path) == ["animal"]
         tm.shutdown()
 
     def test_write_rating_propagates_ignore_to_watcher(self, tmp_env, sample_images):
-        """_write_rating_to_file must call ignore_next_modification on the watcher."""
+        """_write_rating_to_file must call ignore_next_modification on the sidecar path."""
         from core.thumbnail_manager import ThumbnailManager
+        from plugins.base_plugin import sidecar_path_for
         db = tmp_env["db"]
         path = sample_images[0]
+        xmp = sidecar_path_for(path)
 
         db.batch_ensure_records_exist([path])
         db.set_rating(path, 5)
@@ -263,8 +265,11 @@ class TestExiftoolAtomicReplace:
 
         tm._write_rating_to_file(path, 5)
 
-        handler.dispatch(_make_event("deleted", path))
-        handler.dispatch(_make_event("created", path))
+        # Verify the ignore is on the sidecar path.
+        assert xmp in handler._ignore_until
+
+        handler.dispatch(_make_event("deleted", xmp))
+        handler.dispatch(_make_event("created", xmp))
 
         assert db.get_rating(path) == 5
         tm.shutdown()

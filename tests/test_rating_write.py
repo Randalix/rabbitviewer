@@ -1,5 +1,5 @@
 """
-Tests that writing a rating via PILPlugin actually persists to the file on disk.
+Tests that writing a rating via PILPlugin persists to an XMP sidecar file.
 
 Requires exiftool to be installed. Tests are skipped if it is missing.
 """
@@ -14,6 +14,7 @@ from PIL import Image
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from plugins.pil_plugin import PILPlugin
+from plugins.base_plugin import sidecar_path_for
 
 
 def _exiftool_available() -> bool:
@@ -53,28 +54,38 @@ def plugin(tmp_path):
 
 @pytest.mark.skipif(not _exiftool_available(), reason="exiftool not installed")
 @pytest.mark.parametrize("rating", [0, 1, 2, 3, 4, 5])
-def test_write_rating_persists_to_disk(plugin, jpeg_file, rating):
-    """write_rating() must embed the correct XMP:Rating value in the file."""
+def test_write_rating_persists_to_sidecar(plugin, jpeg_file, rating):
+    """write_rating() must write the correct XMP:Rating value to a sidecar file."""
     success = plugin.write_rating(jpeg_file, rating)
     assert success, f"write_rating returned False for rating={rating}"
 
-    on_disk = _read_xmp_rating(jpeg_file)
+    xmp = sidecar_path_for(jpeg_file)
+    assert os.path.exists(xmp), f"Sidecar {xmp} was not created"
+
+    on_disk = _read_xmp_rating(xmp)
     assert on_disk == rating, (
-        f"Expected XMP:Rating={rating} on disk, got {on_disk!r}"
+        f"Expected XMP:Rating={rating} in sidecar, got {on_disk!r}"
     )
+
+    # Original file must be untouched.
+    assert _read_xmp_rating(jpeg_file) is None
 
 
 @pytest.mark.skipif(not _exiftool_available(), reason="exiftool not installed")
 def test_write_rating_overwrites_previous(plugin, jpeg_file):
-    """A second write_rating() call must replace the previous value."""
+    """A second write_rating() call must replace the previous sidecar value."""
     plugin.write_rating(jpeg_file, 3)
     plugin.write_rating(jpeg_file, 5)
-    assert _read_xmp_rating(jpeg_file) == 5
+    xmp = sidecar_path_for(jpeg_file)
+    assert _read_xmp_rating(xmp) == 5
 
 
 @pytest.mark.skipif(not _exiftool_available(), reason="exiftool not installed")
-def test_write_rating_returns_false_for_missing_file(plugin, tmp_path):
-    """write_rating() must return False (not raise) when the file does not exist."""
+def test_write_rating_creates_sidecar_for_missing_file(plugin, tmp_path):
+    """write_rating() on a non-existent file still creates a sidecar (exiftool -o)."""
     missing = str(tmp_path / "nonexistent.jpg")
     result = plugin.write_rating(missing, 3)
-    assert result is False
+    # Sidecar creation without a source file succeeds with exiftool.
+    xmp = sidecar_path_for(missing)
+    assert result is True
+    assert os.path.exists(xmp)

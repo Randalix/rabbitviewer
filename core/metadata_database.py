@@ -468,7 +468,37 @@ class MetadataDatabase:
 
         except (TimeoutError, RuntimeError, json.JSONDecodeError, ValueError, FileNotFoundError) as e:
             logging.debug(f"Error extracting metadata from {file_path}: {e}")
-        
+
+        # Sidecar override: if FILENAME.xmp exists, its rating/tags take precedence.
+        from plugins.base_plugin import sidecar_path_for
+        xmp = sidecar_path_for(file_path)
+        if os.path.exists(xmp):
+            try:
+                sc_raw = _get_fallback_exiftool().execute(['-json', '-XMP:Rating', '-XMP:Subject', xmp])
+                sc_data = json.loads(sc_raw)
+                if sc_data and len(sc_data) > 0:
+                    sc = sc_data[0]
+                    if 'XMP:Rating' in sc:
+                        try:
+                            metadata['rating'] = int(float(sc['XMP:Rating']))
+                        except (ValueError, TypeError):
+                            pass
+                    elif 'Rating' in sc:
+                        try:
+                            metadata['rating'] = int(float(sc['Rating']))
+                        except (ValueError, TypeError):
+                            pass
+                    subject = sc.get('Subject')
+                    if subject is not None:
+                        keywords = set()
+                        if isinstance(subject, list):
+                            keywords.update(str(v) for v in subject if v)
+                        elif isinstance(subject, str) and subject:
+                            keywords.add(subject)
+                        metadata['_keywords'] = list(keywords)
+            except (TimeoutError, RuntimeError, json.JSONDecodeError) as e:
+                logging.debug(f"Error reading sidecar {xmp}: {e}")
+
         return metadata
     
     def set_thumbnail_paths(self, file_path: str, thumbnail_path: Optional[str] = None, view_image_path: Optional[str] = None) -> bool:

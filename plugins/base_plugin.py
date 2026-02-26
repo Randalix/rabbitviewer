@@ -10,6 +10,28 @@ import sys
 from PIL import Image
 from plugins.exiftool_process import ExifToolProcess
 
+def sidecar_path_for(image_path: str) -> str:
+    """Return the XMP sidecar path for an image: /dir/photo.cr3 -> /dir/photo.xmp"""
+    root, _ = os.path.splitext(image_path)
+    return root + ".xmp"
+
+
+def find_image_for_sidecar(xmp_path: str, supported_extensions: set) -> Optional[str]:
+    """Given /dir/photo.xmp, find the corresponding image file.
+
+    Returns the first existing file whose base name matches and whose
+    extension is in *supported_extensions*, or None.
+    """
+    root, ext = os.path.splitext(xmp_path)
+    if ext.lower() != ".xmp":
+        return None
+    for img_ext in supported_extensions:
+        candidate = root + img_ext
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 class PluginRegistry:
     """Central registry for all image format plugins."""
     
@@ -178,6 +200,10 @@ class BasePlugin(ABC):
         if not os.path.exists(file_path):
             return None
         results: Dict[str, Any] = {}
+        ns = {
+            "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+            "xmp": "http://ns.adobe.com/xap/1.0/",
+        }
         try:
             with open(file_path, "rb") as f:
                 buf = f.read(256 * 1024)
@@ -187,16 +213,12 @@ class BasePlugin(ABC):
             if orientation != 1:
                 results["orientation"] = orientation
 
-            # XMP rating
+            # XMP rating from embedded metadata
             start = buf.find(b"<x:xmpmeta")
             if start != -1:
                 end = buf.find(b"</x:xmpmeta>", start)
                 if end != -1:
                     xmp_str = buf[start: end + len(b"</x:xmpmeta>")].decode("utf-8", "ignore")
-                    ns = {
-                        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                        "xmp": "http://ns.adobe.com/xap/1.0/",
-                    }
                     root = ET.fromstring(xmp_str)
                     desc = root.find(".//rdf:Description", ns)
                     rating_tag = desc.find("xmp:Rating", ns) if desc is not None else None
@@ -205,6 +227,28 @@ class BasePlugin(ABC):
                             results["rating"] = int(rating_tag.text)
                         except (ValueError, TypeError):
                             pass
+
+            # Sidecar override: if FILENAME.xmp exists, its rating takes precedence.
+            xmp = sidecar_path_for(file_path)
+            if os.path.exists(xmp):
+                try:
+                    with open(xmp, "rb") as xf:
+                        xmp_buf = xf.read(64 * 1024)
+                    sc_start = xmp_buf.find(b"<x:xmpmeta")
+                    if sc_start != -1:
+                        sc_end = xmp_buf.find(b"</x:xmpmeta>", sc_start)
+                        if sc_end != -1:
+                            sc_str = xmp_buf[sc_start: sc_end + len(b"</x:xmpmeta>")].decode("utf-8", "ignore")
+                            sc_root = ET.fromstring(sc_str)
+                            sc_desc = sc_root.find(".//rdf:Description", ns)
+                            sc_rating = sc_desc.find("xmp:Rating", ns) if sc_desc is not None else None
+                            if sc_rating is not None and sc_rating.text:
+                                try:
+                                    results["rating"] = int(sc_rating.text)
+                                except (ValueError, TypeError):
+                                    pass
+                except (IOError, ET.ParseError) as e:
+                    logging.warning("Sidecar parse failed for %s: %s", xmp, e)
 
             return results if results else None
         except (IOError, struct.error, ET.ParseError) as e:
@@ -229,44 +273,68 @@ class BasePlugin(ABC):
         return self._local.proc
 
     def write_rating(self, file_path: str, rating: int) -> bool:
-        """Writes the rating to the file's XMP metadata via the persistent exiftool process."""
+        """Writes the rating to an XMP sidecar file next to the image."""
         if not 0 <= rating <= 5:
             logging.error("Rating %d out of range [0..5] for %s", rating, file_path)
             return False
+        xmp = sidecar_path_for(file_path)
         try:
-            output = self._get_exiftool().execute(
-                [f"-XMP-xmp:Rating={rating}", "-overwrite_original", file_path]
-            )
-            if b"image files updated" in output and b"0 image files updated" not in output:
-                logging.info("Wrote rating %d to %s.", rating, file_path)
+            output = self._write_to_sidecar(xmp, [f"-XMP-xmp:Rating={rating}"])
+            if self._sidecar_write_ok(output):
+                logging.info("Wrote rating %d to sidecar %s.", rating, xmp)
                 return True
-            logging.error("exiftool reported no update writing rating to %s: %s",
-                          file_path, output.decode("utf-8", "replace").strip())
+            logging.error("exiftool reported no update writing rating sidecar %s: %s",
+                          xmp, output.decode("utf-8", "replace").strip())
             return False
         except (RuntimeError, TimeoutError) as e:
-            logging.error("Failed to write rating to %s: %s", file_path, e)
+            logging.error("Failed to write rating sidecar for %s: %s", file_path, e)
             return False
 
     def write_tags(self, file_path: str, tag_names: list) -> bool:
-        """Writes tags to the file's XMP:Subject metadata via the persistent exiftool process.
+        """Writes tags to an XMP sidecar file next to the image.
 
         Replaces the entire Subject list to keep DB and file in sync.
         """
+        xmp = sidecar_path_for(file_path)
         try:
             args = ["-XMP:Subject="]  # clear existing
             for tag in tag_names:
                 args.append(f"-XMP:Subject+={tag}")
-            args.extend(["-overwrite_original", file_path])
-            output = self._get_exiftool().execute(args)
-            if b"image files updated" in output and b"0 image files updated" not in output:
-                logging.info("Wrote %d tags to %s.", len(tag_names), file_path)
+            output = self._write_to_sidecar(xmp, args)
+            if self._sidecar_write_ok(output):
+                logging.info("Wrote %d tags to sidecar %s.", len(tag_names), xmp)
                 return True
-            logging.error("exiftool reported no update writing tags to %s: %s",
-                          file_path, output.decode("utf-8", "replace").strip())
+            logging.error("exiftool reported no update writing tags sidecar %s: %s",
+                          xmp, output.decode("utf-8", "replace").strip())
             return False
         except (RuntimeError, TimeoutError) as e:
-            logging.error("Failed to write tags to %s: %s", file_path, e)
+            logging.error("Failed to write tags sidecar for %s: %s", file_path, e)
             return False
+
+    def _write_to_sidecar(self, xmp_path: str, tag_args: list) -> bytes:
+        """Write *tag_args* to the XMP sidecar at *xmp_path*.
+
+        Creates the sidecar if it doesn't exist; updates in-place otherwise.
+        Handles the race where two concurrent writers both see "not exists" by
+        retrying with the update path if ``-o`` fails because the file appeared.
+        """
+        et = self._get_exiftool()
+        if os.path.exists(xmp_path):
+            return et.execute(tag_args + ["-overwrite_original", xmp_path])
+        # Create from scratch (no source image — pure XMP).
+        output = et.execute(["-o", xmp_path] + tag_args)
+        if b"already exists" in output:
+            # Lost the race — another thread created it first; update instead.
+            return et.execute(tag_args + ["-overwrite_original", xmp_path])
+        return output
+
+    @staticmethod
+    def _sidecar_write_ok(output: bytes) -> bool:
+        """Return True if exiftool output indicates a successful sidecar write."""
+        return (
+            (b"image files updated" in output or b"image files created" in output)
+            and b"0 image files" not in output
+        )
 
     def _apply_orientation(self, img: Image.Image, orientation: int) -> Image.Image:
         """Apply rotation/flip to a PIL Image based on the EXIF Orientation tag value."""

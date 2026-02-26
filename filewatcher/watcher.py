@@ -83,7 +83,7 @@ class WatchdogHandler(FileSystemEventHandler):
         if event.is_directory:
             return
 
-        # why: exiftool writes via atomic rename through a _exiftool_tmp sidecar; ignore the sidecar event
+        # why: exiftool writes via atomic rename through a _exiftool_tmp sidecar; ignore the temp event
         if event.src_path.endswith("_exiftool_tmp"):
             logging.debug(f"Watchdog: Ignoring temporary file creation/modification: {event.src_path}")
             return
@@ -97,6 +97,25 @@ class WatchdogHandler(FileSystemEventHandler):
                 logging.debug(f"Watchdog: Ignoring self-inflicted {event.event_type}: {event.src_path}")
                 return
             del self._ignore_until[event.src_path]
+
+        # XMP sidecar events: created/modified trigger a re-read; deleted is ignored.
+        if event.src_path.lower().endswith('.xmp'):
+            if event.event_type == 'deleted':
+                return
+            if event.event_type not in ('created', 'modified'):
+                return
+            from plugins.base_plugin import find_image_for_sidecar
+            supported = self.thumbnail_manager.plugin_registry.get_supported_formats()
+            image_path = find_image_for_sidecar(event.src_path, supported)
+            if image_path:
+                logging.debug(f"Watchdog: Sidecar changed for {image_path}, re-extracting metadata")
+                self.thumbnail_manager.render_manager.submit_task(
+                    f"sidecar_reread::{image_path}",
+                    Priority.LOW,
+                    self.thumbnail_manager.metadata_db.extract_and_store_fast_metadata,
+                    image_path,
+                )
+            return
 
         if event.event_type in ['created', 'modified']:
             file_path = event.src_path

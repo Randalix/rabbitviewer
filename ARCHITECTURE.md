@@ -208,6 +208,8 @@ Format handlers registered in a global `PluginRegistry` singleton (`plugins/base
 
 Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate_thumbnail()`, `generate_view_image()`, `extract_metadata()`, `write_rating()`, `write_tags()`, `is_available()`.
 
+**XMP sidecar files:** Metadata writes (ratings, tags) go to an XMP sidecar file (`FILENAME.xmp`, e.g. `photo.cr3` → `photo.xmp`) — the original image is never modified. Utility functions `sidecar_path_for()` and `find_image_for_sidecar()` live in `plugins/base_plugin.py`. On read, `extract_metadata()` and `_extract_metadata_from_file()` check for a sidecar and let its values override embedded metadata. The watchdog monitors `.xmp` file events and maps them back to the parent image for DB re-extraction.
+
 ---
 
 ### MetadataDatabase — `core/metadata_database.py`
@@ -221,7 +223,7 @@ SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, tags, thumbnail
 - `is_thumbnail_valid` / `batch_get_thumbnail_validity` — **strict**: calls `os.stat()` on the source file to compare mtime/size against the DB. Used by reconcile scan and task functions.
 - `get_cached_thumbnail_paths` / `batch_get_cached_thumbnail_validity` — **trust-cache**: DB-only check, verifies only that the local thumbnail file exists. No `os.stat()` on the source. Used by the heatmap fast path (`request_thumbnail`, `batch_request_thumbnails`) so cached folders display without NAS latency.
 
-`_store_metadata` (called by background metadata extraction) updates all fields including `rating`, so externally-set ratings are picked up on re-scan. `set_rating` updates only the DB rating synchronously; the EXIF write-back is queued separately at `LOW` priority.
+`_store_metadata` (called by background metadata extraction) updates all fields including `rating`, so externally-set ratings are picked up on re-scan. `set_rating` updates only the DB rating synchronously; the sidecar write-back is queued separately at `LOW` priority. The full exiftool read path (`_extract_metadata_from_file`) checks for a sidecar and overrides rating/tags from it.
 
 ---
 

@@ -663,12 +663,13 @@ class ThumbnailManager:
 
     def _write_rating_to_file(self, file_path: str, rating: int):
         """
-        Finds the correct plugin and uses it to write the rating to the file's EXIF data.
+        Finds the correct plugin and uses it to write the rating to an XMP sidecar.
         This method is intended to be called by the RenderManager.
         Returns True on success, False on failure.
         """
+        from plugins.base_plugin import sidecar_path_for
         if self.watchdog_handler:
-            self.watchdog_handler.ignore_next_modification(file_path)
+            self.watchdog_handler.ignore_next_modification(sidecar_path_for(file_path))
 
         if not os.path.exists(file_path):
             logger.warning(f"File not found, cannot write rating: {file_path}")
@@ -687,12 +688,13 @@ class ThumbnailManager:
         return False
 
     def _write_tags_to_file(self, file_path: str, tag_names: list):
-        """Writes the full tag list to the file's XMP:Subject via the appropriate plugin.
+        """Writes the full tag list to an XMP sidecar via the appropriate plugin.
 
         Mirrors _write_rating_to_file: watchdog suppression, plugin lookup, exiftool write.
         """
+        from plugins.base_plugin import sidecar_path_for
         if self.watchdog_handler:
-            self.watchdog_handler.ignore_next_modification(file_path)
+            self.watchdog_handler.ignore_next_modification(sidecar_path_for(file_path))
 
         if not os.path.exists(file_path):
             logger.warning(f"File not found, cannot write tags: {file_path}")
