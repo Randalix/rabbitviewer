@@ -34,7 +34,7 @@ def _make_handler():
     tm = MagicMock()
     tm.render_manager = MagicMock()
     tm.metadata_db = MagicMock()
-    handler = WatchdogHandler(tm, [], is_daemon_mode=True)
+    handler = WatchdogHandler(tm, [])
     return handler, tm
 
 
@@ -49,7 +49,7 @@ def _make_handler_with_db(db):
         func(*args)
 
     tm.render_manager.submit_task.side_effect = _submit_task
-    handler = WatchdogHandler(tm, [], is_daemon_mode=True)
+    handler = WatchdogHandler(tm, [])
     return handler
 
 
@@ -202,7 +202,7 @@ class TestExiftoolAtomicReplace:
         assert paths[0] in filtered
 
     def test_write_tags_propagates_ignore_to_watcher(self, tmp_env, sample_images):
-        """_write_tags_to_file must call ignore_next_modification on the sidecar path.
+        """write_tags_to_file must call ignore_next_modification on the watcher.
 
         With sidecar writes, exiftool's atomic-replace events happen on the
         .xmp file, not the image.  The ignore window must cover that path.
@@ -222,13 +222,15 @@ class TestExiftoolAtomicReplace:
         handler = _make_handler_with_db(db)
         tm.watchdog_handler = handler
 
+        # Stub the plugin so write_tags_to_file reaches the ignore call
+        # but doesn't need a real exiftool binary.
         mock_plugin = MagicMock()
         mock_plugin.is_available.return_value = True
         mock_plugin.write_tags.return_value = True
         tm.plugin_registry = MagicMock()
         tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
 
-        tm._write_tags_to_file(path, ["animal"])
+        tm.write_tags_to_file(path, ["animal"])
 
         # Verify the ignore is on the sidecar path.
         assert xmp in handler._ignore_until
@@ -241,7 +243,7 @@ class TestExiftoolAtomicReplace:
         tm.shutdown()
 
     def test_write_rating_propagates_ignore_to_watcher(self, tmp_env, sample_images):
-        """_write_rating_to_file must call ignore_next_modification on the sidecar path."""
+        """write_rating_to_file must call ignore_next_modification on the watcher."""
         from core.thumbnail_manager import ThumbnailManager
         from plugins.base_plugin import sidecar_path_for
         db = tmp_env["db"]
@@ -263,7 +265,7 @@ class TestExiftoolAtomicReplace:
         tm.plugin_registry = MagicMock()
         tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
 
-        tm._write_rating_to_file(path, 5)
+        tm.write_rating_to_file(path, 5)
 
         # Verify the ignore is on the sidecar path.
         assert xmp in handler._ignore_until

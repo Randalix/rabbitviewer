@@ -266,7 +266,7 @@ class TestWatchdogSidecar:
         tm.metadata_db = MagicMock()
         tm.plugin_registry = MagicMock()
         tm.plugin_registry.get_supported_formats.return_value = {".jpg", ".png", ".cr3"}
-        handler = WatchdogHandler(tm, [], is_daemon_mode=True)
+        handler = WatchdogHandler(tm, [])
         return handler, tm
 
     def _make_event(self, event_type, src_path, is_directory=False):

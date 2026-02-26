@@ -35,7 +35,7 @@ class RenderManager(QObject):
         self.task_callbacks: Dict[str, List[Callable]] = {}
         self.task_callbacks_lock = threading.Lock()
 
-        # --- NEW: Tracking for active jobs ---
+        # Tracking for active jobs
         self.active_jobs: Dict[str, SourceJob] = {}
         self.active_jobs_lock = threading.Lock()
         
@@ -44,7 +44,6 @@ class RenderManager(QObject):
         self.notification_queue: Queue = Queue(maxsize=5000)
 
     def start(self):
-        """Starts the worker threads."""
         if self._running:
             return
         logger.info(f"RenderManager: Starting with {self.num_workers} workers.")
@@ -59,7 +58,6 @@ class RenderManager(QObject):
         # The pipeline processor thread is removed, as SourceJobs are now cooperative tasks.
 
     def get_all_job_ids(self) -> List[str]:
-        """Returns a list of all active source job IDs."""
         with self.active_jobs_lock:
             return list(self.active_jobs.keys())
 
@@ -252,7 +250,7 @@ class RenderManager(QObject):
         if _done_callback is not None:
             try:
                 _done_callback(task_id, None, None)
-            except Exception as e:
+            except Exception as e:  # why: callbacks are user-supplied; exceptions must not re-enter the task graph
                 logging.error(f"Late callback for already-done task '{task_id}' failed: {e}", exc_info=True)
 
         if callback:
@@ -270,17 +268,17 @@ class RenderManager(QObject):
         tasks_to_resubmit = {}
         with self.graph_lock:
             # First, find all tasks that need upgrading, including dependencies.
-            queue = [self.task_graph[tid] for tid in task_ids if tid in self.task_graph]
+            bfs = deque(self.task_graph[tid] for tid in task_ids if tid in self.task_graph)
             visited = set(task_ids)
 
-            while queue:
-                task = queue.pop(0)
+            while bfs:
+                task = bfs.popleft()
                 if task.priority < priority:
                     tasks_to_resubmit[task.task_id] = task
                     for dep_id in task.dependencies:
                         if dep_id not in visited and dep_id in self.task_graph:
                             visited.add(dep_id)
-                            queue.append(self.task_graph[dep_id])
+                            bfs.append(self.task_graph[dep_id])
         
         # Outside the lock, re-submit the tasks. submit_task handles invalidation.
         for task in tasks_to_resubmit.values():
@@ -349,12 +347,8 @@ class RenderManager(QObject):
             except Full:
                 logging.warning(f"Notification queue full; dropping scan_complete for job '{job.job_id}'.")
 
-    def _cooperative_generator_runner(self, job: SourceJob, slice_index: int, retry_count: int = 0):
-        """
-        Processes one item slice from a SourceJob generator and reschedules the next.
-        This function is executed by a standard worker thread.
-        """
-        logger.debug(f"Executing job slice '{job.job_id}::{slice_index}' (retry: {retry_count}).")
+    def _cooperative_generator_runner(self, job: SourceJob, slice_index: int):
+        logger.debug(f"Executing job slice '{job.job_id}::{slice_index}'.")
         # 1. Immediately check for cancellation.
         if job.is_cancelled():
             logger.info(f"Skipping slice {slice_index} for cancelled job '{job.job_id}'.")
@@ -381,7 +375,7 @@ class RenderManager(QObject):
             if job.on_complete:
                 try:
                     job.on_complete()
-                except Exception as e:
+                except Exception as e:  # why: on_complete is caller-supplied; exceptions must not abort the generator dispatch loop
                     logging.error(f"on_complete callback for job '{job.job_id}' failed: {e}", exc_info=True)
             return
 
@@ -399,7 +393,10 @@ class RenderManager(QObject):
         _suppress_progress = _is_daemon_job or job.job_id.startswith("post_scan::")
         if not _suppress_progress:
             from network import protocol
-            notification_data = protocol.ScanProgressData(path=job_path, files=items_to_process)
+            notification_data = protocol.ScanProgressData(
+                path=job_path,
+                files=[protocol.ImageEntryModel(path=p) for p in items_to_process],
+            )
             notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
             logger.info(
                 f"[chunking] generator_runner: scan_progress for '{job.job_id}' "
@@ -504,18 +501,12 @@ class RenderManager(QObject):
                 with self.active_tasks_lock:
                     self.active_tasks[worker_id] = task
                 
-                # --- Task Type Dispatcher ---
-                if task.task_type == TaskType.SIMPLE:
-                    self._execute_simple_task(task)
-                elif task.task_type == TaskType.GENERATOR:
-                    # This path is now primarily for internal generator tasks, not SourceJobs
-                    self._execute_generator_task(task)
+                self._execute_simple_task(task)
 
             except Empty:
                 # No tasks in queue within the timeout, continue waiting/checking shutdown flag
                 continue
-            except Exception as e:
-                # Catch any unexpected errors in the worker loop itself
+            except Exception as e:  # why: worker loop guard; unexpected exceptions must not kill the thread
                 logging.error(f"RenderManager: Worker {worker_id} ({thread_name}) encountered general error: {e}", exc_info=True)
                 # task_done() is called unconditionally in the finally block below.
             finally:
@@ -539,7 +530,7 @@ class RenderManager(QObject):
 
             result = task.func(*task.args, **task.kwargs)
             with self.graph_lock: task.state = TaskState.COMPLETED
-        except Exception as e:
+        except Exception as e:  # why: task func is arbitrary user/plugin code; exceptions mark task FAILED without killing the worker
             error = e
             with self.graph_lock: task.state = TaskState.FAILED
             logger.error(f"Task '{task.task_id}' failed: {e}", exc_info=True)
@@ -552,54 +543,8 @@ class RenderManager(QObject):
                 try:
                     logging.debug(f"Executing on_complete_callback for task '{task.task_id}'.")
                     task.on_complete_callback()
-                except Exception as e:
+                except Exception as e:  # why: on_complete_callback is caller-supplied; must not propagate into the worker
                     logger.error(f"on_complete_callback for '{task.task_id}' failed: {e}", exc_info=True)
-
-    def _execute_generator_task(self, task: RenderTask):
-        """
-        Executes a generator, submitting each yielded item as a new child
-        task in the dependency graph.
-        """
-        logger.info(f"Worker starting GENERATOR task '{task.task_id}'.")
-        error = None
-        try:
-            generator = task.func(*task.args, **task.kwargs)
-            for child_task in generator:
-                if not isinstance(child_task, RenderTask):
-                    logger.warning(f"Generator '{task.task_id}' yielded non-task object: {child_task}")
-                    continue
-                
-                # Automatically link child to parent generator
-                child_task.dependencies.add(task.task_id)
-                
-                self.submit_task(
-                    child_task.task_id, child_task.priority,
-                    child_task.func, *child_task.args,
-                    dependencies=child_task.dependencies,
-                    callback=getattr(child_task, 'callback', None), # Pass callback if exists
-                    task_type=child_task.task_type,
-                    on_complete_callback=getattr(child_task, 'on_complete_callback', None), # Pass new callback
-                    **child_task.kwargs
-                )
-            
-            # Once the generator is exhausted, the generator task itself is complete
-            with self.graph_lock: task.state = TaskState.COMPLETED
-            logger.info(f"Generator task '{task.task_id}' finished yielding children.")
-        except Exception as e:
-            error = e
-            with self.graph_lock: task.state = TaskState.FAILED
-            logger.error(f"Generator task '{task.task_id}' failed: {e}", exc_info=True)
-        finally:
-            self._on_task_finished(task) # Mark as finished even on error
-            self._execute_callbacks(task, success=(error is None), error=error)
-            # --- EXECUTE THE ON-COMPLETE CALLBACK ---
-            if task.on_complete_callback:
-                try:
-                    logging.debug(f"Executing on_complete_callback for generator task '{task.task_id}'.")
-                    task.on_complete_callback()
-                except Exception as e:
-                    logger.error(f"on_complete_callback for '{task.task_id}' failed: {e}", exc_info=True)
-
 
     def _execute_callbacks(self, task: RenderTask, success: bool, result: Any = None, error: Optional[Exception] = None):
         """Execute registered callbacks for a completed task."""
@@ -620,7 +565,7 @@ class RenderManager(QObject):
                     callback(task_id, result, None)
                 else:
                     callback(task_id, None, error)
-            except Exception as e:
+            except Exception as e:  # why: callbacks are user-supplied; one failure must not prevent remaining callbacks
                 logging.error(f"RenderManager: Callback for task '{task_id}' failed: {e}", exc_info=True)
 
     def prepare_for_shutdown(self):
@@ -693,15 +638,20 @@ class RenderManager(QObject):
             ))
         
         # Wait for all workers to finish processing and exit
+        all_exited = True
         for i, worker in enumerate(self.worker_threads):
             worker.join(timeout)
             if worker.is_alive():
                 logger.warning(f"RenderManager: Worker {i} did not stop gracefully within timeout.")
+                all_exited = False
 
-        # The pipeline thread and runner threads are removed, so no need to join them.
-
-        self.worker_threads.clear() # Clear the list of dead threads
-        self.task_queue.join() # Ensure all tasks pulled from queue are marked done
+        self.worker_threads.clear()
+        # why: task_queue.join() blocks until every dequeued item has a matching
+        # task_done().  If a worker timed out above it will never call task_done()
+        # for its in-flight item, so join() would hang forever.  Only safe when
+        # every worker has exited.
+        if all_exited:
+            self.task_queue.join()
         
         # Clear any remaining tasks in graph (e.g., dependencies that never got added to queue)
         with self.graph_lock:

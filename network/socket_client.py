@@ -43,7 +43,7 @@ class SocketConnection:
         try:
             if self.sock:
                 self.sock.close()
-            
+
             self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.sock.settimeout(self.timeout)
             self.sock.connect(self.socket_path)
@@ -107,7 +107,6 @@ class SocketConnection:
             self.connected = False
 
 class ConnectionPool:
-    """Manages a pool of socket connections"""
     def __init__(self, socket_path: str, pool_size: int = 3):
         self.socket_path = socket_path
         self.pool_size = pool_size
@@ -130,10 +129,7 @@ class ConnectionPool:
             return None
 
     def return_connection(self, conn: SocketConnection):
-        try:
-            self.available.put(conn)
-        except queue.Full:
-            pass
+        self.available.put(conn)
 
     def close_all(self):
         with self.lock:
@@ -147,12 +143,16 @@ class ConnectionPool:
                     break
 
 class ThumbnailSocketClient:
-    """Client for interacting with the thumbnail generation service"""
     def __init__(self, socket_path: str):
         self.socket_path = socket_path
         self.connection_pool = ConnectionPool(socket_path)
         self.session_id = str(uuid.uuid4())
-        self.lock = threading.Lock()
+
+    @staticmethod
+    def _to_entry_models(paths: List[str]):
+        """Convert a list of string paths to ImageEntryModel objects."""
+        protocol = _lazy_protocol()
+        return [protocol.ImageEntryModel(path=p) for p in paths]
 
     def _send_request(self, request: protocol.Request, response_model: type[protocol.Response]) -> Optional[protocol.Response]:
         """Send a request using a connection from the pool and validate the response."""
@@ -166,7 +166,7 @@ class ThumbnailSocketClient:
             response_dict = conn.send_receive(request.model_dump())
             if response_dict is None:
                 return None
-            
+
             if response_dict.get("status") == "error":
                 return protocol.ErrorResponse.model_validate(response_dict)
             return response_model.model_validate(response_dict)
@@ -180,7 +180,7 @@ class ThumbnailSocketClient:
             return None
         finally:
             self.connection_pool.return_connection(conn)
-                
+
     def get_directory_files(self, path: str, recursive: bool = True) -> Optional[protocol.GetDirectoryFilesResponse]:
         """Ask the daemon for the definitive list of files in a directory from its database."""
         protocol = _lazy_protocol()
@@ -191,7 +191,7 @@ class ThumbnailSocketClient:
         """Asynchronously requests the generation of previews for a list of images."""
         protocol = _lazy_protocol()
         logging.debug(f"SocketClient: Requesting previews for {len(image_paths)} paths with priority {priority}.")
-        request = protocol.RequestPreviewsRequest(image_paths=image_paths, priority=priority)
+        request = protocol.RequestPreviewsRequest(image_paths=self._to_entry_models(image_paths), priority=priority)
         return self._send_request(request, protocol.RequestPreviewsResponse)
 
     def update_viewport_heatmap(
@@ -205,13 +205,13 @@ class ThumbnailSocketClient:
         protocol = _lazy_protocol()
         request = protocol.UpdateViewportRequest(
             paths_to_upgrade=[
-                protocol.PathPriority(path=p, priority=pri) for p, pri in upgrade_pairs
+                protocol.PathPriority(entry=protocol.ImageEntryModel(path=p), priority=pri) for p, pri in upgrade_pairs
             ],
-            paths_to_downgrade=paths_to_downgrade,
+            paths_to_downgrade=self._to_entry_models(paths_to_downgrade),
             fullres_to_request=[
-                protocol.PathPriority(path=p, priority=pri) for p, pri in fullres_pairs
+                protocol.PathPriority(entry=protocol.ImageEntryModel(path=p), priority=pri) for p, pri in fullres_pairs
             ],
-            fullres_to_cancel=fullres_to_cancel,
+            fullres_to_cancel=self._to_entry_models(fullres_to_cancel),
         )
         return self._send_request(request, protocol.RequestPreviewsResponse)
 
@@ -221,25 +221,22 @@ class ThumbnailSocketClient:
         Returns the response immediately. `response.view_image_path` is set when
         the view image was already cached; None means generation has been queued."""
         protocol = _lazy_protocol()
-        request = protocol.RequestViewImageRequest(image_path=image_path)
+        request = protocol.RequestViewImageRequest(image_entry=protocol.ImageEntryModel(path=image_path))
         return self._send_request(request, protocol.RequestViewImageResponse)
 
     def get_previews_status(self, image_paths: List[str]) -> Optional[protocol.GetPreviewsStatusResponse]:
-        """Checks the generation status for a list of image paths."""
         protocol = _lazy_protocol()
-        request = protocol.GetPreviewsStatusRequest(image_paths=image_paths)
+        request = protocol.GetPreviewsStatusRequest(image_paths=self._to_entry_models(image_paths))
         return self._send_request(request, protocol.GetPreviewsStatusResponse)
 
     def set_rating(self, image_paths: List[str], rating: int) -> Optional[protocol.Response]:
-        """Sets the star rating for a list of images."""
         protocol = _lazy_protocol()
-        request = protocol.SetRatingRequest(image_paths=image_paths, rating=rating)
+        request = protocol.SetRatingRequest(image_paths=self._to_entry_models(image_paths), rating=rating)
         return self._send_request(request, protocol.Response)
 
     def get_metadata_batch(self, image_paths: List[str], priority: bool = False) -> Optional[protocol.GetMetadataBatchResponse]:
-        """Retrieves all known metadata for a list of images."""
         protocol = _lazy_protocol()
-        request = protocol.GetMetadataBatchRequest(image_paths=image_paths, priority=priority)
+        request = protocol.GetMetadataBatchRequest(image_paths=self._to_entry_models(image_paths), priority=priority)
         return self._send_request(request, protocol.GetMetadataBatchResponse)
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
@@ -254,15 +251,13 @@ class ThumbnailSocketClient:
         return self._send_request(request, protocol.GetFilteredFilePathsResponse)
 
     def set_tags(self, image_paths: List[str], tags: List[str]) -> Optional[protocol.Response]:
-        """Adds tags to the given images."""
         protocol = _lazy_protocol()
-        request = protocol.SetTagsRequest(image_paths=image_paths, tags=tags)
+        request = protocol.SetTagsRequest(image_paths=self._to_entry_models(image_paths), tags=tags)
         return self._send_request(request, protocol.Response)
 
     def remove_tags(self, image_paths: List[str], tags: List[str]) -> Optional[protocol.Response]:
-        """Removes tags from the given images."""
         protocol = _lazy_protocol()
-        request = protocol.RemoveTagsRequest(image_paths=image_paths, tags=tags)
+        request = protocol.RemoveTagsRequest(image_paths=self._to_entry_models(image_paths), tags=tags)
         return self._send_request(request, protocol.Response)
 
     def get_tags(self, directory_path: str = "") -> Optional[protocol.GetTagsResponse]:
@@ -272,9 +267,8 @@ class ThumbnailSocketClient:
         return self._send_request(request, protocol.GetTagsResponse)
 
     def get_image_tags(self, image_paths: List[str]) -> Optional[protocol.GetImageTagsResponse]:
-        """Gets the tags currently assigned to each image."""
         protocol = _lazy_protocol()
-        request = protocol.GetImageTagsRequest(image_paths=image_paths)
+        request = protocol.GetImageTagsRequest(image_paths=self._to_entry_models(image_paths))
         return self._send_request(request, protocol.GetImageTagsResponse)
 
     def move_records(self, moves: List[protocol.MoveRecord]) -> Optional[protocol.MoveRecordsResponse]:
@@ -291,7 +285,6 @@ class ThumbnailSocketClient:
 
     # --- Daemon Control Methods ---
     def is_socket_file_present(self) -> bool:
-        """Check if the thumbnailer server socket file exists."""
         return os.path.exists(self.socket_path)
 
     def _send_simple_command(self, command: str) -> bool:
@@ -307,9 +300,7 @@ class ThumbnailSocketClient:
             self.connection_pool.return_connection(conn)
 
     def shutdown_daemon(self) -> bool:
-        """Send a command to shut down the daemon."""
         return self._send_simple_command("shutdown")
 
     def shutdown(self):
-        """Clean up resources"""
         self.connection_pool.close_all()

@@ -14,7 +14,12 @@ class Message:
 
     @classmethod
     def model_validate(cls, data: dict):
-        """Construct from dict, recursively hydrating nested Message fields."""
+        """Construct from dict, recursively hydrating nested Message fields.
+
+        Special coercion: when a field is ``List[ImageEntryModel]`` and an
+        element is a bare ``str``, it is coerced to ``ImageEntryModel(path=str)``.
+        This keeps CLI tools and old protocol clients working.
+        """
         hints = typing.get_type_hints(cls)
         kwargs = {}
         for f in dataclasses.fields(cls):
@@ -27,7 +32,15 @@ class Message:
             if origin is list and val:
                 inner = getattr(hint, '__args__', (None,))[0]
                 if inner and isinstance(inner, type) and issubclass(inner, Message):
-                    val = [inner.model_validate(v) if isinstance(v, dict) else v for v in val]
+                    coerced = []
+                    for v in val:
+                        if isinstance(v, dict):
+                            coerced.append(inner.model_validate(v))
+                        elif isinstance(v, str) and inner is ImageEntryModel:
+                            coerced.append(ImageEntryModel(path=v))
+                        else:
+                            coerced.append(v)
+                    val = coerced
             # Dict[str, MessageSubclass]
             elif origin is dict and val:
                 args = getattr(hint, '__args__', ())
@@ -37,6 +50,9 @@ class Message:
             # Bare MessageSubclass field
             elif isinstance(hint, type) and issubclass(hint, Message) and isinstance(val, dict):
                 val = hint.model_validate(val)
+            # Bare ImageEntryModel from str
+            elif isinstance(hint, type) and hint is ImageEntryModel and isinstance(val, str):
+                val = ImageEntryModel(path=val)
             kwargs[f.name] = val
         return cls(**kwargs)
 
@@ -45,6 +61,18 @@ class Message:
 
     def model_dump_json(self) -> str:
         return json.dumps(self.model_dump())
+
+
+# ==============================================================================
+#  ImageEntryModel — wire representation of ImageEntry
+# ==============================================================================
+
+@dataclasses.dataclass
+class ImageEntryModel(Message):
+    """Wire-format representation of an ImageEntry."""
+    path: str = ""
+    sidecars: List[str] = dataclasses.field(default_factory=list)
+    variant: Optional[str] = None
 
 
 # ==============================================================================
@@ -65,13 +93,11 @@ class Response(Message):
 
 @dataclasses.dataclass
 class ErrorResponse(Response):
-    """Standardized error response."""
     status: str = "error"
     message: str = ""
 
 @dataclasses.dataclass
 class PreviewStatus(Message):
-    """Represents the readiness of previews for a single image."""
     thumbnail_ready: bool = False
     thumbnail_path: Optional[str] = None
     view_image_ready: bool = False
@@ -90,14 +116,14 @@ class GetDirectoryFilesRequest(Request):
 
 @dataclasses.dataclass
 class GetDirectoryFilesResponse(Response):
-    files: List[str] = dataclasses.field(default_factory=list)
+    files: List[ImageEntryModel] = dataclasses.field(default_factory=list)
     thumbnail_paths: Dict[str, str] = dataclasses.field(default_factory=dict)
 
 # --- Request Previews ---
 @dataclasses.dataclass
 class RequestPreviewsRequest(Request):
     command: str = "request_previews"
-    image_paths: List[str] = dataclasses.field(default_factory=list)
+    image_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
     priority: int = 0
 
 @dataclasses.dataclass
@@ -109,7 +135,7 @@ class RequestPreviewsResponse(Response):
 @dataclasses.dataclass
 class GetPreviewsStatusRequest(Request):
     command: str = "get_previews_status"
-    image_paths: List[str] = dataclasses.field(default_factory=list)
+    image_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class GetPreviewsStatusResponse(Response):
@@ -119,7 +145,7 @@ class GetPreviewsStatusResponse(Response):
 @dataclasses.dataclass
 class SetRatingRequest(Request):
     command: str = "set_rating"
-    image_paths: List[str] = dataclasses.field(default_factory=list)
+    image_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
     rating: int = 0
 
     def __post_init__(self):
@@ -130,7 +156,7 @@ class SetRatingRequest(Request):
 @dataclasses.dataclass
 class GetMetadataBatchRequest(Request):
     command: str = "get_metadata_batch"
-    image_paths: List[str] = dataclasses.field(default_factory=list)
+    image_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
     priority: bool = False
 
 @dataclasses.dataclass
@@ -140,23 +166,23 @@ class GetMetadataBatchResponse(Response):
 # --- Update Viewport (heatmap-based per-path priorities) ---
 @dataclasses.dataclass
 class PathPriority(Message):
-    """A file path with its computed heatmap priority."""
-    path: str = ""
+    """An image entry with its computed heatmap priority."""
+    entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
     priority: int = 0
 
 @dataclasses.dataclass
 class UpdateViewportRequest(Request):
     command: str = "update_viewport"
     paths_to_upgrade: List[PathPriority] = dataclasses.field(default_factory=list)
-    paths_to_downgrade: List[str] = dataclasses.field(default_factory=list)
+    paths_to_downgrade: List[ImageEntryModel] = dataclasses.field(default_factory=list)
     fullres_to_request: List[PathPriority] = dataclasses.field(default_factory=list)
-    fullres_to_cancel: List[str] = dataclasses.field(default_factory=list)
+    fullres_to_cancel: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 # --- Request View Image (FULLRES_REQUEST priority) ---
 @dataclasses.dataclass
 class RequestViewImageRequest(Request):
     command: str = "request_view_image"
-    image_path: str = ""
+    image_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
 
 @dataclasses.dataclass
 class RequestViewImageResponse(Response):
@@ -172,19 +198,19 @@ class GetFilteredFilePathsRequest(Request):
 
 @dataclasses.dataclass
 class GetFilteredFilePathsResponse(Response):
-    paths: List[str] = dataclasses.field(default_factory=list)
+    paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 # --- Tags ---
 @dataclasses.dataclass
 class SetTagsRequest(Request):
     command: str = "set_tags"
-    image_paths: List[str] = dataclasses.field(default_factory=list)
+    image_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
     tags: List[str] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class RemoveTagsRequest(Request):
     command: str = "remove_tags"
-    image_paths: List[str] = dataclasses.field(default_factory=list)
+    image_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
     tags: List[str] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
@@ -205,7 +231,7 @@ class GetTagsResponse(Response):
 @dataclasses.dataclass
 class GetImageTagsRequest(Request):
     command: str = "get_image_tags"
-    image_paths: List[str] = dataclasses.field(default_factory=list)
+    image_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class GetImageTagsResponse(Response):
@@ -224,8 +250,8 @@ class Notification(Message):
 
 @dataclasses.dataclass
 class MoveRecord(Message):
-    old_path: str = ""
-    new_path: str = ""
+    old_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
+    new_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
 
 @dataclasses.dataclass
 class MoveRecordsRequest(Request):
@@ -244,7 +270,7 @@ class MoveRecordsResponse(Response):
 class TaskOperation(Message):
     """A single named operation with file paths to operate on."""
     name: str = ""
-    file_paths: List[str] = dataclasses.field(default_factory=list)
+    file_paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class RunTasksRequest(Request):
@@ -268,12 +294,12 @@ class GuiRequest(Message):
 @dataclasses.dataclass
 class GetSelectionResponse(Message):
     status: str = "success"
-    paths: List[str] = dataclasses.field(default_factory=list)
+    paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class RemoveImagesRequest(GuiRequest):
     command: str = "remove_images"
-    paths: List[str] = dataclasses.field(default_factory=list)
+    paths: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class ClearSelectionRequest(GuiRequest):
@@ -296,19 +322,19 @@ class GuiErrorResponse(Message):
 class ScanCompleteData(Message):
     path: str = ""
     file_count: int = 0
-    files: List[str] = dataclasses.field(default_factory=list)
+    files: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class ScanProgressData(Message):
     path: str = ""
-    files: List[str] = dataclasses.field(default_factory=list)
+    files: List[ImageEntryModel] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class PreviewsReadyData(Message):
-    image_path: str = ""
+    image_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
     thumbnail_path: Optional[str] = None
     view_image_path: Optional[str] = None
 
 @dataclasses.dataclass
 class FilesRemovedData(Message):
-    files: List[str] = dataclasses.field(default_factory=list)
+    files: List[ImageEntryModel] = dataclasses.field(default_factory=list)

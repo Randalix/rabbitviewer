@@ -15,13 +15,12 @@ class WatchdogHandler(FileSystemEventHandler):
     at LOW priority for live changes. Initial indexing is handled by
     BackgroundIndexer; this class is exclusively a live-event monitor.
     """
-    def __init__(self, thumbnail_manager: ThumbnailManager, watch_paths: list, is_daemon_mode: bool = False):
+    def __init__(self, thumbnail_manager: ThumbnailManager, watch_paths: list):
         super().__init__()
         self.thumbnail_manager = thumbnail_manager
         self._watch_paths = watch_paths
         self.observer = Observer()
-        self.is_daemon_mode = is_daemon_mode
-        self._ignore_until: dict[str, float] = {}  # path → monotonic deadline
+        self._ignore_until: dict[str, float] = {}  # path → monotonic deadline; dict key access is atomic under CPython GIL
 
     @property
     def watch_paths(self):
@@ -129,6 +128,16 @@ class WatchdogHandler(FileSystemEventHandler):
                 self.thumbnail_manager.metadata_db.remove_records,
                 [event.src_path],
             )
+            # Clean up orphaned XMP sidecar (our sidecars only contain
+            # rating/tags we wrote — useless without the image).
+            from core.priority import xmp_sidecar_path
+            xmp = xmp_sidecar_path(event.src_path)
+            if os.path.exists(xmp):
+                try:
+                    os.remove(xmp)
+                    logging.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
+                except OSError as e:
+                    logging.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
             return
         else:
             return

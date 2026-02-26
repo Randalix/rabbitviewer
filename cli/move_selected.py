@@ -54,7 +54,9 @@ def _call(socket_path: str, payload: dict, timeout: float = 5.0) -> dict:
 
 def get_selection() -> list[str]:
     resp = _call(GUI_SOCKET_PATH, {"command": "get_selection"})
-    return resp.get("paths", [])
+    raw = resp.get("paths", [])
+    # Protocol now returns ImageEntryModel dicts; extract bare path strings.
+    return [p["path"] if isinstance(p, dict) else p for p in raw]
 
 
 def remove_images(paths: list[str]) -> None:
@@ -103,10 +105,19 @@ def main():
         print(f"[{i}/{len(selected)}] {src_path.name}")
         try:
             rsync_move(src_path, dst_path)
-            moves.append({"old_path": str(src_path), "new_path": str(dst_path)})
+            moves.append({"old_entry": {"path": str(src_path)}, "new_entry": {"path": str(dst_path)}})
         except subprocess.CalledProcessError as e:
             errors.append((src, e))
             print(f"  rsync failed for {src}: {e}")
+            continue
+
+        # Move XMP sidecar alongside the image (non-fatal)
+        xmp_src = src_path.with_suffix(".xmp")
+        if xmp_src.exists():
+            try:
+                rsync_move(xmp_src, dest / xmp_src.name)
+            except subprocess.CalledProcessError as e:
+                print(f"  Warning: sidecar move failed for {xmp_src.name}: {e}")
 
     if moves:
         try:
@@ -116,7 +127,7 @@ def main():
             print(f"Warning: could not update daemon DB: {e}")
 
         try:
-            remove_images([m["old_path"] for m in moves])
+            remove_images([m["old_entry"]["path"] for m in moves])
         except Exception as e:
             print(f"Warning: could not remove images from GUI: {e}")
 

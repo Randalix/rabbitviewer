@@ -229,7 +229,7 @@ class ThumbnailManager:
             logger.debug(f"Thumbnail for {image_path} already valid. Sending notification and skipping.")
             paths = self.metadata_db.get_thumbnail_paths(image_path)
             notification_data = protocol.PreviewsReadyData(
-                image_path=image_path,
+                image_entry=protocol.ImageEntryModel(path=image_path),
                 thumbnail_path=paths.get('thumbnail_path'),
                 view_image_path=paths.get('view_image_path')
             )
@@ -263,7 +263,7 @@ class ThumbnailManager:
         # Include view_image_path if it already exists from a prior run.
         existing_view = self.metadata_db.get_thumbnail_paths(image_path).get('view_image_path')
         notification_data = protocol.PreviewsReadyData(
-            image_path=image_path,
+            image_entry=protocol.ImageEntryModel(path=image_path),
             thumbnail_path=thumbnail_path,
             view_image_path=existing_view
         )
@@ -335,7 +335,7 @@ class ThumbnailManager:
         # Send final notification with both paths now available.
         thumbnail_path = self.metadata_db.get_thumbnail_paths(image_path).get('thumbnail_path')
         notification_data = protocol.PreviewsReadyData(
-            image_path=image_path,
+            image_entry=protocol.ImageEntryModel(path=image_path),
             thumbnail_path=thumbnail_path,
             view_image_path=view_image_path
         )
@@ -370,7 +370,7 @@ class ThumbnailManager:
         cached = self.metadata_db.get_cached_thumbnail_paths(image_path)
         if cached and cached.get('thumbnail_path'):
             notification_data = protocol.PreviewsReadyData(
-                image_path=image_path,
+                image_entry=protocol.ImageEntryModel(path=image_path),
                 thumbnail_path=cached['thumbnail_path'],
                 view_image_path=cached.get('view_image_path')
             )
@@ -451,7 +451,7 @@ class ThumbnailManager:
             notification = protocol.Notification(
                 type="previews_ready",
                 data=protocol.PreviewsReadyData(
-                    image_path=path,
+                    image_entry=protocol.ImageEntryModel(path=path),
                     thumbnail_path=info.get('thumbnail_path'),
                     view_image_path=info.get('view_image_path'),
                 ).model_dump()
@@ -661,7 +661,7 @@ class ThumbnailManager:
         duration = time.time() - start_time
         logger.debug(f"Full metadata for {os.path.basename(image_path)} took {duration:.4f}s")
 
-    def _write_rating_to_file(self, file_path: str, rating: int):
+    def write_rating_to_file(self, file_path: str, rating: int):
         """
         Finds the correct plugin and uses it to write the rating to an XMP sidecar.
         This method is intended to be called by the RenderManager.
@@ -687,10 +687,10 @@ class ThumbnailManager:
         logger.warning(f"No plugin found or available for format {ext} to write rating for {file_path}")
         return False
 
-    def _write_tags_to_file(self, file_path: str, tag_names: list):
-        """Writes the full tag list to an XMP sidecar via the appropriate plugin.
+    def write_tags_to_file(self, file_path: str, tag_names: list):
+        """Writes the full tag list to the file's XMP:Subject via the appropriate plugin.
 
-        Mirrors _write_rating_to_file: watchdog suppression, plugin lookup, exiftool write.
+        Mirrors write_rating_to_file: watchdog suppression, plugin lookup, exiftool write.
         """
         from plugins.base_plugin import sidecar_path_for
         if self.watchdog_handler:
@@ -864,7 +864,7 @@ class ThumbnailManager:
             if priority >= Priority.GUI_REQUEST_LOW:
                 paths = self.metadata_db.get_thumbnail_paths(file_path)
                 notification_data = protocol.PreviewsReadyData(
-                    image_path=file_path,
+                    image_entry=protocol.ImageEntryModel(path=file_path),
                     thumbnail_path=paths.get('thumbnail_path'),
                     view_image_path=paths.get('view_image_path')
                 )
@@ -1022,38 +1022,15 @@ class ThumbnailManager:
                 continue
             try:
                 results[name] = handler(file_paths)
-            except Exception as e:
+            except Exception as e:  # why: task operations are user-registered handlers; any exception must not crash the worker loop
                 logger.error(f"Task operation '{name}' failed: {e}", exc_info=True)
                 results[name] = {"error": str(e)}
         return results
 
     def _op_send2trash(self, file_paths: List[str]) -> Dict[str, Any]:
-        """Move files to system trash with per-file error handling."""
-        from send2trash import send2trash
-        succeeded, failed = 0, 0
-        for path in file_paths:
-            try:
-                send2trash(path)
-                succeeded += 1
-            except OSError as e:
-                if "Directory not found" in str(e):
-                    # Fallback: volume trash unavailable, try home trash
-                    home_trash = os.path.expanduser("~/.Trash")
-                    try:
-                        os.makedirs(home_trash, exist_ok=True)
-                        import shutil
-                        shutil.move(path, home_trash)
-                        succeeded += 1
-                        continue
-                    except Exception as fallback_e:
-                        logger.warning(f"Home trash fallback also failed for {path}: {fallback_e}")
-                logger.warning(f"Failed to trash {path}: {e}")
-                failed += 1
-            except Exception as e:
-                logger.warning(f"Failed to trash {path}: {e}")
-                failed += 1
-        logger.info(f"send2trash: {succeeded} trashed, {failed} failed out of {len(file_paths)}")
-        return {"succeeded": succeeded, "failed": failed}
+        """Move files (and their XMP sidecars) to system trash."""
+        from core.file_ops import trash_with_sidecars
+        return trash_with_sidecars(file_paths)
 
     def _op_remove_records(self, file_paths: List[str]) -> Dict[str, Any]:
         """Remove database records and associated cache files."""
@@ -1080,7 +1057,7 @@ class ThumbnailManager:
         self.render_manager.submit_task(
             task_id=task_id,
             priority=Priority.LOW,
-            func=self._write_rating_to_file,
+            func=self.write_rating_to_file,
             file_path=file_path,
             rating=rating
         )

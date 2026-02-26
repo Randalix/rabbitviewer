@@ -49,7 +49,6 @@ class PictureView(QWidget):
             self.escapePressed.emit()
 
     def _updateInspector(self, event_pos: QPointF) -> None:
-        """Update inspector view with current mouse position via event system."""
         if not self._current_path or not self._picture_base.has_image():
             return
             
@@ -88,8 +87,7 @@ class PictureView(QWidget):
         path_to_load = None
         response = self.socket_client.request_view_image(image_path)
         if response and response.status == "success" and response.view_image_path:
-            if os.path.exists(response.view_image_path):
-                path_to_load = response.view_image_path
+            path_to_load = response.view_image_path
 
         if not path_to_load:
             # Generation queued — show placeholder and wait for previews_ready notification.
@@ -159,7 +157,6 @@ class PictureView(QWidget):
         
     @property
     def current_path(self) -> str:
-        """Get the current image path (original path)."""
         return self._current_path
 
     def _fetch_rating(self, path: str):
@@ -170,7 +167,7 @@ class PictureView(QWidget):
                 resp = self.socket_client.get_metadata_batch([path])
                 if resp and path in resp.metadata:
                     rating = resp.metadata[path].get("rating", 0) or 0
-            except Exception as e:
+            except Exception as e:  # why: socket calls can raise ConnectionError/OSError/TimeoutError; emit zero so status bar gets a value
                 logging.debug(f"Rating fetch failed for {path}: {e}")
         self._rating_ready.emit(path, int(rating))
 
@@ -192,15 +189,14 @@ class PictureView(QWidget):
 
     @Slot(object)
     def _process_daemon_notification(self, event_data: DaemonNotificationEventData):
-        """Handle daemon notifications on the main GUI thread."""
         if event_data.notification_type == "previews_ready":
             try:
                 data = protocol.PreviewsReadyData.model_validate(event_data.data)
 
                 # If this is the image we are waiting for, load it.
-                if data.view_image_path and data.image_path == self._current_path:
-                    logging.info(f"Loading newly generated view image via notification: {data.image_path}")
-                    self.loadImage(data.image_path, force_reload=True)
+                if data.view_image_path and data.image_entry.path == self._current_path:
+                    logging.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
+                    self.loadImage(data.image_entry.path, force_reload=True)
             except Exception as e:  # why: protocol errors must not crash the view
                 logging.error(f"Error processing 'previews_ready' in PictureView: {e}", exc_info=True)
 

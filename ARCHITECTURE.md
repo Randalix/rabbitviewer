@@ -214,7 +214,7 @@ Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate
 
 ### MetadataDatabase — `core/metadata_database.py`
 
-SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, tags, thumbnail + view image cache paths, content hashes. Thread-safe via `threading.Lock` (single shared connection). A module-level singleton (`get_metadata_database`) prevents multiple connections to the same path.
+SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, tags, thumbnail + view image cache paths, content hashes, and sidecar paths (`sidecars TEXT DEFAULT '[]'`, JSON array). Thread-safe via `threading.Lock` (single shared connection). A module-level singleton (`get_metadata_database`) prevents multiple connections to the same path. `_build_entry(file_path, sidecars_json)` constructs an `ImageEntry` from DB columns.
 
 **Tag system** uses a normalized schema: `tags` table (id, name, kind) + `image_tags` junction table (file_path, tag_id) with CASCADE deletes. Tags have a `kind` field (`'keyword'` or `'workflow'`). Keywords are auto-discovered from `XMP:Subject` / `IPTC:Keywords` during metadata extraction. CRUD methods: `get_or_create_tag`, `add_image_tags`, `remove_image_tags`, `set_image_tags`, `batch_set_tags`, `batch_remove_tags`, `get_image_tags`, `get_all_tags`, `get_directory_tags`. `get_filtered_file_paths` accepts an optional `tag_names` parameter that adds a junction-table subquery filter.
 
@@ -229,7 +229,19 @@ SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, tags, thumbnail
 
 ### Shared Data Types — `core/priority.py`
 
-Qt-free enums and dataclasses shared across daemon, plugins, and scripts: `Priority`, `TaskState`, `TaskType`, `SourceJob`, `RenderTask`. `SourceJob` has an optional `task_priority` field for decoupling generator priority from child task priority. `RenderTask` supports cooperative cancellation via `cancel_event` (`threading.Event`) and fast worker discard via `is_active`.
+Qt-free enums and dataclasses shared across daemon, plugins, and scripts: `Priority`, `TaskState`, `TaskType`, `SourceJob`, `RenderTask`, `ImageEntry`. `SourceJob` has an optional `task_priority` field for decoupling generator priority from child task priority. `RenderTask` supports cooperative cancellation via `cancel_event` (`threading.Event`) and fast worker discard via `is_active`.
+
+**`ImageEntry`** — frozen, hashable dataclass pairing an image path with its sidecar files. Fields: `path` (str), `sidecars` (tuple of str), `variant` (Optional[str], reserved for future virtual copies). Identity is `(path, variant)` only — custom `__eq__`/`__hash__` so entries with the same path but different sidecar discovery states compare equal. `from_path()` factory auto-discovers the XMP sidecar via `_xmp_sidecar_path()`. `all_files()` returns the image path plus all sidecars. `to_dict()` and `from_dict()` handle serialization (dict, bare string, or passthrough). Currently only single `.xmp` sidecars are supported; the `variant` field is always `None`.
+
+### File Operations — `core/file_ops.py`
+
+Sidecar-aware file operations. All public functions accept `List[str]` of image paths (matching operation-registry signatures). Internally resolves sidecars via `resolve_sidecars()` → `_xmp_sidecar_path()`.
+
+- `resolve_sidecars(image_path)` — returns existing sidecar paths for an image
+- `trash_with_sidecars(file_paths)` — trashes images + sidecars, with home-trash fallback on macOS
+- `remove_with_sidecars(file_paths)` — `os.remove()` for images + sidecars
+
+Sidecar failures are always non-fatal (logged, never fail the image operation). `ThumbnailManager._op_send2trash` delegates to `trash_with_sidecars`. `WatchdogHandler.dispatch()` removes orphaned `.xmp` sidecars when an image deletion event is received.
 
 ### Heatmap — `core/heatmap.py`
 
@@ -253,18 +265,28 @@ Watchdog-based filesystem monitor. Initial scan is delayed 30 s after startup to
 
 ### Socket Protocol — `network/protocol.py`
 
-Unix socket at `/tmp/rabbitviewer_{username}.sock` (configurable). Messages are length-prefixed JSON: 4-byte big-endian `uint32` followed by the UTF-8 JSON body. Schemas are Pydantic models.
+Unix socket at `/tmp/rabbitviewer_{username}.sock` (configurable). Messages are length-prefixed JSON: 4-byte big-endian `uint32` followed by the UTF-8 JSON body. Schemas are `dataclass`-based `Message` subclasses in `network/protocol.py`.
+
+**`ImageEntryModel`** — wire representation of an image: `{"path": "/a.cr3", "sidecars": ["/a.xmp"], "variant": null}`. All request/response fields that carry image references use `List[ImageEntryModel]` instead of bare `List[str]`. `Message.model_validate()` auto-coerces bare strings in `List[ImageEntryModel]` fields to `ImageEntryModel(path=str)` for backward compatibility with CLI tools. Dict-keyed fields (`statuses`, `metadata`, `tags`, `thumbnail_paths`) remain `Dict[str, ...]` because JSON dict keys must be strings.
+
+**Boundary conventions:**
+- **DB primary key** — `file_path TEXT` (str)
+- **Task IDs** — `meta::{path}`, `view::{path}` (str, extracted from `entry.path`)
+- **JSON dict keys** in responses — `entry.path` strings
+- **Protocol wire** — `ImageEntryModel` (JSON object with `path`, `sidecars`, `variant`)
+- **ScriptAPI** — `List[str]` / `Set[str]` (string boundary for user scripts)
 
 Two channels:
 - **Request/response** — `ThumbnailSocketClient` ↔ `ThumbnailSocketServer`
 - **Notifications** — `NotificationListener` maintains a persistent connection; daemon pushes `previews_ready`, `scan_progress`, `scan_complete`, `files_removed` events
 
 **Key request types:**
-- `update_viewport` — carries per-path `PathPriority` pairs for thumb upgrades, downgrade paths, fullres requests, and fullres cancels. See `PROTOCOL.md` for full schema.
-- `set_tags` / `remove_tags` — bulk tag assignment/removal for image paths. DB update is synchronous; XMP write-back is queued asynchronously.
+- `update_viewport` — carries per-path `PathPriority` pairs (with `entry: ImageEntryModel`) for thumb upgrades, downgrade paths, fullres requests, and fullres cancels. See `PROTOCOL.md` for full schema.
+- `set_tags` / `remove_tags` — bulk tag assignment/removal for image entries. DB update is synchronous; XMP write-back is queued asynchronously.
 - `get_tags` — returns two-tier tag lists (directory-scoped + global) for autocomplete.
 - `get_image_tags` — returns per-path tag lists for a set of images.
 - `get_filtered_file_paths` — extended with optional `tag_names` for combined text + star + tag filtering.
+- `move_records` — carries `List[MoveRecord]` with `old_entry`/`new_entry: ImageEntryModel`.
 
 See `PROTOCOL.md` for full message schema reference.
 

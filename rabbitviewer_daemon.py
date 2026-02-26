@@ -96,7 +96,7 @@ def main():
     thumbnail_manager = ThumbnailManager(config_manager, metadata_database)
 
     logging.debug(f"Initializing WatchdogHandler for paths: {WATCH_PATHS}")
-    watcher = WatchdogHandler(thumbnail_manager, WATCH_PATHS, is_daemon_mode=True)
+    watcher = WatchdogHandler(thumbnail_manager, WATCH_PATHS)
     thumbnail_manager.watchdog_handler = watcher
 
     def shutdown_service(signum=None, frame=None):

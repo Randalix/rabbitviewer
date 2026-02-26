@@ -42,7 +42,6 @@ class GuiServer(QObject):
     # ------------------------------------------------------------------
 
     def start(self):
-        """Bind the socket and start the listener thread."""
         try:
             os.remove(GUI_SOCKET_PATH)
         except FileNotFoundError:
@@ -58,7 +57,6 @@ class GuiServer(QObject):
         logging.info(f"GuiServer listening on {GUI_SOCKET_PATH}")
 
     def stop(self):
-        """Signal the listener thread to stop and clean up."""
         self._running = False
         if self._server_socket:
             try:
@@ -141,7 +139,7 @@ class GuiServer(QObject):
                 return self._cmd_get_selection()
             elif command == "remove_images":
                 req = protocol.RemoveImagesRequest.model_validate(request_data)
-                return self._cmd_remove_images(req.paths)
+                return self._cmd_remove_images([e.path for e in req.paths])
             elif command == "clear_selection":
                 return self._cmd_clear_selection()
             else:
@@ -152,8 +150,10 @@ class GuiServer(QObject):
 
     def _cmd_get_selection(self) -> str:
         mw = self._main_window
-        selected_paths = list(mw.selection_state.selected_paths)
-        return protocol.GetSelectionResponse(paths=sorted(selected_paths)).model_dump_json()
+        selected_paths = list(mw.selection_state.selected_paths)  # why: CPython GIL guarantees atomic set snapshot; not safe under free-threaded builds
+        return protocol.GetSelectionResponse(
+            paths=[protocol.ImageEntryModel(path=p) for p in sorted(selected_paths)]
+        ).model_dump_json()
 
     def _cmd_remove_images(self, paths: list) -> str:
         self._run_on_main_sync(lambda: self._main_window.remove_images(paths))

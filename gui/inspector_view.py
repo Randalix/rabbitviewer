@@ -59,14 +59,14 @@ class InspectorView(QWidget):
 
         # Video scrub state
         self._scrub_player = None       # headless mpv for frame extraction
-        self._scrub_video_path: str | None = None
-        self._scrub_duration: float = 0.0
         self._is_video_mode: bool = False
         # Persistent scrub worker: only one thread, processes latest request.
         self._scrub_request: Optional[tuple] = None  # (video_path, norm_x)
         self._scrub_lock = threading.Lock()
         self._scrub_event = threading.Event()
         self._scrub_thread: Optional[threading.Thread] = None
+        # why: CPython GIL makes single bool read/write atomic; the worst case is
+        # one extra loop iteration in _scrub_worker after closeEvent, which is harmless.
         self._scrub_stop = False
 
         self.setWindowTitle("Inspector")
@@ -119,7 +119,7 @@ class InspectorView(QWidget):
                 # the user currently wants (slow-drive case: the fetch returned
                 # empty and _current_image_path was never set to the desired path).
                 # Skip if in video mode — scrub worker manages the display.
-                target = data.image_path
+                target = data.image_entry.path
                 is_target = (target == self._current_image_path
                              or target == self._desired_image_path)
                 if data.view_image_path and is_target and not self._is_video_mode:
@@ -265,6 +265,8 @@ class InspectorView(QWidget):
             self._picture_base.setCenter(norm_pos)
 
     def set_zoom_factor(self, zoom: float):
+        # why: tighter bounds than PictureBase (0.01–50.0) because the inspector
+        # window is small; sub-0.1x is invisible and >20x is pixelated noise.
         self._zoom_factor = max(0.1, min(zoom, 20.0))
         self._update_window_title()
         # why: defer PictureBase sync until an image is loaded; update_view() applies
@@ -429,7 +431,7 @@ class InspectorView(QWidget):
         """Persistent background thread: processes the latest scrub request."""
         try:
             import mpv as _mpv
-        except Exception as e:
+        except Exception as e:  # why: mpv is an optional dependency; missing lib should not crash the worker thread
             logging.error("Failed to import mpv for scrub worker: %s", e)
             return
 
@@ -441,7 +443,7 @@ class InspectorView(QWidget):
             player = _mpv.MPV(vo="null", ao="null", aid="no", hwdec="auto-safe",
                                hr_seek="yes", keep_open="yes",
                                pause=True)
-        except Exception as e:
+        except Exception as e:  # why: mpv player creation can fail for GPU/driver/config reasons; degrade gracefully
             logging.error("Failed to create scrub player: %s", e)
             return
 
@@ -496,18 +498,17 @@ class InspectorView(QWidget):
                     qimg = QImage(data, w, h, QImage.Format_RGBA8888).copy()
                     if not self._scrub_stop:
                         self._video_frame_ready.emit(qimg)
-            except Exception as e:
+            except Exception as e:  # why: mpv seek/screenshot can fail on corrupt frames or driver errors; skip frame silently
                 logging.debug("Scrub worker frame grab failed: %s", e)
 
         # Cleanup.
         try:
             player.terminate()
-        except Exception:
+        except Exception:  # why: terminate can raise if process already dead
             pass
 
     @Slot(QImage)
     def _on_video_frame_ready(self, frame: QImage):
-        """Receive a grabbed frame on the GUI thread and display it."""
         if not self._is_video_mode:
             return
         if frame and not frame.isNull():
@@ -521,8 +522,6 @@ class InspectorView(QWidget):
         if self._scrub_thread and self._scrub_thread.is_alive():
             self._scrub_thread.join(timeout=2)
         self._scrub_thread = None
-        self._scrub_video_path = None
-        self._scrub_duration = 0.0
 
     def closeEvent(self, event):
         # Signal any in-flight background fetch to discard its result.
