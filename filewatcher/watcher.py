@@ -1,9 +1,12 @@
 import logging
 import os
+import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from core.thumbnail_manager import ThumbnailManager
 from core.rendermanager import Priority
+
+_IGNORE_WINDOW_SECS = 2.0
 
 
 class WatchdogHandler(FileSystemEventHandler):
@@ -18,7 +21,7 @@ class WatchdogHandler(FileSystemEventHandler):
         self._watch_paths = watch_paths
         self.observer = Observer()
         self.is_daemon_mode = is_daemon_mode
-        self._ignore_next_mod = set()
+        self._ignore_until: dict[str, float] = {}  # path → monotonic deadline
 
     @property
     def watch_paths(self):
@@ -66,9 +69,14 @@ class WatchdogHandler(FileSystemEventHandler):
         logging.info("Watchdog observer stopped.")
 
     def ignore_next_modification(self, path: str):
-        """Suppress the next watchdog modified event for path — used after a self-inflicted EXIF write."""
-        logging.debug(f"Watchdog: Will ignore next modification for {path}")
-        self._ignore_next_mod.add(path)
+        """Suppress watchdog events for *path* for a short window after a self-inflicted EXIF write.
+
+        exiftool -overwrite_original produces multiple filesystem events
+        (delete + rename/create) so a single-use flag is insufficient.
+        """
+        deadline = time.monotonic() + _IGNORE_WINDOW_SECS
+        logging.debug(f"Watchdog: Ignoring events for {path} for {_IGNORE_WINDOW_SECS}s")
+        self._ignore_until[path] = deadline
 
     def dispatch(self, event):
         """Route filesystem events to the appropriate render or DB-cleanup task."""
@@ -81,14 +89,14 @@ class WatchdogHandler(FileSystemEventHandler):
             return
 
         # why: exiftool -overwrite_original does delete-original + rename-tmp,
-        # producing a transient FileDeletedEvent for the real path followed by
-        # a FileMovedEvent (src=tmp, already caught above).  Suppress all
-        # events for the real path while it is in the ignore set and clear the
-        # flag so subsequent real events proceed normally.
-        if event.src_path in self._ignore_next_mod:
-            self._ignore_next_mod.discard(event.src_path)
-            logging.debug(f"Watchdog: Ignoring self-inflicted {event.event_type}: {event.src_path}")
-            return
+        # producing multiple filesystem events (delete, created/modified) for
+        # the real path.  Suppress all events within the ignore window.
+        deadline = self._ignore_until.get(event.src_path)
+        if deadline is not None:
+            if time.monotonic() < deadline:
+                logging.debug(f"Watchdog: Ignoring self-inflicted {event.event_type}: {event.src_path}")
+                return
+            del self._ignore_until[event.src_path]
 
         if event.event_type in ['created', 'modified']:
             file_path = event.src_path

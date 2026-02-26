@@ -97,6 +97,7 @@ def main():
 
     logging.debug(f"Initializing WatchdogHandler for paths: {WATCH_PATHS}")
     watcher = WatchdogHandler(thumbnail_manager, WATCH_PATHS, is_daemon_mode=True)
+    thumbnail_manager.watchdog_handler = watcher
 
     def shutdown_service(signum=None, frame=None):
         logging.info("Shutting down RabbitViewer Daemon...")
