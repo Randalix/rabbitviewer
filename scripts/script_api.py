@@ -35,24 +35,12 @@ class ScriptAPI:
         return None
         
     def get_selected_images(self) -> Set[str]:
-        """Get paths of all currently selected images."""
-        if self.main_window.stacked_widget.currentWidget() == self.main_window.picture_view:
-            current_path = self.main_window.picture_view.current_path
-            return {current_path} if current_path else set()
+        """Get paths of all currently selected images.
 
-        view = self.main_window.thumbnail_view
-        if not (view and hasattr(view, 'all_files')):
-            return set()
-
-        selected_images = set(self.main_window.selection_state.selected_paths)
-        
-        # If no images are selected, return the hovered image as a fallback.
-        if not selected_images:
-            hovered_image = self.get_hovered_image()
-            if hovered_image:
-                return {hovered_image}
-        
-        return selected_images
+        Delegates to MainWindow.get_effective_selection() which returns
+        the explicit selection, falling back to the hovered image.
+        """
+        return set(self.main_window.get_effective_selection())
 
     def get_benchmark_results(self) -> Dict[str, float]:
         """Return comprehensive benchmark results."""

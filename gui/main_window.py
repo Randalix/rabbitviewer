@@ -346,11 +346,24 @@ class MainWindow(QMainWindow):
             self.tag_filter_dialog.raise_()
             self.tag_filter_dialog.activateWindow()
 
+    def get_effective_selection(self) -> list:
+        """Return selected image paths, falling back to the hovered image."""
+        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+            path = self.picture_view.current_path
+            return [path] if path else []
+
+        selected = list(self.selection_state.selected_paths)
+        if not selected and self.thumbnail_view:
+            hovered = self.thumbnail_view.get_hovered_image_path()
+            if hovered:
+                return [hovered]
+        return selected
+
     def open_tag_editor(self):
         """Open the tag assignment popup for selected images."""
         if not self.thumbnail_view or not self.thumbnail_view.socket_client:
             return
-        selected = list(self.thumbnail_view._current_selection)
+        selected = self.get_effective_selection()
         if not selected:
             return
 
@@ -381,7 +394,7 @@ class MainWindow(QMainWindow):
         """Handle tag editor confirmation."""
         if not self.thumbnail_view or not self.thumbnail_view.socket_client:
             return
-        selected = list(self.thumbnail_view._current_selection)
+        selected = self.get_effective_selection()
         if not selected:
             return
         sc = self.thumbnail_view.socket_client
