@@ -227,6 +227,8 @@ class ThumbnailViewWidget(QFrame):
         self._last_layout_file_count = 0
         self._last_thumb_pairs: dict[str, int] = {}   # path → priority from last heatmap
         self._last_fullres_pairs: dict[str, int] = {}  # path → priority from last heatmap
+        self._stale_request_ts: dict[str, float] = {}  # path → monotonic time first seen unloaded after request
+        self._STALE_THRESHOLD_S = 5.0  # seconds before re-requesting an unloaded thumbnail
         self._viewport_generation: int = 0  # monotonic counter; stale IPC calls check this
 
         self.image_states: Dict[int, ImageState] = {}
@@ -784,7 +786,6 @@ class ThumbnailViewWidget(QFrame):
             self._is_loading = False
             self.reapply_filters()
 
-
     def _add_image_batch(self, files: List[str]):
         """Adds a batch of new file paths (data-only, no widget creation).
 
@@ -1026,6 +1027,7 @@ class ThumbnailViewWidget(QFrame):
             )
         self._last_thumb_pairs = {}
         self._last_fullres_pairs = {}
+        self._stale_request_ts = {}
         self._hovered_label = None
 
         if hasattr(self, '_resize_timer'):
@@ -1575,7 +1577,34 @@ class ThumbnailViewWidget(QFrame):
 
         # --- Early out: skip IPC when every (path, priority) pair is identical ---
         if current_thumb == self._last_thumb_pairs and current_fullres == self._last_fullres_pairs:
-            return
+            # Check for stale requests: paths we already sent but never got a
+            # notification back for (e.g. notification channel dropped).
+            now = time.monotonic()
+            stale_evicted = 0
+            for p in list(current_thumb):
+                oi = self._path_to_idx.get(p, -1)
+                if oi < 0:
+                    continue
+                st = self.image_states.get(oi)
+                if st and not st.loaded:
+                    first_seen = self._stale_request_ts.get(p)
+                    if first_seen is None:
+                        self._stale_request_ts[p] = now
+                    elif now - first_seen >= self._STALE_THRESHOLD_S:
+                        # Evict so the delta logic below re-requests it.
+                        del self._last_thumb_pairs[p]
+                        del self._stale_request_ts[p]
+                        stale_evicted += 1
+                else:
+                    # Loaded — no longer stale.
+                    self._stale_request_ts.pop(p, None)
+            if stale_evicted:
+                logging.info(
+                    "[heatmap] re-requesting %d stale thumbnails", stale_evicted,
+                )
+                # Fall through to delta computation with the evicted entries.
+            else:
+                return
 
         # --- Compute deltas: only send paths whose priority changed or that entered/left ---
         prev_thumb = self._last_thumb_pairs
