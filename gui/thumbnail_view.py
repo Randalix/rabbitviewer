@@ -402,6 +402,7 @@ class ThumbnailViewWidget(QFrame):
                 if mouse_event.button() == Qt.LeftButton:
                     hovered_path = self.get_hovered_image_path()
                     if hovered_path:
+                        self._restore_pre_click_selection()
                         self.doubleClicked.emit(hovered_path)
                     return True  # Event handled
             return False
@@ -411,6 +412,7 @@ class ThumbnailViewWidget(QFrame):
                 if mouse_event.button() == Qt.LeftButton:
                     hovered_path = self.get_hovered_image_path()
                     if hovered_path:
+                        self._restore_pre_click_selection()
                         self.doubleClicked.emit(hovered_path)
                     return True  # Event handled
             return False
@@ -427,6 +429,7 @@ class ThumbnailViewWidget(QFrame):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self._pre_click_selection = set(self._current_selection)
             start_index = self._get_thumbnail_at_pos(event.pos())
             if start_index is None:
                 # Click was on the background, clear selection
@@ -1125,6 +1128,18 @@ class ThumbnailViewWidget(QFrame):
 
         super().mouseReleaseEvent(event)
 
+    def _restore_pre_click_selection(self):
+        """Restore selection to the state before the last mouse press (used by double-click)."""
+        pre = getattr(self, '_pre_click_selection', None)
+        if pre is not None:
+            cmd = ReplaceSelectionCommand(paths=pre, source="thumbnail_view", timestamp=time.time())
+            event_system.publish(cmd)
+            # Reset drag state so the release doesn't re-commit
+            self._drag_start_index = -1
+            self._drag_last_index = -1
+            self._selection_mode = None
+            self._last_preview_selected = set()
+
     def _update_selection_preview(self, start_idx: int, end_idx: Optional[int]):
         """Visually update thumbnail borders during a drag without changing the core selection state.
 
@@ -1197,6 +1212,7 @@ class ThumbnailViewWidget(QFrame):
         if event.button() == Qt.LeftButton:
             hovered_path = self.get_hovered_image_path()
             if hovered_path:
+                self._restore_pre_click_selection()
                 self.doubleClicked.emit(hovered_path)
                 logging.debug("Double-clicked on thumbnail, emitting signal for path: %s", hovered_path)
             else:
