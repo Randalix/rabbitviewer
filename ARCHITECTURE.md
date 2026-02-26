@@ -251,7 +251,7 @@ Watchdog-based filesystem monitor. Initial scan is delayed 30 s after startup to
 
 ### Socket Protocol — `network/protocol.py`
 
-Unix socket at `/tmp/rabbitviewer_thumbnailer.sock` (configurable). Messages are length-prefixed JSON: 4-byte big-endian `uint32` followed by the UTF-8 JSON body. Schemas are Pydantic models.
+Unix socket at `/tmp/rabbitviewer_{username}.sock` (configurable). Messages are length-prefixed JSON: 4-byte big-endian `uint32` followed by the UTF-8 JSON body. Schemas are Pydantic models.
 
 Two channels:
 - **Request/response** — `ThumbnailSocketClient` ↔ `ThumbnailSocketServer`
@@ -341,7 +341,7 @@ Pub-sub bus for GUI-internal communication. Typed event data classes; history ca
 Key config paths:
 
 ```yaml
-system.socket_path: /tmp/rabbitviewer_thumbnailer.sock
+system.socket_path: /tmp/rabbitviewer_{username}.sock
 cache_dir: ~/.rabbitviewer
 database_path: metadata.db
 thumbnail_size: 128
