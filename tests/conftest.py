@@ -31,7 +31,13 @@ if 'PySide6' not in sys.modules:
         def __init__(self, x=0.0, y=0.0): self.x = x; self.y = y
 
     class _Qt:
-        pass
+        CaseInsensitive = 1
+        Key_Return = 0x01000004
+        Key_Enter = 0x01000005
+        Key_Tab = 0x01000001
+        Key_Escape = 0x01000000
+        Key_Up = 0x01000013
+        Key_Down = 0x01000015
 
     _qtcore = types.ModuleType('PySide6.QtCore')
     _qtcore.QObject = _QObject        # type: ignore[attr-defined]
@@ -87,8 +93,26 @@ if 'PySide6' not in sys.modules:
             'setSpacing': lambda self, *a: None,
         }))
     setattr(_qtwidgets, 'QApplication', type('QApplication', (_Stub,), {}))
-    for _name in ('QLineEdit', 'QTextEdit', 'QPlainTextEdit', 'QComboBox', 'QSpinBox', 'QDialog'):
+    class _QLineEdit(_QWidget):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._text = ""
+            self._cursor = 0
+        def text(self): return self._text
+        def setText(self, t): self._text = t; self._cursor = len(t)
+        def cursorPosition(self): return self._cursor
+        def setCursorPosition(self, p): self._cursor = p
+        def setPlaceholderText(self, t): pass
+        def clear(self): self._text = ""; self._cursor = 0
+    _qtwidgets.QLineEdit = _QLineEdit  # type: ignore[attr-defined]
+    for _name in ('QTextEdit', 'QPlainTextEdit', 'QComboBox', 'QSpinBox', 'QDialog'):
         setattr(_qtwidgets, _name, type(_name, (_QWidget,), {}))
+    # QCompleter needs class-level attributes (PopupCompletion, etc.)
+    class _QCompleter(_Stub):
+        PopupCompletion = 0
+        def popup(self): return _Stub()
+    _qtwidgets.QCompleter = _QCompleter  # type: ignore[attr-defined]
+    _qtcore.QStringListModel = type('QStringListModel', (_Stub,), {})  # type: ignore[attr-defined]
 
     _pyside6 = types.ModuleType('PySide6')
     _pyside6.QtCore = _qtcore         # type: ignore[attr-defined]

@@ -55,9 +55,4 @@ class TagFilterDialog(QDialog):
         self.tags_changed.emit([])
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Tab:
-            focused = self.focusWidget()
-            if isinstance(focused, TagInput):
-                focused.keyPressEvent(event)
-            return
         super().keyPressEvent(event)
