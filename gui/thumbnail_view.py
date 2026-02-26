@@ -634,8 +634,21 @@ class ThumbnailViewWidget(QFrame):
                 self._initial_thumb_paths[source_path] = thumb_path
                 continue
             self._thumb_path_cache[orig_idx] = thumb_path
-        # Re-sync viewport so newly available thumbnails get loaded for visible labels
-        self._sync_virtual_viewport()
+
+            # If this label is already materialized (placeholder), load the
+            # pixmap now.  The files signal is queued before thumbs, so labels
+            # are typically created as placeholders before thumb paths arrive.
+            label = self.labels.get(orig_idx)
+            if label and orig_idx not in self._pixmap_cache:
+                image = QImage(thumb_path)
+                if not image.isNull():
+                    pixmap = QPixmap.fromImage(image)
+                    self._pixmap_cache[orig_idx] = pixmap
+                    label.updateThumbnail(pixmap)
+                    label.loaded = True
+                    state = self.image_states.get(orig_idx)
+                    if state:
+                        state.loaded = True
 
     def _request_label_update(self, idx: int) -> None:
         label = self.labels.get(idx)
