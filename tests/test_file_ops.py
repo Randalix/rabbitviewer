@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 class TestResolveSidecars:
     def test_with_xmp(self, tmp_path):
         img = tmp_path / "photo.cr3"
-        xmp = tmp_path / "photo.xmp"
+        xmp = tmp_path / "photo.cr3.xmp"
         img.write_text("image")
         xmp.write_text("sidecar")
 
@@ -23,7 +23,7 @@ class TestResolveSidecars:
 
     def test_jpeg_extension(self, tmp_path):
         img = tmp_path / "photo.JPG"
-        xmp = tmp_path / "photo.xmp"
+        xmp = tmp_path / "photo.JPG.xmp"
         img.write_text("image")
         xmp.write_text("sidecar")
 
@@ -39,7 +39,7 @@ class TestTrashWithSidecars:
 
     def test_trashes_image_and_sidecar(self, tmp_path):
         img = tmp_path / "photo.cr3"
-        xmp = tmp_path / "photo.xmp"
+        xmp = tmp_path / "photo.cr3.xmp"
         img.write_text("image")
         xmp.write_text("sidecar")
 
@@ -70,7 +70,7 @@ class TestTrashWithSidecars:
 
     def test_sidecar_failure_nonfatal(self, tmp_path):
         img = tmp_path / "photo.cr3"
-        xmp = tmp_path / "photo.xmp"
+        xmp = tmp_path / "photo.cr3.xmp"
         img.write_text("image")
         xmp.write_text("sidecar")
 
@@ -103,7 +103,7 @@ class TestTrashWithSidecars:
 class TestRemoveWithSidecars:
     def test_removes_image_and_sidecar(self, tmp_path):
         img = tmp_path / "photo.cr3"
-        xmp = tmp_path / "photo.xmp"
+        xmp = tmp_path / "photo.cr3.xmp"
         img.write_text("image")
         xmp.write_text("sidecar")
 
@@ -126,7 +126,7 @@ class TestRemoveWithSidecars:
 class TestImageEntry:
     def test_from_path_with_sidecar(self, tmp_path):
         img = tmp_path / "photo.cr3"
-        xmp = tmp_path / "photo.xmp"
+        xmp = tmp_path / "photo.cr3.xmp"
         img.write_text("image")
         xmp.write_text("sidecar")
 
@@ -147,7 +147,7 @@ class TestImageEntry:
 
     def test_all_files(self, tmp_path):
         img = tmp_path / "photo.cr3"
-        xmp = tmp_path / "photo.xmp"
+        xmp = tmp_path / "photo.cr3.xmp"
         img.write_text("image")
         xmp.write_text("sidecar")
 
@@ -169,7 +169,7 @@ class TestImageEntry:
         """Same path + different sidecars → equal, same hash."""
         from core.priority import ImageEntry
         e1 = ImageEntry(path="/a.jpg", sidecars=())
-        e2 = ImageEntry(path="/a.jpg", sidecars=("/a.xmp",))
+        e2 = ImageEntry(path="/a.jpg", sidecars=("/a.jpg.xmp",))
         assert e1 == e2
         assert hash(e1) == hash(e2)
         assert len({e1, e2}) == 1
@@ -188,9 +188,9 @@ class TestImageEntry:
 
     def test_to_dict_full(self):
         from core.priority import ImageEntry
-        e = ImageEntry(path="/a.jpg", sidecars=("/a.xmp",), variant="v2")
+        e = ImageEntry(path="/a.jpg", sidecars=("/a.jpg.xmp",), variant="v2")
         d = e.to_dict()
-        assert d == {"path": "/a.jpg", "sidecars": ["/a.xmp"], "variant": "v2"}
+        assert d == {"path": "/a.jpg", "sidecars": ["/a.jpg.xmp"], "variant": "v2"}
 
     def test_from_dict_bare_string(self):
         from core.priority import ImageEntry
@@ -200,9 +200,9 @@ class TestImageEntry:
 
     def test_from_dict_dict(self):
         from core.priority import ImageEntry
-        e = ImageEntry.from_dict({"path": "/a.jpg", "sidecars": ["/a.xmp"], "variant": "v2"})
+        e = ImageEntry.from_dict({"path": "/a.jpg", "sidecars": ["/a.jpg.xmp"], "variant": "v2"})
         assert e.path == "/a.jpg"
-        assert e.sidecars == ("/a.xmp",)
+        assert e.sidecars == ("/a.jpg.xmp",)
         assert e.variant == "v2"
 
     def test_from_dict_passthrough(self):
@@ -212,7 +212,7 @@ class TestImageEntry:
 
     def test_roundtrip_to_from_dict(self):
         from core.priority import ImageEntry
-        e = ImageEntry(path="/a.jpg", sidecars=("/a.xmp",), variant="v2")
+        e = ImageEntry(path="/a.jpg", sidecars=("/a.jpg.xmp",), variant="v2")
         restored = ImageEntry.from_dict(e.to_dict())
         assert restored.path == e.path
         assert restored.sidecars == e.sidecars

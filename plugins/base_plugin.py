@@ -11,24 +11,22 @@ from PIL import Image
 from plugins.exiftool_process import ExifToolProcess
 
 def sidecar_path_for(image_path: str) -> str:
-    """Return the XMP sidecar path for an image: /dir/photo.cr3 -> /dir/photo.xmp"""
-    root, _ = os.path.splitext(image_path)
-    return root + ".xmp"
+    """Return the XMP sidecar path for an image: /dir/photo.cr3 -> /dir/photo.cr3.xmp"""
+    return image_path + ".xmp"
 
 
 def find_image_for_sidecar(xmp_path: str, supported_extensions: set) -> Optional[str]:
-    """Given /dir/photo.xmp, find the corresponding image file.
+    """Given /dir/photo.jpg.xmp, find the corresponding image file.
 
-    Returns the first existing file whose base name matches and whose
-    extension is in *supported_extensions*, or None.
+    Double-extension convention: strip the trailing ``.xmp`` to recover
+    the original image path and verify it exists with a supported extension.
     """
-    root, ext = os.path.splitext(xmp_path)
-    if ext.lower() != ".xmp":
+    if not xmp_path.lower().endswith(".xmp"):
         return None
-    for img_ext in supported_extensions:
-        candidate = root + img_ext
-        if os.path.exists(candidate):
-            return candidate
+    candidate = xmp_path[:-4]  # strip ".xmp"
+    _, ext = os.path.splitext(candidate)
+    if ext.lower() in supported_extensions and os.path.exists(candidate):
+        return candidate
     return None
 
 
@@ -279,7 +277,7 @@ class BasePlugin(ABC):
             return False
         xmp = sidecar_path_for(file_path)
         try:
-            output = self._write_to_sidecar(xmp, [f"-XMP-xmp:Rating={rating}"])
+            output = self._write_to_sidecar(xmp, [f"-XMP-xmp:Rating={rating}"], file_path)
             if self._sidecar_write_ok(output):
                 logging.info("Wrote rating %d to sidecar %s.", rating, xmp)
                 return True
@@ -294,13 +292,34 @@ class BasePlugin(ABC):
         """Writes tags to an XMP sidecar file next to the image.
 
         Replaces the entire Subject list to keep DB and file in sync.
+        For existing sidecars the clear must be a separate exiftool call;
+        bag-type XMP tags ignore ``-TAG=`` when ``+=`` appears in the same
+        invocation.
         """
         xmp = sidecar_path_for(file_path)
         try:
-            args = ["-XMP:Subject="]  # clear existing
-            for tag in tag_names:
-                args.append(f"-XMP:Subject+={tag}")
-            output = self._write_to_sidecar(xmp, args)
+            et = self._get_exiftool()
+            if os.path.exists(xmp):
+                # Existing sidecar: clear old tags first, then add new ones.
+                et.execute(["-XMP:Subject=", "-overwrite_original", xmp])
+                if tag_names:
+                    args = [f"-XMP:Subject+={t}" for t in tag_names]
+                    output = et.execute(args + ["-overwrite_original", xmp])
+                else:
+                    output = b"    1 image files updated"
+            else:
+                # New sidecar: no prior tags to clear.
+                args = [f"-XMP:Subject+={t}" for t in tag_names]
+                output = et.execute(["-o", xmp] + args + [file_path])
+                if b"already exists" in output:
+                    et.execute(["-XMP:Subject=", "-overwrite_original", xmp])
+                    if tag_names:
+                        output = et.execute(
+                            [f"-XMP:Subject+={t}" for t in tag_names]
+                            + ["-overwrite_original", xmp]
+                        )
+                    else:
+                        output = b"    1 image files updated"
             if self._sidecar_write_ok(output):
                 logging.info("Wrote %d tags to sidecar %s.", len(tag_names), xmp)
                 return True
@@ -311,18 +330,20 @@ class BasePlugin(ABC):
             logging.error("Failed to write tags sidecar for %s: %s", file_path, e)
             return False
 
-    def _write_to_sidecar(self, xmp_path: str, tag_args: list) -> bytes:
+    def _write_to_sidecar(self, xmp_path: str, tag_args: list, image_path: str) -> bytes:
         """Write *tag_args* to the XMP sidecar at *xmp_path*.
 
         Creates the sidecar if it doesn't exist; updates in-place otherwise.
-        Handles the race where two concurrent writers both see "not exists" by
-        retrying with the update path if ``-o`` fails because the file appeared.
+        *image_path* is the source image — exiftool needs it to bootstrap a new
+        sidecar via ``-o``.  Handles the race where two concurrent writers both
+        see "not exists" by retrying with the update path if ``-o`` fails
+        because the file appeared.
         """
         et = self._get_exiftool()
         if os.path.exists(xmp_path):
             return et.execute(tag_args + ["-overwrite_original", xmp_path])
-        # Create from scratch (no source image — pure XMP).
-        output = et.execute(["-o", xmp_path] + tag_args)
+        # Create sidecar from the source image's XMP skeleton.
+        output = et.execute(["-o", xmp_path] + tag_args + [image_path])
         if b"already exists" in output:
             # Lost the race — another thread created it first; update instead.
             return et.execute(tag_args + ["-overwrite_original", xmp_path])

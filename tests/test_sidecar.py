@@ -19,31 +19,31 @@ from plugins.base_plugin import sidecar_path_for, find_image_for_sidecar
 
 class TestSidecarPathFor:
     def test_jpg(self):
-        assert sidecar_path_for("/photos/img.jpg") == "/photos/img.xmp"
+        assert sidecar_path_for("/photos/img.jpg") == "/photos/img.jpg.xmp"
 
     def test_cr3(self):
-        assert sidecar_path_for("/photos/raw.CR3") == "/photos/raw.xmp"
+        assert sidecar_path_for("/photos/raw.CR3") == "/photos/raw.CR3.xmp"
 
     def test_png(self):
-        assert sidecar_path_for("/a/b/c.png") == "/a/b/c.xmp"
+        assert sidecar_path_for("/a/b/c.png") == "/a/b/c.png.xmp"
 
     def test_no_extension(self):
         assert sidecar_path_for("/photos/file") == "/photos/file.xmp"
 
     def test_multiple_dots(self):
-        assert sidecar_path_for("/photos/my.file.tiff") == "/photos/my.file.xmp"
+        assert sidecar_path_for("/photos/my.file.tiff") == "/photos/my.file.tiff.xmp"
 
 
 class TestFindImageForSidecar:
     def test_finds_existing_image(self, tmp_path):
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
         result = find_image_for_sidecar(xmp, {".jpg", ".png"})
         assert result == str(img)
 
     def test_returns_none_when_no_image(self, tmp_path):
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
         result = find_image_for_sidecar(xmp, {".jpg", ".png"})
         assert result is None
 
@@ -51,14 +51,13 @@ class TestFindImageForSidecar:
         result = find_image_for_sidecar("/photos/photo.jpg", {".jpg"})
         assert result is None
 
-    def test_prefers_first_match(self, tmp_path):
-        # Both .jpg and .png exist; result depends on iteration order but must be one of them.
-        (tmp_path / "photo.jpg").write_bytes(b"\xff\xd8")
-        (tmp_path / "photo.png").write_bytes(b"\x89PNG")
-        xmp = str(tmp_path / "photo.xmp")
+    def test_unsupported_extension(self, tmp_path):
+        # .bmp is not in supported set — should return None even if file exists.
+        img = tmp_path / "photo.bmp"
+        img.write_bytes(b"BM")
+        xmp = str(tmp_path / "photo.bmp.xmp")
         result = find_image_for_sidecar(xmp, {".jpg", ".png"})
-        assert result is not None
-        assert result.startswith(str(tmp_path))
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -101,13 +100,13 @@ class TestSidecarWrite:
         plugin, mock_et = self._make_plugin()
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
 
         mock_et.execute.return_value = b"    1 image files created"
         result = plugin.write_rating(str(img), 3)
 
         assert result is True
-        # Should use -o to create the sidecar (no source image).
+        # Should use -o to create the sidecar from the source image.
         call_args = mock_et.execute.call_args[0][0]
         assert "-o" in call_args
         assert xmp in call_args
@@ -116,7 +115,7 @@ class TestSidecarWrite:
         plugin, mock_et = self._make_plugin()
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp_file = tmp_path / "photo.xmp"
+        xmp_file = tmp_path / "photo.jpg.xmp"
         xmp_file.write_text("<xmp/>")
 
         mock_et.execute.return_value = b"    1 image files updated"
@@ -132,7 +131,7 @@ class TestSidecarWrite:
         plugin, mock_et = self._make_plugin()
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
 
         mock_et.execute.return_value = b"    1 image files created"
         result = plugin.write_tags(str(img), ["bird", "nature"])
@@ -147,13 +146,13 @@ class TestSidecarWrite:
         plugin, mock_et = self._make_plugin()
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp_file = tmp_path / "photo.xmp"
+        xmp_file = tmp_path / "photo.jpg.xmp"
 
         def side_effect(args):
             if "-o" in args:
                 # Simulate race: file appeared after our os.path.exists check.
                 xmp_file.write_text("<xmp/>")
-                return b"Error: 'photo.xmp' already exists\n    0 image files updated"
+                return b"Error: 'photo.jpg.xmp' already exists\n    0 image files updated"
             return b"    1 image files updated"
 
         mock_et.execute.side_effect = side_effect
@@ -202,8 +201,8 @@ class TestSidecarReadOverride:
         )
         img.write_bytes(xmp_embedded)
 
-        # Create a sidecar with rating=5
-        self._make_xmp(str(tmp_path / "photo.xmp"), rating=5)
+        # Create a sidecar with rating=5 (double-extension convention)
+        self._make_xmp(str(tmp_path / "photo.jpg.xmp"), rating=5)
 
         # Use a concrete subclass to call extract_metadata
         class FakePlugin(BasePlugin):
@@ -281,7 +280,7 @@ class TestWatchdogSidecar:
         handler, tm = self._make_handler()
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
 
         handler.dispatch(self._make_event("created", xmp))
 
@@ -293,7 +292,7 @@ class TestWatchdogSidecar:
         handler, tm = self._make_handler()
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
 
         handler.dispatch(self._make_event("modified", xmp))
 
@@ -301,7 +300,7 @@ class TestWatchdogSidecar:
 
     def test_xmp_deleted_ignored(self, tmp_path):
         handler, tm = self._make_handler()
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
 
         handler.dispatch(self._make_event("deleted", xmp))
 
@@ -310,8 +309,8 @@ class TestWatchdogSidecar:
 
     def test_xmp_no_matching_image_ignored(self, tmp_path):
         handler, tm = self._make_handler()
-        # No image file exists.
-        xmp = str(tmp_path / "orphan.xmp")
+        # No image file exists — sidecar for a missing image.
+        xmp = str(tmp_path / "orphan.jpg.xmp")
 
         handler.dispatch(self._make_event("created", xmp))
 
@@ -321,7 +320,7 @@ class TestWatchdogSidecar:
         handler, tm = self._make_handler()
         img = tmp_path / "photo.jpg"
         img.write_bytes(b"\xff\xd8")
-        xmp = str(tmp_path / "photo.xmp")
+        xmp = str(tmp_path / "photo.jpg.xmp")
 
         handler.ignore_next_modification(xmp)
         handler.dispatch(self._make_event("created", xmp))

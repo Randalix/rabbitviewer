@@ -96,9 +96,8 @@ class RenderTask:
 
 
 def xmp_sidecar_path(image_path: str) -> str:
-    """Return the conventional XMP sidecar path for an image (replace extension with .xmp)."""
-    root, _ = os.path.splitext(image_path)
-    return root + ".xmp"
+    """Return the conventional XMP sidecar path for an image: photo.jpg -> photo.jpg.xmp"""
+    return image_path + ".xmp"
 
 
 @dataclass(frozen=True, eq=False)

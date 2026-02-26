@@ -488,7 +488,7 @@ class MetadataDatabase:
         except (TimeoutError, RuntimeError, json.JSONDecodeError, ValueError, FileNotFoundError) as e:
             logging.debug(f"Error extracting metadata from {file_path}: {e}")
 
-        # Sidecar override: if FILENAME.xmp exists, its rating/tags take precedence.
+        # Sidecar override: if FILENAME.ext.xmp exists, its rating/tags take precedence.
         from plugins.base_plugin import sidecar_path_for
         xmp = sidecar_path_for(file_path)
         if os.path.exists(xmp):
