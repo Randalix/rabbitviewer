@@ -155,7 +155,8 @@ def main():
                 msg += f" See daemon log: {_daemon_log_path}"
             logging.error(msg)
 
-    _daemon_poll = QTimer()
+    # why: parent=window prevents GC from collecting the timer before it fires
+    _daemon_poll = QTimer(window)
     _daemon_poll.setInterval(200)
     _daemon_poll.timeout.connect(_poll_for_daemon)
     # If daemon is already running, skip the timer entirely.
