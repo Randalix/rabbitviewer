@@ -138,10 +138,10 @@ class MetadataDatabase:
                 logging.error(f"Error initializing metadata database: {e}")
                 raise
                 
-    def _get_metadata_hash(self, file_path: str) -> Optional[str]:
+    def _get_metadata_hash(self, file_path: str, stat_result: Optional[os.stat_result] = None) -> Optional[str]:
         """Calculates a fast MD5 hash based on file path, size, and modification time."""
         try:
-            stat_info = os.stat(file_path)
+            stat_info = stat_result or os.stat(file_path)
             info = f"{file_path}-{stat_info.st_size}-{stat_info.st_mtime_ns}"
             return hashlib.md5(info.encode('utf-8')).hexdigest()
         except OSError as e:
@@ -225,9 +225,12 @@ class MetadataDatabase:
         if not os.path.exists(file_path):
             logging.warning(f"File not found for metadata extraction: {file_path}")
             return
-        mtime = os.path.getmtime(file_path)
-        metadata = self._extract_metadata_from_file(file_path)
-        self._store_metadata(file_path, metadata, mtime)
+        try:
+            st = os.stat(file_path)
+        except OSError:
+            return
+        metadata = self._extract_metadata_from_file(file_path, file_size=st.st_size)
+        self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
         logging.debug(f"Metadata extracted and stored for: {file_path}")
 
     def needs_full_metadata(self, file_path: str) -> bool:
@@ -266,14 +269,15 @@ class MetadataDatabase:
             return
 
         try:
-            mtime = os.path.getmtime(file_path)
-            file_size = os.path.getsize(file_path)
+            st = os.stat(file_path)
+            mtime = st.st_mtime
+            file_size = st.st_size
         except OSError:
             return
 
         orientation = plugin_meta.get('orientation', 1)
         rating = plugin_meta.get('rating', 0)
-        path_hash = self._get_metadata_hash(file_path)
+        path_hash = self._get_metadata_hash(file_path, stat_result=st)
         current_time = time.time()
 
         try:
@@ -314,14 +318,14 @@ class MetadataDatabase:
             logging.warning(f"File not found for full metadata extraction: {file_path}")
             return
         try:
-            mtime = os.path.getmtime(file_path)
+            st = os.stat(file_path)
         except OSError:
             return
-        metadata = self._extract_metadata_from_file(file_path, _use_plugin=False)
-        self._store_metadata(file_path, metadata, mtime)
+        metadata = self._extract_metadata_from_file(file_path, _use_plugin=False, file_size=st.st_size)
+        self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
         logging.debug(f"Full metadata extracted and stored for: {file_path}")
 
-    def _extract_metadata_from_file(self, file_path: str, _use_plugin: bool = True) -> Dict[str, Any]:
+    def _extract_metadata_from_file(self, file_path: str, _use_plugin: bool = True, file_size: Optional[int] = None) -> Dict[str, Any]:
         """
         Extracts all metadata from a file using exiftool.
         It uses a plugin-specific override if available for performance.
@@ -344,10 +348,13 @@ class MetadataDatabase:
                         'exif_data': {}
                     }
                     metadata.update(plugin_meta)
-                    try:
-                        metadata['file_size'] = os.path.getsize(file_path)
-                    except OSError:
-                        pass
+                    if file_size is not None:
+                        metadata['file_size'] = file_size
+                    else:
+                        try:
+                            metadata['file_size'] = os.path.getsize(file_path)
+                        except OSError:
+                            pass
                     return metadata
             except Exception as e:
                 logging.error(f"Plugin extractor '{plugin.__class__.__name__}' failed for {file_path}: {e}. Falling back to default.")
@@ -374,8 +381,7 @@ class MetadataDatabase:
         }
         
         try:
-            # Determine file size directly
-            metadata['file_size'] = os.path.getsize(file_path)
+            metadata['file_size'] = file_size if file_size is not None else os.path.getsize(file_path)
 
             # Extract EXIF data via the persistent exiftool process (avoids per-file startup cost).
             raw = _get_fallback_exiftool().execute(['-json', '-all', '-XMP:Rating', file_path])
@@ -512,9 +518,10 @@ class MetadataDatabase:
                         ''', params)
                 else:
                     # Create new entry with minimal metadata
-                    path_hash = self._get_metadata_hash(file_path)
-                    file_size = os.path.getsize(file_path)
-                    mtime = os.path.getmtime(file_path)
+                    st = os.stat(file_path)
+                    path_hash = self._get_metadata_hash(file_path, stat_result=st)
+                    file_size = st.st_size
+                    mtime = st.st_mtime
                     
                     cursor.execute('''
                         INSERT INTO image_metadata 
@@ -702,10 +709,10 @@ class MetadataDatabase:
 
         return False
         
-    def _store_metadata(self, file_path: str, metadata: Dict[str, Any], mtime: float):
+    def _store_metadata(self, file_path: str, metadata: Dict[str, Any], mtime: float, stat_result: Optional[os.stat_result] = None):
         """Stores metadata in the database."""
         try:
-            path_hash = self._get_metadata_hash(file_path)
+            path_hash = self._get_metadata_hash(file_path, stat_result=stat_result)
             current_time = time.time()
             
             # Serialize EXIF data as JSON
@@ -813,9 +820,10 @@ class MetadataDatabase:
                 else:
                     # Create new entry with minimal metadata
                     logging.debug(f"Inserting new DB entry for {os.path.basename(file_path)} with rating {rating}.")
-                    path_hash = self._get_metadata_hash(file_path)
-                    file_size = os.path.getsize(file_path)
-                    mtime = os.path.getmtime(file_path)
+                    st = os.stat(file_path)
+                    path_hash = self._get_metadata_hash(file_path, stat_result=st)
+                    file_size = st.st_size
+                    mtime = st.st_mtime
                     
                     cursor.execute('''
                         INSERT INTO image_metadata 
@@ -1056,7 +1064,7 @@ class MetadataDatabase:
                 for path in new_paths:
                     try:
                         stat = os.stat(path)
-                        path_hash = self._get_metadata_hash(path)
+                        path_hash = self._get_metadata_hash(path, stat_result=stat)
                         records_to_insert.append((
                             path, path_hash, stat.st_size, stat.st_mtime,
                             current_time, current_time
