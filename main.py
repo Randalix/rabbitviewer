@@ -4,8 +4,6 @@ import os
 import argparse
 import subprocess
 import tempfile
-import fcntl
-import errno
 import signal
 import time
 from PySide6.QtWidgets import QApplication
@@ -16,6 +14,8 @@ from gui.main_window import MainWindow
 from network.socket_client import ThumbnailSocketClient
 from network.notification_client import NotificationListener
 from core.event_system import event_system
+from cli.stop import pid_file_path as _pid_file_path, flock_is_held as _flock_is_held, \
+    kill_by_pid_file as _kill_by_pid_file, wait_for_flock_release as _wait_for_flock_release
 
 def setup_logging(log_level):
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
@@ -30,51 +30,6 @@ def setup_logging(log_level):
             logging.StreamHandler(sys.stdout)
         ]
     )
-
-def _pid_file_path(config_manager) -> str:
-    cache_dir = os.path.expanduser(
-        config_manager.get("files.cache.dir", "~/.rabbitviewer/cache")
-    )
-    return os.path.join(cache_dir, "daemon.pid")
-
-
-def _flock_is_held(pid_file_path: str) -> bool:
-    try:
-        with open(pid_file_path, "r") as fd:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            return False
-    except FileNotFoundError:
-        return False
-    except OSError as e:
-        if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
-            return True
-        raise
-
-
-def _wait_for_flock_release(pid_file_path: str, timeout: float = 15.0) -> bool:
-    deadline = time.time() + timeout
-    while _flock_is_held(pid_file_path):
-        if time.time() > deadline:
-            return False
-        time.sleep(0.2)
-    return True
-
-
-def _kill_by_pid_file(pid_file_path: str, sig: int = signal.SIGTERM) -> bool:
-    try:
-        with open(pid_file_path) as f:
-            pid = int(f.read().strip())
-    except (OSError, ValueError):
-        return False
-    try:
-        os.kill(pid, sig)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        logging.error("No permission to signal daemon PID %d", pid)
-        return False
 
 
 def _wait_for_socket(client, until_running: bool, timeout: float = 10.0) -> bool:
