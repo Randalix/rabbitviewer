@@ -198,9 +198,9 @@ class PictureView(QWidget):
                 data = protocol.PreviewsReadyData.model_validate(event_data.data)
 
                 # If this is the image we are waiting for, load it.
-                if data.view_image_path and data.image_path == self._current_path:
-                    logging.info(f"Loading newly generated view image via notification: {data.image_path}")
-                    self.loadImage(data.image_path, force_reload=True)
+                if data.view_image_path and data.image_entry.path == self._current_path:
+                    logging.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
+                    self.loadImage(data.image_entry.path, force_reload=True)
             except Exception as e:  # why: protocol errors must not crash the view
                 logging.error(f"Error processing 'previews_ready' in PictureView: {e}", exc_info=True)
 

@@ -202,18 +202,18 @@ class TestTagProtocol:
 
     def test_set_tags_request_roundtrip(self):
         req = protocol.SetTagsRequest(
-            image_paths=["/a.jpg", "/b.jpg"],
+            image_paths=[protocol.ImageEntryModel(path="/a.jpg"), protocol.ImageEntryModel(path="/b.jpg")],
             tags=["sunset", "beach"],
         )
         data = req.model_dump()
         restored = protocol.SetTagsRequest.model_validate(data)
         assert restored.command == "set_tags"
-        assert restored.image_paths == ["/a.jpg", "/b.jpg"]
+        assert [e.path for e in restored.image_paths] == ["/a.jpg", "/b.jpg"]
         assert restored.tags == ["sunset", "beach"]
 
     def test_remove_tags_request_roundtrip(self):
         req = protocol.RemoveTagsRequest(
-            image_paths=["/a.jpg"],
+            image_paths=[protocol.ImageEntryModel(path="/a.jpg")],
             tags=["old"],
         )
         data = req.model_dump()

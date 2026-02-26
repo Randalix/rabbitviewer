@@ -251,7 +251,7 @@ class TestRunTasksDispatch:
 
     def _make_request(self, operations):
         """Build a run_tasks request dict with pre-constructed TaskOperation objects."""
-        ops = [protocol.TaskOperation(name=n, file_paths=p) for n, p in operations]
+        ops = [protocol.TaskOperation(name=n, file_paths=[protocol.ImageEntryModel(path=fp) for fp in p]) for n, p in operations]
         return {"command": "run_tasks", "operations": ops}
 
     def test_dispatch_run_tasks_success(self, server):

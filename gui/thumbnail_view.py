@@ -602,7 +602,7 @@ class ThumbnailViewWidget(QFrame):
             # Emit via the dedicated signal so the DB-response batch always shows
             # placeholders immediately, even if fast-scan notifications arrived first
             # and consumed the is_first_batch shortcut in _add_image_batch.
-            self._initial_files_signal.emit(sorted(response.files))
+            self._initial_files_signal.emit(sorted(f.path for f in response.files))
             # Feed cached thumbnail paths directly into the preview pipeline
             # so the GUI loads QImages from local cache without a daemon round-trip.
             if hasattr(response, 'thumbnail_paths') and response.thumbnail_paths:
@@ -722,23 +722,24 @@ class ThumbnailViewWidget(QFrame):
                     self._startup_first_previews_ready = True
                     elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
                     logging.info("[startup] first previews_ready: %.0f ms after load_directory", elapsed_ms)
-                logging.info("ThumbnailViewWidget received notification: Previews ready for %s", data.image_path)
+                image_path = data.image_entry.path
+                logging.info("ThumbnailViewWidget received notification: Previews ready for %s", image_path)
 
                 if data.thumbnail_path:
                     # Skip notifications for files not in the current directory.
                     # Daemon background work (watchdog, previous sessions) can produce
                     # previews_ready for unrelated files that waste tick slots.
-                    if data.image_path not in self._path_to_idx:
+                    if image_path not in self._path_to_idx:
                         return
                     # Buffer the path instead of loading QImage immediately.  Draining
                     # the buffer via _preview_tick_timer lets the event loop repaint
                     # between batches, producing smooth progressive thumbnail reveal
                     # rather than a single large batch.
-                    self._pending_previews.append((data.image_path, data.thumbnail_path))
+                    self._pending_previews.append((image_path, data.thumbnail_path))
                     if not self._preview_tick_timer.isActive():
                         self._preview_tick_timer.start()
                 else:
-                    logging.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(data.image_path))
+                    logging.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
             except _ValidationErrors as e:
                 logging.error("Error processing 'previews_ready' notification: %s", e, exc_info=True)
         elif event_data.notification_type == "scan_progress":
@@ -751,7 +752,7 @@ class ThumbnailViewWidget(QFrame):
                     elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
                     logging.info("[startup] first scan_progress: %.0f ms after load_directory (%d files in batch)", elapsed_ms, len(data.files))
                 logging.info("Received scan_progress batch for '%s' with %d files.", data.path, len(data.files))
-                self._add_image_batch(sorted(data.files))
+                self._add_image_batch(sorted(f.path for f in data.files))
                 # Mark that the first layout after this batch should seed the
                 # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
                 # here because _visible_to_original_mapping is not yet populated —
@@ -770,7 +771,7 @@ class ThumbnailViewWidget(QFrame):
                 data = protocol.FilesRemovedData.model_validate(event_data.data)
                 if data.files:
                     logging.info("Removing %d ghost files from view.", len(data.files))
-                    self.remove_images(data.files)
+                    self.remove_images([f.path for f in data.files])
             except _ValidationErrors as e:
                 logging.error("Error processing 'files_removed' notification: %s", e, exc_info=True)
 
@@ -1322,7 +1323,7 @@ class ThumbnailViewWidget(QFrame):
                 text_filter, star_filter, tag_names=tag_filter or None
             )
             if response and response.status == "success":
-                self._filtered_paths_ready.emit(set(response.paths))
+                self._filtered_paths_ready.emit(set(p.path for p in response.paths))
             else:
                 logging.error("Failed to get filtered paths from daemon. Response: %s", response)
                 self._filtered_paths_ready.emit(None)

@@ -9,6 +9,7 @@ import time
 import json
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import ExifToolProcess
+from core.priority import ImageEntry
 
 _fallback_exiftool_local = threading.local()
 
@@ -110,6 +111,12 @@ class MetadataDatabase:
                 cursor.execute('DROP INDEX IF EXISTS idx_thumbnail_path')
                 cursor.execute('DROP INDEX IF EXISTS idx_view_image_path')
 
+                # Migration: add sidecars column (JSON array of sidecar paths)
+                try:
+                    cursor.execute("ALTER TABLE image_metadata ADD COLUMN sidecars TEXT DEFAULT '[]'")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
                 # Tag system: normalized junction table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS tags (
@@ -147,6 +154,28 @@ class MetadataDatabase:
         except OSError as e:
             logging.warning(f"Could not stat file {file_path} to generate metadata hash: {e}")
             return None
+
+    @staticmethod
+    def _build_entry(file_path: str, sidecars_json: str = "[]") -> ImageEntry:
+        """Construct an ImageEntry from DB columns."""
+        try:
+            sidecars = tuple(json.loads(sidecars_json)) if sidecars_json else ()
+        except (json.JSONDecodeError, TypeError):
+            sidecars = ()
+        return ImageEntry(path=file_path, sidecars=sidecars)
+
+    def update_sidecars(self, file_path: str, sidecars: List[str]) -> None:
+        """Store sidecar paths for a file."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "UPDATE image_metadata SET sidecars = ? WHERE file_path = ?",
+                    (json.dumps(sidecars), file_path),
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logging.debug(f"Error updating sidecars for {file_path}: {e}")
 
     def get_rating(self, file_path: str) -> int:
         """

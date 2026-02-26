@@ -399,7 +399,10 @@ class RenderManager(QObject):
         _suppress_progress = _is_daemon_job or job.job_id.startswith("post_scan::")
         if not _suppress_progress:
             from network import protocol
-            notification_data = protocol.ScanProgressData(path=job_path, files=items_to_process)
+            notification_data = protocol.ScanProgressData(
+                path=job_path,
+                files=[protocol.ImageEntryModel(path=p) for p in items_to_process],
+            )
             notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
             logger.info(
                 f"[chunking] generator_runner: scan_progress for '{job.job_id}' "

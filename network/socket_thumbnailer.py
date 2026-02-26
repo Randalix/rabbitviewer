@@ -247,7 +247,7 @@ class ThumbnailSocketServer:
         except Exception as e:  # why: any unhandled error from handler dispatch must not crash the server
             logging.error(f"Error processing request: {e}", exc_info=True)
             return protocol.ErrorResponse(message=f"Internal Server Error: {str(e)}").model_dump_json()
-    
+
     def _dispatch_command(self, command: str, request_data: dict) -> protocol.Response:
         """Dispatches commands to the appropriate handler."""
         handler = self._command_handlers.get(command)
@@ -259,24 +259,31 @@ class ThumbnailSocketServer:
         with self.session_lock:
             return self.active_gui_session_id
 
+    @staticmethod
+    def _extract_paths(entries) -> list:
+        """Extract string paths from a list of ImageEntryModel objects."""
+        return [e.path for e in entries]
+
     # ──────────────────────────────────────────────────────────────────────
     #  Command handlers
     # ──────────────────────────────────────────────────────────────────────
 
     def _handle_request_previews(self, request_data: dict) -> protocol.Response:
         req = protocol.RequestPreviewsRequest.model_validate(request_data)
-        logging.info(f"SocketServer: Received request_previews for {len(req.image_paths)} paths with priority {req.priority}.")
+        paths = self._extract_paths(req.image_paths)
+        logging.info(f"SocketServer: Received request_previews for {len(paths)} paths with priority {req.priority}.")
         session_id = self._get_session_id()
         priority_level = Priority(req.priority)
         success_count = self.thumbnail_manager.batch_request_thumbnails(
-            req.image_paths, priority_level, session_id
+            paths, priority_level, session_id
         )
         return protocol.RequestPreviewsResponse(count=success_count)
 
     def _handle_get_previews_status(self, request_data: dict) -> protocol.Response:
         req = protocol.GetPreviewsStatusRequest.model_validate(request_data)
         statuses = {}
-        for path in req.image_paths:
+        for entry in req.image_paths:
+            path = entry.path
             is_thumbnail_ready = False
             thumbnail_path = None
             view_image_ready = False
@@ -301,25 +308,27 @@ class ThumbnailSocketServer:
 
     def _handle_get_metadata_batch(self, request_data: dict) -> protocol.Response:
         req = protocol.GetMetadataBatchRequest.model_validate(request_data)
+        paths = self._extract_paths(req.image_paths)
 
         if req.priority:
             self.thumbnail_manager.render_manager.submit_task(
-                f"metadata_batch::{hash(tuple(req.image_paths))}",
+                f"metadata_batch::{hash(tuple(paths))}",
                 Priority.GUI_REQUEST,
                 self.thumbnail_manager.request_metadata_extraction,
-                req.image_paths, Priority.GUI_REQUEST,
+                paths, Priority.GUI_REQUEST,
                 task_type=TaskType.SIMPLE
             )
 
-        metadata_results = self.thumbnail_manager.metadata_db.get_metadata_batch(req.image_paths)
+        metadata_results = self.thumbnail_manager.metadata_db.get_metadata_batch(paths)
         return protocol.GetMetadataBatchResponse(metadata=metadata_results)
 
     def _handle_set_rating(self, request_data: dict) -> protocol.Response:
         req = protocol.SetRatingRequest.model_validate(request_data)
-        success_db, _count = self.thumbnail_manager.metadata_db.batch_set_ratings(req.image_paths, req.rating)
+        paths = self._extract_paths(req.image_paths)
+        success_db, _count = self.thumbnail_manager.metadata_db.batch_set_ratings(paths, req.rating)
 
         if success_db:
-            for path in req.image_paths:
+            for path in paths:
                 self.thumbnail_manager.render_manager.submit_task(
                     f"write_rating::{path}",
                     Priority.NORMAL,
@@ -341,28 +350,29 @@ class ThumbnailSocketServer:
         success_count = 0
         for pp in req.paths_to_upgrade:
             if self.thumbnail_manager.request_thumbnail(
-                    pp.path, Priority(pp.priority), session_id):
+                    pp.entry.path, Priority(pp.priority), session_id):
                 success_count += 1
 
         if req.paths_to_downgrade:
             self.thumbnail_manager.downgrade_thumbnail_tasks(
-                req.paths_to_downgrade, Priority.GUI_REQUEST_LOW)
+                self._extract_paths(req.paths_to_downgrade), Priority.GUI_REQUEST_LOW)
 
         if req.fullres_to_cancel:
             self.thumbnail_manager.cancel_speculative_fullres_batch(
-                req.fullres_to_cancel)
+                self._extract_paths(req.fullres_to_cancel))
 
         for pp in req.fullres_to_request:
             self.thumbnail_manager.request_speculative_fullres(
-                pp.path, Priority(pp.priority), session_id)
+                pp.entry.path, Priority(pp.priority), session_id)
 
         return protocol.Response(message=f"{success_count} upgraded")
 
     def _handle_request_view_image(self, request_data: dict) -> protocol.Response:
         req = protocol.RequestViewImageRequest.model_validate(request_data)
-        logging.info(f"SocketServer: Received request_view_image for {req.image_path}")
+        image_path = req.image_entry.path
+        logging.info(f"SocketServer: Received request_view_image for {image_path}")
         view_image_path = self.thumbnail_manager.request_view_image(
-            req.image_path, self._get_session_id()
+            image_path, self._get_session_id()
         )
         return protocol.RequestViewImageResponse(view_image_path=view_image_path)
 
@@ -372,7 +382,9 @@ class ThumbnailSocketServer:
             req.text_filter, req.star_states,
             tag_names=req.tag_names if req.tag_names else None,
         )
-        return protocol.GetFilteredFilePathsResponse(paths=visible_paths)
+        return protocol.GetFilteredFilePathsResponse(
+            paths=[protocol.ImageEntryModel(path=p) for p in visible_paths]
+        )
 
     def _handle_get_directory_files(self, request_data: dict) -> protocol.Response:
         req = protocol.GetDirectoryFilesRequest.model_validate(request_data)
@@ -425,7 +437,7 @@ class ThumbnailSocketServer:
                 notification = protocol.Notification(
                     type="files_removed",
                     data=protocol.FilesRemovedData(
-                        files=reconcile_ctx.ghost_files
+                        files=[protocol.ImageEntryModel(path=p) for p in reconcile_ctx.ghost_files]
                     ).model_dump(),
                     session_id=session_id,
                 )
@@ -486,13 +498,17 @@ class ThumbnailSocketServer:
         rm.submit_source_job(reconcile_job)
 
         return protocol.GetDirectoryFilesResponse(
-            files=sorted(db_files),
+            files=[protocol.ImageEntryModel(path=p) for p in sorted(db_files)],
             thumbnail_paths=thumb_map,
         )
 
     def _handle_move_records(self, request_data: dict) -> protocol.Response:
         req = protocol.MoveRecordsRequest.model_validate(request_data)
-        count = self.thumbnail_manager.metadata_db.move_records(req.moves)
+        # Convert ImageEntryModel-based MoveRecords to the old-style dicts the DB expects
+        moves_for_db = []
+        for m in req.moves:
+            moves_for_db.append(type('MoveRecord', (), {'old_path': m.old_entry.path, 'new_path': m.new_entry.path})())
+        count = self.thumbnail_manager.metadata_db.move_records(moves_for_db)
         return protocol.MoveRecordsResponse(moved_count=count)
 
     def _handle_run_tasks(self, request_data: dict) -> protocol.Response:
@@ -504,7 +520,7 @@ class ThumbnailSocketServer:
                 return protocol.ErrorResponse(message=f"Unknown task operation: {op.name}")
         self._compound_task_counter += 1
         task_id = f"script_task::{self._compound_task_counter}"
-        operations = [(op.name, op.file_paths) for op in req.operations]
+        operations = [(op.name, self._extract_paths(op.file_paths)) for op in req.operations]
         queued = self.thumbnail_manager.render_manager.submit_task(
             task_id,
             Priority.NORMAL,
@@ -517,10 +533,11 @@ class ThumbnailSocketServer:
 
     def _handle_set_tags(self, request_data: dict) -> protocol.Response:
         req = protocol.SetTagsRequest.model_validate(request_data)
+        paths = self._extract_paths(req.image_paths)
         db = self.thumbnail_manager.metadata_db
-        success = db.batch_set_tags(req.image_paths, req.tags)
+        success = db.batch_set_tags(paths, req.tags)
         if success:
-            for path in req.image_paths:
+            for path in paths:
                 all_tags = db.get_image_tags(path)
                 self.thumbnail_manager.render_manager.submit_task(
                     f"write_tags::{path}",
@@ -534,10 +551,11 @@ class ThumbnailSocketServer:
 
     def _handle_remove_tags(self, request_data: dict) -> protocol.Response:
         req = protocol.RemoveTagsRequest.model_validate(request_data)
+        paths = self._extract_paths(req.image_paths)
         db = self.thumbnail_manager.metadata_db
-        success = db.batch_remove_tags(req.image_paths, req.tags)
+        success = db.batch_remove_tags(paths, req.tags)
         if success:
-            for path in req.image_paths:
+            for path in paths:
                 all_tags = db.get_image_tags(path)
                 self.thumbnail_manager.render_manager.submit_task(
                     f"write_tags::{path}",
@@ -561,8 +579,9 @@ class ThumbnailSocketServer:
 
     def _handle_get_image_tags(self, request_data: dict) -> protocol.Response:
         req = protocol.GetImageTagsRequest.model_validate(request_data)
+        paths = self._extract_paths(req.image_paths)
         db = self.thumbnail_manager.metadata_db
-        result = {path: db.get_image_tags(path) for path in req.image_paths}
+        result = {path: db.get_image_tags(path) for path in paths}
         return protocol.GetImageTagsResponse(tags=result)
 
     def send_notification(self, notification: protocol.Notification):
@@ -592,7 +611,7 @@ class ThumbnailSocketServer:
         """Stop the server and clean up resources."""
         if not self.running:
             return
-        
+
         logging.info("ThumbnailSocketServer shutting down.")
         self.running = False
         if self.watchdog_handler:

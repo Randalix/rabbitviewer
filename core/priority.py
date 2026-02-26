@@ -1,10 +1,11 @@
 # core/priority.py
 """Qt-free enums and dataclasses shared across daemon, plugins, and scripts."""
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum, Enum, auto
-from typing import Callable, Any, Optional, List, Set, Generator
+from typing import Callable, Any, Optional, List, Set, Generator, Tuple
 
 
 class Priority(IntEnum):
@@ -92,3 +93,63 @@ class RenderTask:
         if self.priority != other.priority:
             return self.priority > other.priority
         return self.timestamp < other.timestamp
+
+
+def _xmp_sidecar_path(image_path: str) -> str:
+    """Return the conventional XMP sidecar path for an image (replace extension with .xmp)."""
+    root, _ = os.path.splitext(image_path)
+    return root + ".xmp"
+
+
+@dataclass(frozen=True, eq=False)
+class ImageEntry:
+    """Structural identity for an image and its sidecar files.
+
+    Identity is ``(path, variant)`` only — two entries with the same path but
+    different sidecar discovery states compare equal.  This prevents set/dict
+    bugs when sidecars appear mid-session.
+    """
+    path: str
+    sidecars: Tuple[str, ...] = ()
+    variant: Optional[str] = None  # future: virtual copy label
+
+    def __eq__(self, other):
+        if not isinstance(other, ImageEntry):
+            return NotImplemented
+        return self.path == other.path and self.variant == other.variant
+
+    def __hash__(self):
+        return hash((self.path, self.variant))
+
+    @staticmethod
+    def from_path(image_path: str) -> 'ImageEntry':
+        """Construct an ImageEntry, auto-discovering the XMP sidecar."""
+        xmp = _xmp_sidecar_path(image_path)
+        sidecars = (xmp,) if os.path.exists(xmp) else ()
+        return ImageEntry(path=image_path, sidecars=sidecars)
+
+    @staticmethod
+    def from_dict(d) -> 'ImageEntry':
+        """Construct from a dict or bare str (coerces str → ImageEntry(path=str))."""
+        if isinstance(d, str):
+            return ImageEntry(path=d)
+        if isinstance(d, ImageEntry):
+            return d
+        return ImageEntry(
+            path=d["path"],
+            sidecars=tuple(d.get("sidecars", ())),
+            variant=d.get("variant"),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize to a dict suitable for JSON / protocol messages."""
+        d: dict = {"path": self.path}
+        if self.sidecars:
+            d["sidecars"] = list(self.sidecars)
+        if self.variant is not None:
+            d["variant"] = self.variant
+        return d
+
+    def all_files(self) -> Tuple[str, ...]:
+        """Return the image path plus all sidecar paths."""
+        return (self.path,) + self.sidecars

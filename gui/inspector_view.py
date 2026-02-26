@@ -119,7 +119,7 @@ class InspectorView(QWidget):
                 # the user currently wants (slow-drive case: the fetch returned
                 # empty and _current_image_path was never set to the desired path).
                 # Skip if in video mode — scrub worker manages the display.
-                target = data.image_path
+                target = data.image_entry.path
                 is_target = (target == self._current_image_path
                              or target == self._desired_image_path)
                 if data.view_image_path and is_target and not self._is_video_mode:

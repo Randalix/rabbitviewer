@@ -110,6 +110,16 @@ class WatchdogHandler(FileSystemEventHandler):
                 self.thumbnail_manager.metadata_db.remove_records,
                 [event.src_path],
             )
+            # Clean up orphaned XMP sidecar (our sidecars only contain
+            # rating/tags we wrote — useless without the image).
+            from core.priority import _xmp_sidecar_path
+            xmp = _xmp_sidecar_path(event.src_path)
+            if os.path.exists(xmp):
+                try:
+                    os.remove(xmp)
+                    logging.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
+                except OSError as e:
+                    logging.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
             return
         else:
             return
