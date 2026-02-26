@@ -15,6 +15,7 @@ class TagInput(QLineEdit):
     """A QLineEdit that accepts comma-separated tags with autocomplete."""
 
     tags_changed = Signal(list)  # emits the parsed list of tag strings
+    confirmed = Signal()  # Enter pressed (even when completer consumed the key)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -24,7 +25,7 @@ class TagInput(QLineEdit):
         self._completer = QCompleter(self._completer_model, self)
         self._completer.setCaseSensitivity(Qt.CaseInsensitive)
         self._completer.setCompletionMode(QCompleter.PopupCompletion)
-        self._completer.activated.connect(self._insert_completion)
+        self._completer.activated.connect(self._on_completer_activated)
         self.setCompleter(self._completer)
 
         self._directory_tags: list[str] = []
@@ -95,6 +96,11 @@ class TagInput(QLineEdit):
         if _text.endswith(","):
             self.tags_changed.emit(self.get_tags())
 
+    def _on_completer_activated(self, completion: str) -> None:
+        """Completer accepted via Enter — insert and confirm."""
+        self._insert_completion(completion)
+        self.confirmed.emit()
+
     def _insert_completion(self, completion: str) -> None:
         """Replaces the current token with the selected completion."""
         if completion == _SEPARATOR:
@@ -118,6 +124,7 @@ class TagInput(QLineEdit):
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.tags_changed.emit(self.get_tags())
+            self.confirmed.emit()
             # Don't consume — let the parent dialog handle close/accept.
             event.ignore()
             return

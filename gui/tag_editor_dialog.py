@@ -33,6 +33,7 @@ class TagEditorDialog(QDialog):
 
         self.tag_input = TagInput()
         self.tag_input.tags_changed.connect(self._on_confirm)
+        self.tag_input.confirmed.connect(self._on_enter_confirmed)
         layout.addWidget(self.tag_input)
 
         escape = QShortcut(QKeySequence("Esc"), self)
@@ -60,11 +61,11 @@ class TagEditorDialog(QDialog):
             self.tags_confirmed.emit(to_add, to_remove)
             self._original_tags = current_set
 
+    def _on_enter_confirmed(self):
+        self._on_confirm(self.tag_input.get_tags())
+        self.close()
+
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self._on_confirm(self.tag_input.get_tags())
-            self.close()
-            return
         if event.key() == Qt.Key_Tab:
             focused = self.focusWidget()
             if isinstance(focused, TagInput):

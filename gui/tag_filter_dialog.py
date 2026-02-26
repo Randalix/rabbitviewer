@@ -29,6 +29,7 @@ class TagFilterDialog(QDialog):
 
         self.tag_input = TagInput()
         self.tag_input.tags_changed.connect(self._on_tags_changed)
+        self.tag_input.confirmed.connect(self._on_confirmed)
         layout.addWidget(self.tag_input)
 
         escape = QShortcut(QKeySequence("Esc"), self)
@@ -40,6 +41,10 @@ class TagFilterDialog(QDialog):
     def _on_tags_changed(self, tags: list):
         self.tags_changed.emit(tags)
 
+    def _on_confirmed(self):
+        self.tags_changed.emit(self.tag_input.get_tags())
+        self.hide()
+
     def showEvent(self, event):
         super().showEvent(event)
         self.tag_input.setFocus()
@@ -50,10 +55,6 @@ class TagFilterDialog(QDialog):
         self.tags_changed.emit([])
 
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self.tags_changed.emit(self.tag_input.get_tags())
-            self.hide()
-            return
         if event.key() == Qt.Key_Tab:
             focused = self.focusWidget()
             if isinstance(focused, TagInput):
