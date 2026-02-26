@@ -1020,7 +1020,7 @@ class ThumbnailManager:
                 continue
             try:
                 results[name] = handler(file_paths)
-            except Exception as e:
+            except Exception as e:  # why: task operations are user-registered handlers; any exception must not crash the worker loop
                 logger.error(f"Task operation '{name}' failed: {e}", exc_info=True)
                 results[name] = {"error": str(e)}
         return results

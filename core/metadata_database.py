@@ -496,6 +496,11 @@ class MetadataDatabase:
         """
         try:
             current_time = time.time()
+            # Stat outside the lock to avoid blocking other DB operations on NAS.
+            try:
+                st = os.stat(file_path)
+            except OSError:
+                st = None
 
             with self._lock:
                 cursor = self.conn.cursor()
@@ -507,44 +512,39 @@ class MetadataDatabase:
                 if cursor.fetchone():
                     update_fields = []
                     params = []
-                    
+
                     if thumbnail_path is not None:
                         update_fields.append("thumbnail_path = ?")
                         params.append(thumbnail_path)
-                    
+
                     if view_image_path is not None:
                         update_fields.append("view_image_path = ?")
                         params.append(view_image_path)
-                    
+
                     if update_fields:
                         update_fields.append("updated_at = ?")
                         params.append(current_time)
                         params.append(file_path)
-                        
+
                         cursor.execute(f'''
-                            UPDATE image_metadata 
+                            UPDATE image_metadata
                             SET {", ".join(update_fields)}
                             WHERE file_path = ?
                         ''', params)
-                else:
-                    # Create new entry with minimal metadata
-                    st = os.stat(file_path)
+                elif st:
                     path_hash = self._get_metadata_hash(file_path, stat_result=st)
-                    file_size = st.st_size
-                    mtime = st.st_mtime
-                    
                     cursor.execute('''
-                        INSERT INTO image_metadata 
+                        INSERT INTO image_metadata
                         (file_path, path_hash, file_size, thumbnail_path, view_image_path,
                          mtime, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (file_path, path_hash, file_size, thumbnail_path, view_image_path, 
-                          mtime, current_time, current_time))
-                
+                    ''', (file_path, path_hash, st.st_size, thumbnail_path, view_image_path,
+                          st.st_mtime, current_time, current_time))
+
                 self.conn.commit()
                 logging.debug(f"Committed thumbnail paths for {file_path}. Rows affected: {cursor.rowcount}")
                 return True
-                
+
         except sqlite3.Error as e:
             logging.error(f"Error setting thumbnail paths for {file_path}: {e}", exc_info=True)
             return False
@@ -919,7 +919,7 @@ class MetadataDatabase:
                 ''', (rating,))
                 results = cursor.fetchall()
 
-            return [row[0] for row in results if os.path.exists(row[0])]
+            return [row[0] for row in results]
 
         except sqlite3.Error as e:
             logging.error(f"Error getting files by rating {rating}: {e}")
@@ -944,7 +944,7 @@ class MetadataDatabase:
                 cursor.execute(query, params)
                 results = cursor.fetchall()
 
-            return [row[0] for row in results if os.path.exists(row[0])]
+            return [row[0] for row in results]
                 
         except sqlite3.Error as e:
             logging.error(f"Error searching by camera: {e}")

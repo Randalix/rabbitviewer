@@ -15,7 +15,7 @@ class WatchdogHandler(FileSystemEventHandler):
     at LOW priority for live changes. Initial indexing is handled by
     BackgroundIndexer; this class is exclusively a live-event monitor.
     """
-    def __init__(self, thumbnail_manager: ThumbnailManager, watch_paths: list, is_daemon_mode: bool = False):
+    def __init__(self, thumbnail_manager: ThumbnailManager, watch_paths: list):
         super().__init__()
         self.thumbnail_manager = thumbnail_manager
         self._watch_paths = watch_paths
@@ -111,8 +111,8 @@ class WatchdogHandler(FileSystemEventHandler):
             )
             # Clean up orphaned XMP sidecar (our sidecars only contain
             # rating/tags we wrote — useless without the image).
-            from core.priority import _xmp_sidecar_path
-            xmp = _xmp_sidecar_path(event.src_path)
+            from core.priority import xmp_sidecar_path
+            xmp = xmp_sidecar_path(event.src_path)
             if os.path.exists(xmp):
                 try:
                     os.remove(xmp)

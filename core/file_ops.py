@@ -8,14 +8,14 @@ import logging
 import os
 from typing import Any, Dict, List
 
-from core.priority import _xmp_sidecar_path
+from core.priority import xmp_sidecar_path
 
 logger = logging.getLogger(__name__)
 
 
 def resolve_sidecars(image_path: str) -> List[str]:
     """Return existing sidecar paths for *image_path*."""
-    xmp = _xmp_sidecar_path(image_path)
+    xmp = xmp_sidecar_path(image_path)
     if os.path.exists(xmp):
         return [xmp]
     return []

@@ -87,8 +87,7 @@ class PictureView(QWidget):
         path_to_load = None
         response = self.socket_client.request_view_image(image_path)
         if response and response.status == "success" and response.view_image_path:
-            if os.path.exists(response.view_image_path):
-                path_to_load = response.view_image_path
+            path_to_load = response.view_image_path
 
         if not path_to_load:
             # Generation queued — show placeholder and wait for previews_ready notification.

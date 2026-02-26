@@ -65,6 +65,8 @@ class InspectorView(QWidget):
         self._scrub_lock = threading.Lock()
         self._scrub_event = threading.Event()
         self._scrub_thread: Optional[threading.Thread] = None
+        # why: CPython GIL makes single bool read/write atomic; the worst case is
+        # one extra loop iteration in _scrub_worker after closeEvent, which is harmless.
         self._scrub_stop = False
 
         self.setWindowTitle("Inspector")
@@ -263,6 +265,8 @@ class InspectorView(QWidget):
             self._picture_base.setCenter(norm_pos)
 
     def set_zoom_factor(self, zoom: float):
+        # why: tighter bounds than PictureBase (0.01–50.0) because the inspector
+        # window is small; sub-0.1x is invisible and >20x is pixelated noise.
         self._zoom_factor = max(0.1, min(zoom, 20.0))
         self._update_window_title()
         # why: defer PictureBase sync until an image is loaded; update_view() applies

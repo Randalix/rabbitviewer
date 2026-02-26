@@ -34,7 +34,7 @@ def _make_handler():
     tm = MagicMock()
     tm.render_manager = MagicMock()
     tm.metadata_db = MagicMock()
-    handler = WatchdogHandler(tm, [], is_daemon_mode=True)
+    handler = WatchdogHandler(tm, [])
     return handler, tm
 
 
@@ -49,7 +49,7 @@ def _make_handler_with_db(db):
         func(*args)
 
     tm.render_manager.submit_task.side_effect = _submit_task
-    handler = WatchdogHandler(tm, [], is_daemon_mode=True)
+    handler = WatchdogHandler(tm, [])
     return handler
 
 

@@ -200,29 +200,10 @@ class ThumbnailSocketServer:
 
             conn.close()
 
-    def _recv_exactly(self, conn: socket.socket, n: int) -> Optional[bytes]:
-        """
-        Receive exactly n bytes from the connection.
-
-        Args:
-            conn: Socket connection to read from
-            n: Number of bytes to read
-
-        Returns:
-            Bytes object containing exactly n bytes, or None if connection closed
-        """
-        data = bytearray()
-        while len(data) < n:
-            try:
-                packet = conn.recv(n - len(data))
-                if not packet:
-                    return None
-                data.extend(packet)
-            except socket.timeout:
-                if data:
-                    raise ConnectionError(f"Timeout after reading {len(data)}/{n} bytes")
-                return None
-        return bytes(data)
+    @staticmethod
+    def _recv_exactly(conn: socket.socket, n: int) -> Optional[bytes]:
+        from ._framing import recv_exactly
+        return recv_exactly(conn, n)
 
     def handle_request(self, request_data: dict) -> str:
         """
@@ -500,10 +481,7 @@ class ThumbnailSocketServer:
 
     def _handle_move_records(self, request_data: dict) -> protocol.Response:
         req = protocol.MoveRecordsRequest.model_validate(request_data)
-        # Convert ImageEntryModel-based MoveRecords to the old-style dicts the DB expects
-        moves_for_db = []
-        for m in req.moves:
-            moves_for_db.append(type('MoveRecord', (), {'old_path': m.old_entry.path, 'new_path': m.new_entry.path})())
+        moves_for_db = [{"old_path": m.old_entry.path, "new_path": m.new_entry.path} for m in req.moves]
         count = self.thumbnail_manager.metadata_db.move_records(moves_for_db)
         return protocol.MoveRecordsResponse(moved_count=count)
 

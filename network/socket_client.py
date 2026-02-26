@@ -147,7 +147,6 @@ class ThumbnailSocketClient:
         self.socket_path = socket_path
         self.connection_pool = ConnectionPool(socket_path)
         self.session_id = str(uuid.uuid4())
-        self.lock = threading.Lock()
 
     @staticmethod
     def _to_entry_models(paths: List[str]):
