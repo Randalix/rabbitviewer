@@ -206,7 +206,7 @@ class InspectorView(QWidget):
 
             if not view_image_path:
                 # Request generation; result will arrive via previews_ready daemon notification.
-                self.socket_client.request_previews([image_path])
+                self.socket_client.request_view_image(image_path)
         except Exception as e:
             # why: socket calls can raise ConnectionError/OSError/TimeoutError on
             # NAS drop or pool exhaustion; log and emit empty path to unblock GUI.
