@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
 
         self.filter_dialog = None
         self.tag_editor_dialog = None
+        self._tag_editor_targets: list = []
         self.tag_filter_dialog = None
         self._removed_images = []
 
@@ -363,7 +364,7 @@ class MainWindow(QMainWindow):
         """Open the tag assignment popup for selected images."""
         if not self.thumbnail_view or not self.thumbnail_view.socket_client:
             return
-        selected = self.get_effective_selection()
+        selected = list(self.script_api.get_selected_images())
         if not selected:
             return
 
@@ -388,13 +389,14 @@ class MainWindow(QMainWindow):
         dir_tags = [t.name for t in tags_resp.directory_tags] if tags_resp and tags_resp.directory_tags else []
         global_tags = [t.name for t in tags_resp.global_tags] if tags_resp and tags_resp.global_tags else []
 
+        self._tag_editor_targets = selected
         self.tag_editor_dialog.open_for_images(len(selected), common_tags, dir_tags, global_tags)
 
     def _on_tags_confirmed(self, tags_to_add: list, tags_to_remove: list):
         """Handle tag editor confirmation."""
         if not self.thumbnail_view or not self.thumbnail_view.socket_client:
             return
-        selected = self.get_effective_selection()
+        selected = self._tag_editor_targets
         if not selected:
             return
         sc = self.thumbnail_view.socket_client
