@@ -9,6 +9,7 @@ from typing import Callable, Any, Optional, List, Set, Generator
 
 class Priority(IntEnum):
     BACKGROUND_SCAN = 10
+    ORPHAN_SCAN = 15
     CONTENT_HASH = 20
     LOW = 30
     GUI_REQUEST_LOW = 40

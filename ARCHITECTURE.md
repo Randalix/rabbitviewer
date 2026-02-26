@@ -55,6 +55,7 @@ The central scheduling engine. Manages a priority queue of `RenderTask`s execute
 | Name | Value | Use |
 |---|---|---|
 | `BACKGROUND_SCAN` | 10 | DB consistency checks |
+| `ORPHAN_SCAN` | 15 | Demoted gui_scan/post_scan after GUI disconnect |
 | `CONTENT_HASH` | 20 | Full file hashing |
 | `LOW` | 30 | Watchdog-submitted tasks |
 | `GUI_REQUEST_LOW` | 40 | Background GUI scan (slow job) / scrolled-away thumbnails |
@@ -93,6 +94,8 @@ Priority upgrade invalidates the old `RenderTask` in the queue (sets `is_active=
 All multi-file workflows are `SourceJob`s — a generator (discovers paths) paired with a task factory (converts each path to `RenderTask`s). `_cooperative_generator_runner` processes one item per worker invocation and reschedules itself, enabling backpressure-friendly, interruptible scanning without blocking the worker pool. When queue depth exceeds `backpressure_threshold`, the next generator slice is throttled to `Priority.LOW`.
 
 `SourceJob.task_priority` (optional) decouples the generator runner priority from child task priority. When set, child tasks are created at `task_priority` instead of `job.priority`, allowing the generator to run fast while tasks start low and await heatmap upgrades.
+
+**Demote-on-disconnect:** When a GUI client disconnects mid-scan, the socket server demotes all `gui_scan::` and `post_scan::` jobs to `ORPHAN_SCAN(15)` via `demote_job()` instead of cancelling them. The generator keeps running at the lower priority, populating the DB cache so the next GUI connect loads cached files instantly. `demote_job()` mutates `job.priority`; the next `_cooperative_generator_runner` slice picks up the new priority automatically. If the reconcile scan completes after disconnect, `_on_reconcile_complete` creates the `post_scan::` job at `ORPHAN_SCAN` instead of `LOW`.
 
 `scan_complete` is emitted **before** `on_complete` runs, so the GUI receives the scan-done signal before any `previews_ready` notifications from tasks created by `on_complete`. `scan_progress` is suppressed for `post_scan::` jobs to avoid duplicating already-known entries in the GUI model.
 

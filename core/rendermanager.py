@@ -85,6 +85,17 @@ class RenderManager(QObject):
                     count += 1
         return count
 
+    def demote_job(self, job_id: str, new_priority: Priority):
+        """Demote a running source job to a lower priority.
+
+        Subsequent generator slices will be scheduled at new_priority.
+        """
+        with self.active_jobs_lock:
+            job = self.active_jobs.get(job_id)
+        if job:
+            job.priority = new_priority
+            logger.info(f"Demoted job '{job_id}' to {new_priority.name}.")
+
     def cancel_job(self, job_id: str):
         """Cancels a source job, preventing any further processing of its items."""
         with self.active_jobs_lock:

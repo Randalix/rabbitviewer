@@ -183,21 +183,21 @@ class ThumbnailSocketServer:
                     self.notification_clients.remove(conn)
                     logging.info("Unregistered a notification client.")
 
-                    # If a GUI client disconnects, cancel all session-scoped jobs.
+                    # If a GUI client disconnects, demote session-scoped jobs
+                    # to ORPHAN_SCAN so they finish in the background and
+                    # populate the DB cache for the next connect.
                     with self.session_lock:
                         active_session = self.active_gui_session_id
                     if active_session:
                         render_manager = self.thumbnail_manager.render_manager
-                        # why: only cancel GUI-session jobs (gui_scan);
-                        # daemon_idx:: jobs must survive GUI disconnect.
-                        _GUI_JOB_PREFIXES = ("gui_scan",)
-                        jobs_to_cancel = [
+                        _GUI_JOB_PREFIXES = ("gui_scan", "post_scan")
+                        jobs_to_demote = [
                             job_id for job_id in render_manager.get_all_job_ids()
                             if job_id.startswith(_GUI_JOB_PREFIXES) and active_session in job_id
                         ]
-                        for job_id in jobs_to_cancel:
-                            logging.info(f"Client for session {active_session[:8]} disconnected. Cancelling job: {job_id}")
-                            render_manager.cancel_job(job_id)
+                        for job_id in jobs_to_demote:
+                            logging.info(f"Client for session {active_session[:8]} disconnected. Demoting job: {job_id}")
+                            render_manager.demote_job(job_id, Priority.ORPHAN_SCAN)
 
                         # Clear the active session, as the GUI is gone.
                         with self.session_lock:
@@ -444,11 +444,18 @@ class ThumbnailSocketServer:
             # Phase 3: Now that the scan is complete, create thumbnail + metadata +
             # view-image tasks for all discovered files at LOW priority.  The heatmap
             # will upgrade visible ones; everything else processes in the background.
+            # If the GUI disconnected during the scan, demote to ORPHAN_SCAN so
+            # the tasks still finish but don't compete with future GUI work.
             discovered = reconcile_ctx.discovered_files
             if discovered:
+                with self.session_lock:
+                    is_orphaned = self.active_gui_session_id != session_id
+                scan_task_priority = Priority.ORPHAN_SCAN if is_orphaned else Priority.LOW
+
                 logging.info(
                     f"Post-scan: creating tasks for {len(discovered)} "
-                    f"discovered files in '{req.path}'."
+                    f"discovered files in '{req.path}'"
+                    f"{' (orphaned)' if is_orphaned else ''}."
                 )
                 def _discovered_batch_generator():
                     batch = []
@@ -462,8 +469,8 @@ class ThumbnailSocketServer:
 
                 task_job = SourceJob(
                     job_id=f"post_scan::{session_id}::{req.path}",
-                    priority=Priority.LOW,
-                    task_priority=Priority.LOW,
+                    priority=scan_task_priority,
+                    task_priority=scan_task_priority,
                     generator=_discovered_batch_generator(),
                     task_factory=self.thumbnail_manager.create_gui_tasks_for_file,
                     create_tasks=True,
