@@ -1,11 +1,13 @@
 from PySide6.QtGui import QKeySequence, QShortcut, QKeyEvent
 import logging
 import time
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox
 from PySide6.QtCore import Qt, QObject, QKeyCombination
 from config.hotkeys import HotkeyDefinition
 from typing import Dict, List, Callable
 from core.event_system import event_system, EventType, EventData, ZoomEventData
+
+_TEXT_INPUT_TYPES = (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox)
 
 
 class HotkeyManager(QObject):
@@ -17,11 +19,13 @@ class HotkeyManager(QObject):
 		self.definitions: Dict[str, HotkeyDefinition] = {}
 		self.actions: Dict[str, Callable] = {}
 		
+		self._shortcuts_suppressed = False
 		self._setup_built_in_action_handlers()
 		self.load_config(hotkeys_config)
 		app = QApplication.instance()
 		if app:
 			app.installEventFilter(self)
+			app.focusChanged.connect(self._on_focus_changed)
 		else:
 			logging.warning("HotkeyManager: QApplication instance not found, falling back to parent widget for event filter.")
 			parent_widget.installEventFilter(self)
@@ -57,6 +61,17 @@ class HotkeyManager(QObject):
 			zoom_factor=1.25,
 		))
 
+	def _on_focus_changed(self, old, new):
+		"""Suppress shortcuts while a text-input widget has focus."""
+		should_suppress = isinstance(new, _TEXT_INPUT_TYPES)
+		if should_suppress == self._shortcuts_suppressed:
+			return
+		self._shortcuts_suppressed = should_suppress
+		for shortcut_list in self.shortcuts.values():
+			for shortcut in shortcut_list:
+				shortcut.setEnabled(not should_suppress)
+		logging.debug(f"HotkeyManager: shortcuts {'suppressed' if should_suppress else 'restored'} (focus → {type(new).__name__})")
+
 	def handle_range_selection_start(self):
 		event_system.publish(EventData(event_type=EventType.RANGE_SELECTION_START, source="hotkey_manager", timestamp=time.time()))
 
@@ -65,6 +80,9 @@ class HotkeyManager(QObject):
 
 	def eventFilter(self, obj, event):
 		if not isinstance(event, QKeyEvent):
+			return super().eventFilter(obj, event)
+
+		if self._shortcuts_suppressed:
 			return super().eventFilter(obj, event)
 
 		range_select_def = self.definitions.get("start_range_selection")

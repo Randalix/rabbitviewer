@@ -87,6 +87,8 @@ if 'PySide6' not in sys.modules:
             'setSpacing': lambda self, *a: None,
         }))
     setattr(_qtwidgets, 'QApplication', type('QApplication', (_Stub,), {}))
+    for _name in ('QLineEdit', 'QTextEdit', 'QPlainTextEdit', 'QComboBox', 'QSpinBox', 'QDialog'):
+        setattr(_qtwidgets, _name, type(_name, (_QWidget,), {}))
 
     _pyside6 = types.ModuleType('PySide6')
     _pyside6.QtCore = _qtcore         # type: ignore[attr-defined]
