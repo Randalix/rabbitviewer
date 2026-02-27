@@ -53,6 +53,7 @@ class ThumbnailManager:
         self.socket_server = None  # set by rabbitviewer_daemon.py after server construction
 
         self._volume_cache: Dict[str, Tuple[bool, float]] = {}   # mount_point → (ok, expiry)
+        self.cache_size_manager = None  # set by daemon after construction
         self._volume_cache_lock = threading.Lock()
 
         self._task_operations: Dict[str, Callable] = {
@@ -256,6 +257,11 @@ class ThumbnailManager:
         thumbnail_path = plugin.process_thumbnail(image_path, md5_hash, prefetch_buffer=prefetch_buffer)
         if thumbnail_path:
             self.metadata_db.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path)
+            if self.cache_size_manager:
+                try:
+                    self.cache_size_manager.record_cache_write(os.path.getsize(thumbnail_path))
+                except OSError:
+                    pass
         else:
             logger.error(f"Thumbnail generation failed for {image_path}.")
 
@@ -559,6 +565,9 @@ class ThumbnailManager:
     def request_speculative_fullres(self, image_path: str, priority: Priority,
                                      gui_session_id: Optional[str] = None):
         """Submit or upgrade a speculative fullres task for heatmap pre-caching."""
+        if self.cache_size_manager and self.cache_size_manager.is_cache_full():
+            return
+
         view_task_id = f"view::{image_path}"
 
         paths = self.metadata_db.get_thumbnail_paths(image_path)
@@ -615,6 +624,11 @@ class ThumbnailManager:
         logger.debug(f"plugin.process_view_image for {os.path.basename(image_path)} took {duration:.4f} seconds.")
         if view_image_path:
             self.metadata_db.set_thumbnail_paths(image_path, view_image_path=view_image_path)
+            if self.cache_size_manager:
+                try:
+                    self.cache_size_manager.record_cache_write(os.path.getsize(view_image_path))
+                except OSError:
+                    pass
         return view_image_path
 
     def _process_metadata_task(self, image_path: str):
