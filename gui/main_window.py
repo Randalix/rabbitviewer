@@ -713,9 +713,8 @@ class MainWindow(QMainWindow):
                 current_path = self.picture_view.current_path
                 self.stacked_widget.setCurrentWidget(self.thumbnail_view)
 
-                # Highlight the last viewed image in thumbnail view
                 if current_path:
-                    self.thumbnail_view.setHighlightedThumbnail(current_path)
+                    self.thumbnail_view.scroll_to_top(current_path)
 
                 # close() triggers closeEvent (unsubscribes events) then deleteLater() via WA_DeleteOnClose.
                 self.picture_view.close()

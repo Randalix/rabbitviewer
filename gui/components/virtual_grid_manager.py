@@ -167,6 +167,18 @@ class VirtualGridManager(QObject):
             else:
                 vbar.setValue(target_y + self._thumb_size - viewport_h)
 
+    def scroll_to_top(self, visible_idx: int) -> None:
+        """Scroll so the row containing *visible_idx* is near the top, centered
+        vertically when possible.  Qt clamps the value to valid bounds
+        automatically, so images near the start or end never over-scroll.
+        """
+        if visible_idx < 0 or visible_idx >= self._total_items:
+            return
+        target_y = self._pos_y(visible_idx)
+        viewport_h = self._scroll_area.viewport().height()
+        centered = target_y - (viewport_h - self._thumb_size) // 2
+        self._scroll_area.verticalScrollBar().setValue(max(0, centered))
+
     def sync_viewport(
         self,
         get_label: Callable[[int], ThumbnailLabel],

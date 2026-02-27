@@ -1011,6 +1011,20 @@ class ThumbnailViewWidget(QFrame):
 
         self._update_filtered_layout()
 
+    def scroll_to_top(self, image_path: str) -> None:
+        """Scroll so the row containing *image_path* is the first visible row,
+        then materialize widgets.
+        """
+        original_idx = self._path_to_idx.get(image_path, -1)
+        if original_idx < 0:
+            return
+        visible_idx = self._original_to_visible_mapping.get(original_idx)
+        if visible_idx is None:
+            return
+        if self._virtual_grid:
+            self._virtual_grid.scroll_to_top(visible_idx)
+            self._sync_virtual_viewport()
+
     def ensure_visible(self, original_idx: int, center: bool = False):
         """Scroll so the thumbnail at *original_idx* is in the viewport, then
         materialize widgets so it actually appears.
