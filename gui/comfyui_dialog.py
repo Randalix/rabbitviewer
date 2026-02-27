@@ -9,19 +9,22 @@ notifications internally (same pattern as InspectorView/PictureView).
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QTextEdit, QSlider, QPushButton,
+    QTextEdit, QSlider, QPushButton, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
+import json
 import logging
 import os
 
 from core.event_system import event_system, EventType
 
+_BUILTIN_LABEL = "(built-in: Flux Kontext)"
+
 
 class ComfyUIDialog(QDialog):
 
-    generate_requested = Signal(str, str, float)  # (image_path, prompt, denoise)
+    generate_requested = Signal(str, str, float, str)  # (image_path, prompt, denoise, workflow_json)
     _daemon_notification = Signal(object)  # thread→GUI bridge
 
     def __init__(self, parent=None):
@@ -29,9 +32,10 @@ class ComfyUIDialog(QDialog):
         self.setWindowTitle("ComfyUI Generate")
         self.setModal(False)
         self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
-        self.resize(420, 260)
+        self.resize(420, 290)
 
         self._image_path = ""
+        self._workflow_path = None  # None = built-in
         self._subscribed = True
 
         self._daemon_notification.connect(self._process_notification)
@@ -39,6 +43,11 @@ class ComfyUIDialog(QDialog):
                                self._on_daemon_notification_from_thread)
 
         layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Workflow:"))
+        self._workflow_combo = QComboBox()
+        self._workflow_combo.currentIndexChanged.connect(self._on_workflow_changed)
+        layout.addWidget(self._workflow_combo)
 
         self._image_label = QLabel("Image: (none)")
         layout.addWidget(self._image_label)
@@ -71,11 +80,64 @@ class ComfyUIDialog(QDialog):
         escape = QShortcut(QKeySequence("Esc"), self)
         escape.activated.connect(self.close)
 
+    def _resolve_workflows_dir(self) -> str:
+        """Return the workflows directory, creating it if needed."""
+        cm = self.parent().config_manager
+        custom = cm.get("comfyui.workflows_dir", "")
+        if custom:
+            d = os.path.expanduser(custom)
+        else:
+            config_dir = os.path.dirname(cm.config_path)
+            d = os.path.join(config_dir, "workflows")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _populate_workflow_combo(self):
+        """Scan the workflows dir and repopulate the combo box."""
+        self._workflow_combo.blockSignals(True)
+        self._workflow_combo.clear()
+        self._workflow_combo.addItem(_BUILTIN_LABEL)
+
+        workflows_dir = self._resolve_workflows_dir()
+        try:
+            files = sorted(
+                f for f in os.listdir(workflows_dir)
+                if f.lower().endswith(".json")
+            )
+        except OSError:
+            files = []
+        for f in files:
+            name = os.path.splitext(f)[0]
+            full_path = os.path.join(workflows_dir, f)
+            self._workflow_combo.addItem(name, userData=full_path)
+
+        self._workflow_combo.blockSignals(False)
+
+        # Restore last-used workflow
+        last = self.parent().config_manager.get("comfyui.last_workflow", "")
+        if last:
+            idx = self._workflow_combo.findText(last)
+            if idx >= 0:
+                self._workflow_combo.setCurrentIndex(idx)
+                self._workflow_path = self._workflow_combo.itemData(idx)
+                return
+        self._workflow_path = None
+
+    def _on_workflow_changed(self, index: int):
+        if index <= 0:
+            self._workflow_path = None
+        else:
+            self._workflow_path = self._workflow_combo.itemData(index)
+        label = self._workflow_combo.itemText(index) if index > 0 else ""
+        self.parent().config_manager.set("comfyui.last_workflow", label)
+
     def open_for_image(self, image_path: str):
         self._image_path = image_path
         self._image_label.setText(f"Image: {os.path.basename(image_path)}")
         self._status_label.setText("")
         self._generate_btn.setEnabled(True)
+        self._populate_workflow_combo()
+        self._resubscribe()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -93,11 +155,28 @@ class ComfyUIDialog(QDialog):
         if not prompt or not self._image_path:
             return
         denoise = self._denoise_slider.value() / 100.0
+        workflow_json = ""
+        if self._workflow_path:
+            try:
+                with open(self._workflow_path, "r") as f:
+                    workflow_json = f.read()
+                # Validate JSON before sending
+                json.loads(workflow_json)
+            except (OSError, json.JSONDecodeError) as e:
+                self._status_label.setText(f"Error loading workflow: {e}")
+                return
         self._generate_btn.setEnabled(False)
         self._status_label.setText("Status: Generating...")
-        self.generate_requested.emit(self._image_path, prompt, denoise)
+        self.generate_requested.emit(self._image_path, prompt, denoise, workflow_json)
 
     # ── Notification handling ────────────────────────────────────
+
+    def _resubscribe(self):
+        """Re-subscribe to daemon notifications if previously unsubscribed (e.g. after close)."""
+        if not self._subscribed:
+            event_system.subscribe(EventType.DAEMON_NOTIFICATION,
+                                   self._on_daemon_notification_from_thread)
+            self._subscribed = True
 
     def _on_daemon_notification_from_thread(self, event_data):
         # why: notification arrives on NotificationClient thread; signal bridges to GUI thread
