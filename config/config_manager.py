@@ -100,7 +100,8 @@ DEFAULT_CONFIG = {
     "cache_dir": "~/.rabbitviewer",
     "watch_paths": [os.path.expanduser("~/Pictures"), os.path.expanduser("~/Downloads")],
     "min_file_size": 8192,  # bytes; 8 KB floor
-    "ignore_patterns": ["._*"]  # glob patterns
+    "ignore_patterns": ["._*"],  # glob patterns
+    "max_cache_size_mb": 10240,  # 10 GB; 0 = unlimited
 }
 
 def _default_config_path() -> str:

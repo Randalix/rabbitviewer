@@ -116,6 +116,13 @@ class MetadataDatabase:
                 except sqlite3.OperationalError:
                     pass  # Column already exists
 
+                # Migration: add accessed_at column for LRU cache eviction
+                try:
+                    cursor.execute("ALTER TABLE image_metadata ADD COLUMN accessed_at REAL DEFAULT 0")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_accessed_at ON image_metadata(accessed_at)')
+
                 # Tag system: normalized junction table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS tags (
@@ -586,20 +593,21 @@ class MetadataDatabase:
         try:
             with self._lock:
                 cursor = self.conn.cursor()
-                
+
                 cursor.execute('''
-                    SELECT thumbnail_path, view_image_path FROM image_metadata 
+                    SELECT thumbnail_path, view_image_path FROM image_metadata
                     WHERE file_path = ?
                 ''', (file_path,))
-                
+
                 result = cursor.fetchone()
-                
-                if result:
-                    return {
-                        'thumbnail_path': result[0],
-                        'view_image_path': result[1]
-                    }
-                    
+
+            if result:
+                self._touch_accessed_at(file_path)
+                return {
+                    'thumbnail_path': result[0],
+                    'view_image_path': result[1]
+                }
+
         except sqlite3.Error as e:
             logging.error(f"Error getting thumbnail paths for {file_path}: {e}")
             
@@ -669,6 +677,7 @@ class MetadataDatabase:
                 result = cursor.fetchone()
 
             if result and result[0] and os.path.exists(result[0]):
+                self._touch_accessed_at(file_path)
                 return {
                     'thumbnail_path': result[0],
                     'view_image_path': result[1],
@@ -1383,6 +1392,97 @@ class MetadataDatabase:
         except sqlite3.Error as e:
             logging.error(f"Error getting directory tags for {directory_path}: {e}")
             return []
+
+    def _touch_accessed_at(self, file_path: str) -> None:
+        """Updates accessed_at for LRU tracking. Best-effort; failures are silent."""
+        try:
+            with self._lock:
+                self.conn.execute(
+                    "UPDATE image_metadata SET accessed_at = ? WHERE file_path = ?",
+                    (time.time(), file_path),
+                )
+                self.conn.commit()
+        except sqlite3.Error:
+            pass
+
+    def get_total_cache_size(self) -> int:
+        """Returns total bytes of all cached thumbnail + view image files on disk."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT thumbnail_path, view_image_path FROM image_metadata
+                    WHERE thumbnail_path IS NOT NULL OR view_image_path IS NOT NULL
+                ''')
+                rows = cursor.fetchall()
+        except sqlite3.Error as e:
+            logging.error(f"Error querying cache paths for size calculation: {e}")
+            return 0
+
+        total = 0
+        for thumb, view in rows:
+            for path in (thumb, view):
+                if path:
+                    try:
+                        total += os.path.getsize(path)
+                    except OSError:
+                        pass
+        return total
+
+    def evict_lru_cache(self, target_bytes: int) -> int:
+        """Evict least-recently-accessed cache entries until total size <= target_bytes.
+
+        Returns bytes freed.
+        """
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT file_path, thumbnail_path, view_image_path
+                    FROM image_metadata
+                    WHERE thumbnail_path IS NOT NULL OR view_image_path IS NOT NULL
+                    ORDER BY accessed_at ASC
+                ''')
+                rows = cursor.fetchall()
+        except sqlite3.Error as e:
+            logging.error(f"Error querying for LRU eviction: {e}")
+            return 0
+
+        # Calculate per-record cache sizes
+        record_sizes: list[tuple[str, int]] = []
+        current_total = 0
+        for file_path, thumb, view in rows:
+            size = 0
+            for path in (thumb, view):
+                if path:
+                    try:
+                        size += os.path.getsize(path)
+                    except OSError:
+                        pass
+            record_sizes.append((file_path, size))
+            current_total += size
+
+        if current_total <= target_bytes:
+            return 0
+
+        # Collect records to evict from LRU end until we're under target
+        excess = current_total - target_bytes
+        bytes_to_free = 0
+        paths_to_remove: list[str] = []
+        for file_path, size in record_sizes:
+            if bytes_to_free >= excess:
+                break
+            paths_to_remove.append(file_path)
+            bytes_to_free += size
+
+        if paths_to_remove:
+            logging.info(
+                f"Cache eviction: removing {len(paths_to_remove)} LRU records "
+                f"to free ~{bytes_to_free / (1024*1024):.1f} MB"
+            )
+            self.remove_records(paths_to_remove)
+
+        return bytes_to_free
 
     def close(self):
         """Closes the database connection."""

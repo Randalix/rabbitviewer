@@ -227,6 +227,16 @@ SQLite (WAL mode) storing per-file: EXIF metadata, star ratings, tags, thumbnail
 
 ---
 
+### Cache Size Management — `core/cache_size_manager.py`
+
+`CacheSizeManager` enforces an optional max cache size (`max_cache_size_mb` config, default 10 GB, 0 = unlimited). Tracks total bytes of `thumbnails/` + `images/` cache directories using an in-memory counter initialized from `MetadataDatabase.get_total_cache_size()` at startup, then updated incrementally via `record_cache_write()`.
+
+**Eviction strategy:** LRU based on `accessed_at` column in `image_metadata` (updated by `get_thumbnail_paths` and `get_cached_thumbnail_paths`). When the limit is reached, `evict_lru_cache()` deletes oldest-accessed records (and their cache files via `remove_records()`) until total size drops to 90% of max (headroom to avoid thrashing).
+
+**Background scan gating:** When `is_cache_full()` returns True, `_cooperative_generator_runner` skips low-priority job slices (`priority <= LOW` with `create_tasks=True`), and `request_speculative_fullres` returns immediately. GUI-driven requests (heatmap-promoted, high priority) bypass the gate and trigger eviction reactively.
+
+---
+
 ### Shared Data Types — `core/priority.py`
 
 Qt-free enums and dataclasses shared across daemon, plugins, and scripts: `Priority`, `TaskState`, `TaskType`, `SourceJob`, `RenderTask`, `ImageEntry`. `SourceJob` has an optional `task_priority` field for decoupling generator priority from child task priority. `RenderTask` supports cooperative cancellation via `cancel_event` (`threading.Event`) and fast worker discard via `is_active`.
@@ -369,6 +379,7 @@ system.socket_path: /tmp/rabbitviewer_{username}.sock
 cache_dir: ~/.rabbitviewer
 database_path: metadata.db
 thumbnail_size: 128
+max_cache_size_mb: 10240  # 10 GB; 0 = unlimited
 watch_paths: [~/Pictures, ~/Downloads]
 ```
 

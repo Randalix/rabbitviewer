@@ -12,6 +12,7 @@ from core.metadata_database import get_metadata_database
 from core.background_indexer import BackgroundIndexer
 from filewatcher.watcher import WatchdogHandler
 from config.config_manager import ConfigManager
+from core.cache_size_manager import CacheSizeManager
 
 
 # Holds the exclusive lock fd; must not be GC'd for the process lifetime.
@@ -94,6 +95,11 @@ def main():
 
     logging.debug("Initializing ThumbnailManager")
     thumbnail_manager = ThumbnailManager(config_manager, metadata_database)
+
+    max_cache_mb = config_manager.get("max_cache_size_mb", 0)
+    cache_size_manager = CacheSizeManager(metadata_database, max_cache_mb)
+    thumbnail_manager.cache_size_manager = cache_size_manager
+    thumbnail_manager.render_manager.cache_size_manager = cache_size_manager
 
     logging.debug(f"Initializing WatchdogHandler for paths: {WATCH_PATHS}")
     watcher = WatchdogHandler(thumbnail_manager, WATCH_PATHS)
