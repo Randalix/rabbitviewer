@@ -47,6 +47,10 @@ DEFAULT_CONFIG = {
             "sequence": "I",
             "description": "Toggle inspector window"
         },
+        "pin_inspector": {
+            "sequence": "P",
+            "description": "Pin/unpin inspector to current image"
+        },
         "start_range_selection": {
             "sequence": "S",
             "description": "Toggle range selection mode"

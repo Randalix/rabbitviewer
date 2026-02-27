@@ -265,6 +265,11 @@ class MainWindow(QMainWindow):
         if not self.inspector_views:
             self._inspector_slot = 0
 
+    def _pin_last_inspector(self):
+        """Toggle pin on the most recently created inspector view."""
+        if self.inspector_views:
+            self.inspector_views[-1].toggle_pin()
+
     def _open_info_panel(self):
         """Create and show a new metadata info panel."""
         provider = MetadataProvider(self.metadata_cache)
@@ -533,6 +538,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager = HotkeyManager(self, hotkeys_config)
         
         self.hotkey_manager.add_action("toggle_inspector", self._open_inspector_window)
+        self.hotkey_manager.add_action("pin_inspector", self._pin_last_inspector)
         self.hotkey_manager.add_action("escape_picture_view", self._close_active_media_view)
         self.hotkey_manager.add_action("close_or_quit", self._handle_close_or_quit)
         self.hotkey_manager.add_action("next_image", lambda: self.navigate_to_image("next"))

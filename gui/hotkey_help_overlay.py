@@ -16,7 +16,7 @@ _CATEGORIES: List[Tuple[str, List[str]]] = [
         "next_image", "previous_image", "escape_picture_view", "close_or_quit",
     ]),
     ("View", [
-        "toggle_inspector", "open_filter", "zoom_in", "zoom_out",
+        "toggle_inspector", "pin_inspector", "open_filter", "zoom_in", "zoom_out",
     ]),
     ("Selection", [
         "start_range_selection", "undo_selection", "redo_selection",

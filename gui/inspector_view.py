@@ -69,6 +69,8 @@ class InspectorView(QWidget):
         # one extra loop iteration in _scrub_worker after closeEvent, which is harmless.
         self._scrub_stop = False
 
+        self._pinned: bool = False
+
         self.setWindowTitle("Inspector")
         self.setMinimumSize(200, 200)
 
@@ -130,6 +132,23 @@ class InspectorView(QWidget):
             except (ValueError, TypeError, KeyError, OSError) as e:
                 logging.error("Error processing 'previews_ready' in InspectorView: %s", e, exc_info=True)
 
+    def toggle_pin(self):
+        self._pinned = not self._pinned
+        if not self._pinned:
+            # Unpin: catch up to the current hover target if it differs.
+            if (self._desired_image_path
+                    and self._desired_image_path != self._current_image_path
+                    and self.socket_client):
+                self._view_image_ready = False
+                self._fetch_in_flight = self._desired_image_path
+                threading.Thread(
+                    target=self._fetch_preview_status,
+                    args=(self._desired_image_path, self._desired_norm_pos),
+                    daemon=True,
+                    name="inspector-fetch",
+                ).start()
+        self._update_window_title()
+
     def _handle_inspector_update(self, event_data: InspectorEventData):
         if not self.isVisible():
             return
@@ -141,6 +160,13 @@ class InspectorView(QWidget):
 
         image_path = event_data.image_path
         norm_pos = event_data.normalized_position
+
+        # ------ PINNED: ignore image changes, still track position ------
+        if self._pinned and image_path != self._current_image_path:
+            self._desired_norm_pos = norm_pos
+            if self._view_mode == _ViewMode.TRACKING:
+                self.set_center(norm_pos)
+            return
 
         # ------ VIDEO PATH ------
         if _is_video(image_path):
@@ -284,20 +310,21 @@ class InspectorView(QWidget):
             self._update_window_title()
 
     def _update_window_title(self):
+        pin_suffix = " (Pinned)" if self._pinned else ""
         if self._is_video_mode:
             if self._view_mode == _ViewMode.FIT:
-                self.setWindowTitle("Inspector - Video Fit")
+                self.setWindowTitle(f"Inspector - Video Fit{pin_suffix}")
             elif self._view_mode == _ViewMode.MANUAL:
-                self.setWindowTitle("Inspector - Video Scrub (Manual)")
+                self.setWindowTitle(f"Inspector - Video Scrub (Manual){pin_suffix}")
             else:
-                self.setWindowTitle("Inspector - Video Scrub (Tracking)")
+                self.setWindowTitle(f"Inspector - Video Scrub (Tracking){pin_suffix}")
         else:
             if self._view_mode == _ViewMode.FIT:
-                self.setWindowTitle("Inspector - Fit Mode")
+                self.setWindowTitle(f"Inspector - Fit Mode{pin_suffix}")
             elif self._view_mode == _ViewMode.MANUAL:
-                self.setWindowTitle(f"Inspector - Locked ({self._zoom_factor:.1f}x Zoom)")
+                self.setWindowTitle(f"Inspector - Locked ({self._zoom_factor:.1f}x Zoom){pin_suffix}")
             else:
-                self.setWindowTitle(f"Inspector - Tracking ({self._zoom_factor:.1f}x Zoom)")
+                self.setWindowTitle(f"Inspector - Tracking ({self._zoom_factor:.1f}x Zoom){pin_suffix}")
 
     def paintEvent(self, event):
         if not self._current_image_path or not self._picture_base.has_image():
@@ -533,6 +560,7 @@ class InspectorView(QWidget):
         settings.sync()
         if self.config_manager:
             self.config_manager.set("inspector.zoom_factor", self._zoom_factor)
+        self._pinned = False
         event_system.unsubscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
         event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._daemon_notification_from_thread)
         super().closeEvent(event)
