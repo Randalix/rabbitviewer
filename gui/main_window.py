@@ -41,7 +41,6 @@ def _is_video(path: str) -> bool:
 class MainWindow(QMainWindow):
     _hover_rating_ready = Signal(str, int)  # (path, rating)
     _hover_metadata_ready = Signal(str)  # path — emitted after cache populated
-
     def __init__(self, config_manager, socket_client: ThumbnailSocketClient):
         super().__init__()
         self.config_manager = config_manager
@@ -84,6 +83,7 @@ class MainWindow(QMainWindow):
         self.tag_editor_dialog = None
         self._tag_editor_targets: list = []
         self.tag_filter_dialog = None
+        self.comfyui_dialog = None
         self._removed_images = []
 
         QTimer.singleShot(0, self._deferred_init)
@@ -413,6 +413,33 @@ class MainWindow(QMainWindow):
         if self.thumbnail_view.has_active_tag_filter():
             self.thumbnail_view.reapply_filters()
 
+    # ── ComfyUI ─────────────────────────────────────────────────
+
+    def open_comfyui_dialog(self):
+        selected = self.get_effective_selection()
+        if not selected:
+            return
+        image_path = selected[0]
+
+        if not self.comfyui_dialog:
+            from .comfyui_dialog import ComfyUIDialog
+            self.comfyui_dialog = ComfyUIDialog(self)
+            self.comfyui_dialog.generate_requested.connect(self._on_comfyui_generate)
+
+        self.comfyui_dialog.open_for_image(image_path)
+
+    def _on_comfyui_generate(self, image_path: str, prompt: str, denoise: float):
+        def _send():
+            if not self.socket_client:
+                return
+            resp = self.socket_client.comfyui_generate(image_path, prompt, denoise)
+            if resp and hasattr(resp, 'task_id'):
+                logging.debug(f"ComfyUI generation queued: {resp.task_id}")
+            else:
+                logging.warning(f"ComfyUI generate returned no task_id: {resp!r}")
+
+        threading.Thread(target=_send, daemon=True).start()
+
     def _on_filters_applied(self):
         """After filter re-applies, refresh UI state for the currently active media."""
         # Case 1: detail view is open — navigate away if current media is now filtered out
@@ -498,6 +525,9 @@ class MainWindow(QMainWindow):
         for panel in list(self.info_panels):
             panel.close()
         self.info_panels.clear()
+        if self.comfyui_dialog:
+            self.comfyui_dialog.close()
+            self.comfyui_dialog = None
         settings = QSettings("RabbitViewer", "MainWindow")
         settings.setValue("geometry", self.saveGeometry())
         settings.sync()
@@ -547,6 +577,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("redo_selection", self.selection_history.redo)
         self.hotkey_manager.add_action("show_hotkey_help", self._toggle_hotkey_help)
         self.hotkey_manager.add_action("toggle_info_panel", self._open_info_panel)
+        self.hotkey_manager.add_action("open_comfyui", self.open_comfyui_dialog)
 
     def _toggle_hotkey_help(self):
         """Toggle the keyboard shortcuts overlay."""
