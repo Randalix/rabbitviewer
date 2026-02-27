@@ -43,7 +43,7 @@ class RenderManager(QObject):
         # Bounded to prevent unbounded memory growth under high throughput.
         self.notification_queue: Queue = Queue(maxsize=5000)
 
-        # Optional cache size manager; set via set_cache_size_manager().
+        # why: injected post-construction by daemon; None disables cache-full gating
         self.cache_size_manager = None
 
     def start(self):
@@ -363,7 +363,9 @@ class RenderManager(QObject):
                 and self.cache_size_manager.is_cache_full()
                 and job.priority <= Priority.LOW
                 and job.create_tasks):
-            logger.info(f"Cache full — deferring job slice '{job.job_id}::{slice_index}'.")
+            # why: drop rather than reschedule — watchdog/next scan will re-queue;
+            #      rescheduling a stale generator mid-batch risks partial double-ingestion
+            logger.info(f"Cache full — dropping job slice '{job.job_id}::{slice_index}'.")
             return
 
         # 3. Process the yielded item.

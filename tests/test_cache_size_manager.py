@@ -109,16 +109,6 @@ class TestCacheSizeManager:
         mgr = CacheSizeManager(db, max_cache_size_mb=0)
         assert not mgr.is_cache_full()
 
-    def test_is_cache_full(self, cache_env):
-        db, _, _, add = cache_env
-        # Add 100 KB of cache.
-        add("a.jpg", thumb_kb=25, view_kb=25)
-        add("b.jpg", thumb_kb=25, view_kb=25)
-
-        # Limit: 50 KB — cache is over limit.
-        mgr = CacheSizeManager(db, max_cache_size_mb=0)
-        assert not mgr.is_cache_full()  # disabled
-
     def test_reports_full_when_over_limit(self, cache_env):
         db, _, _, add = cache_env
         add("a.jpg", thumb_kb=50, view_kb=50)  # 100 KB total
@@ -129,6 +119,7 @@ class TestCacheSizeManager:
         mgr._db = db
         mgr._max_bytes = 50 * 1024  # 50 KB limit
         mgr._current_bytes = 0
+        mgr._evicting = False
         mgr._enabled = True
         mgr._lock = __import__("threading").Lock()
         mgr.refresh()
@@ -146,6 +137,7 @@ class TestCacheSizeManager:
         mgr._db = db
         mgr._max_bytes = 50 * 1024  # 50 KB
         mgr._current_bytes = 0
+        mgr._evicting = False
         mgr._enabled = True
         mgr._lock = __import__("threading").Lock()
         mgr.refresh()  # picks up 60 KB

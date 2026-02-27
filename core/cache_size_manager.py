@@ -1,5 +1,3 @@
-"""Cache size manager — tracks total cache usage and triggers LRU eviction."""
-
 import logging
 import threading
 
@@ -7,9 +5,7 @@ logger = logging.getLogger(__name__)
 
 
 class CacheSizeManager:
-    """Tracks cache disk usage and enforces a configurable max size.
-
-    When the limit is reached, background scans are paused (callers check
+    """When the limit is reached, background scans are paused (callers check
     ``is_cache_full()``) and old entries are evicted via the DB's LRU query.
     GUI-driven requests bypass the full check and instead call
     ``record_cache_write()`` which triggers eviction reactively.
@@ -23,6 +19,7 @@ class CacheSizeManager:
         self._max_bytes = max_cache_size_mb * 1024 * 1024 if max_cache_size_mb > 0 else 0
         self._current_bytes = 0
         self._lock = threading.Lock()
+        self._evicting = False
         self._enabled = self._max_bytes > 0
 
         if self._enabled:
@@ -45,14 +42,12 @@ class CacheSizeManager:
             return self._current_bytes
 
     def is_cache_full(self) -> bool:
-        """Returns True when the cache has reached or exceeded the configured limit."""
         if not self._enabled:
             return False
         with self._lock:
             return self._current_bytes >= self._max_bytes
 
     def record_cache_write(self, bytes_added: int) -> None:
-        """Account for newly written cache bytes and evict if over limit."""
         if not self._enabled:
             return
         with self._lock:
@@ -63,19 +58,22 @@ class CacheSizeManager:
         if not self._enabled:
             return
         with self._lock:
-            if self._current_bytes < self._max_bytes:
+            if self._current_bytes < self._max_bytes or self._evicting:
                 return
-        target = int(self._max_bytes * self._HEADROOM_RATIO)
-        freed = self._db.evict_lru_cache(target)
-        if freed > 0:
+            self._evicting = True
+        try:
+            target = int(self._max_bytes * self._HEADROOM_RATIO)
+            freed = self._db.evict_lru_cache(target)
+            if freed > 0:
+                logger.info("CacheSizeManager: evicted %d MB", freed // (1024 * 1024))
+            # why: resync from disk regardless of partial failure to avoid
+            # _current_bytes drifting permanently above the limit
+            self.refresh()
+        finally:
             with self._lock:
-                self._current_bytes -= freed
-                if self._current_bytes < 0:
-                    self._current_bytes = 0
-            logger.info("CacheSizeManager: evicted %d MB", freed // (1024 * 1024))
+                self._evicting = False
 
     def refresh(self) -> None:
-        """Recalculate current cache size from disk."""
         total = self._db.get_total_cache_size()
         with self._lock:
             self._current_bytes = total

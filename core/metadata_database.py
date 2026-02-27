@@ -1394,7 +1394,6 @@ class MetadataDatabase:
             return []
 
     def _touch_accessed_at(self, file_path: str) -> None:
-        """Updates accessed_at for LRU tracking. Best-effort; failures are silent."""
         try:
             with self._lock:
                 self.conn.execute(
@@ -1403,10 +1402,9 @@ class MetadataDatabase:
                 )
                 self.conn.commit()
         except sqlite3.Error:
-            pass
+            pass  # why: best-effort; LRU ordering degrades gracefully under write pressure
 
     def get_total_cache_size(self) -> int:
-        """Returns total bytes of all cached thumbnail + view image files on disk."""
         try:
             with self._lock:
                 cursor = self.conn.cursor()
@@ -1430,10 +1428,6 @@ class MetadataDatabase:
         return total
 
     def evict_lru_cache(self, target_bytes: int) -> int:
-        """Evict least-recently-accessed cache entries until total size <= target_bytes.
-
-        Returns bytes freed.
-        """
         try:
             with self._lock:
                 cursor = self.conn.cursor()
@@ -1448,7 +1442,6 @@ class MetadataDatabase:
             logging.error(f"Error querying for LRU eviction: {e}")
             return 0
 
-        # Calculate per-record cache sizes
         record_sizes: list[tuple[str, int]] = []
         current_total = 0
         for file_path, thumb, view in rows:
@@ -1465,7 +1458,6 @@ class MetadataDatabase:
         if current_total <= target_bytes:
             return 0
 
-        # Collect records to evict from LRU end until we're under target
         excess = current_total - target_bytes
         bytes_to_free = 0
         paths_to_remove: list[str] = []
