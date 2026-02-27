@@ -618,10 +618,33 @@ class MainWindow(QMainWindow):
         return set(self._removed_images)
 
     def remove_images(self, image_paths: List[str]):
-        """Remove images from the thumbnail view"""
-        if self.thumbnail_view:
-            self.thumbnail_view.remove_images(image_paths)
-            self._removed_images = image_paths.copy() 
+        """Remove images from the thumbnail view and update active media view."""
+        if not self.thumbnail_view:
+            return
+        removed_set = set(image_paths)
+
+        # Determine if the active media view is showing a removed image.
+        current_path = None
+        active_view = None
+        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+            active_view = "picture"
+            current_path = self.picture_view.current_path
+        elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
+            active_view = "video"
+            current_path = self.video_view.current_path
+
+        self.thumbnail_view.remove_images(image_paths)
+        self._removed_images = image_paths.copy()
+
+        # If the active media view was showing a removed image, navigate or close.
+        if active_view and current_path and current_path in removed_set:
+            visible = self.thumbnail_view.current_files
+            if visible:
+                self._open_media_view(visible[0])
+            elif active_view == "picture":
+                self.close_picture_view()
+            else:
+                self.close_video_view()
 
         
     @Slot()
