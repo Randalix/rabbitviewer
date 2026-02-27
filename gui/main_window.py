@@ -497,13 +497,29 @@ class MainWindow(QMainWindow):
         urls = event.mimeData().urls()
         if not urls:
             return
-        path = urls[0].toLocalFile()
-        if not path:
+
+        # Collect all valid local file/directory paths
+        paths = []
+        for url in urls:
+            p = url.toLocalFile()
+            if p:
+                paths.append(p)
+        if not paths:
             return
-        if os.path.isdir(path):
-            self.load_directory(path, recursive=False)
-        elif os.path.isfile(path):
-            self.load_directory(os.path.dirname(path), recursive=False)
+
+        # Single drop: directory or file
+        if len(paths) == 1:
+            path = paths[0]
+            if os.path.isdir(path):
+                self.load_directory(path, recursive=False)
+            elif os.path.isfile(path):
+                self.load_directory(os.path.dirname(path), recursive=False)
+                self._open_media_view(path)
+        else:
+            # Multiple drops: add only the dropped files to the current view
+            file_paths = [p for p in paths if os.path.isfile(p)]
+            if file_paths:
+                self.thumbnail_view.add_images(file_paths)
 
     def closeEvent(self, event):
         """Handles the window close event."""
