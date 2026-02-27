@@ -201,6 +201,61 @@ class VirtualGridManager(QObject):
         self._mat_start = new_start
         self._mat_end = new_end
 
+    def splice_items(
+        self,
+        removed_vis_indices: set,
+        new_total: int,
+        recycle_label: Callable[[ThumbnailLabel], None],
+        update_label: Callable[[ThumbnailLabel, int], None],
+    ) -> None:
+        """Remove specific items and re-index survivors without recycling everything.
+
+        *removed_vis_indices* — old visible indices being deleted.
+        *new_total* — item count after deletion.
+        *recycle_label* — called for each deleted label.
+        *update_label(label, new_vis_idx)* — called for each survivor so the
+        caller can patch ``_original_idx`` / ``file_path``.
+        """
+        # Build sorted list of removed indices for shift computation.
+        removed_sorted = sorted(removed_vis_indices)
+
+        # Recycle deleted labels.
+        for vis_idx in removed_sorted:
+            label = self._mat_labels.pop(vis_idx, None)
+            if label is not None:
+                recycle_label(label)
+
+        # Build old→new mapping: for each old vis_idx, count how many removed
+        # indices are below it to compute the downward shift.
+        # Using a running offset is O(n) instead of O(n·k).
+        new_mat: Dict[int, ThumbnailLabel] = {}
+        ri = 0  # pointer into removed_sorted
+        shift = 0
+        for old_idx in sorted(self._mat_labels):
+            while ri < len(removed_sorted) and removed_sorted[ri] < old_idx:
+                shift += 1
+                ri += 1
+            new_idx = old_idx - shift
+            label = self._mat_labels[old_idx]
+            update_label(label, new_idx)
+            new_mat[new_idx] = label
+
+        self._mat_labels = new_mat
+        self._total_items = new_total
+        self._update_container_height()
+
+        # Reposition all surviving labels.
+        for vis_idx, label in self._mat_labels.items():
+            label.move(self._pos_x(vis_idx), self._pos_y(vis_idx))
+
+        # Update materialized window bounds.
+        if self._mat_labels:
+            self._mat_start = min(self._mat_labels)
+            self._mat_end = max(self._mat_labels) + 1
+        else:
+            self._mat_start = 0
+            self._mat_end = 0
+
     def clear(self, recycle_label: Callable[[ThumbnailLabel], None]) -> None:
         """Recycle all materialized labels."""
         for label in self._mat_labels.values():

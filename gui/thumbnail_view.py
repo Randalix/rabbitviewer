@@ -824,24 +824,27 @@ class ThumbnailViewWidget(QFrame):
             len(new_files), len(self.all_files),
         )
         if not self._hidden_indices:
-            # Append-only fast path: no filter active, just extend the
-            # mappings and sync the viewport.  Avoids a full clear+rebuild
-            # which would destroy the label under the cursor and lose the
-            # CSS :hover state (causing the hover indicator to jump).
-            # Works for both cached folders (is_loading=False) and uncached
-            # folders (is_loading=True) — scan_progress always appends.
-            for f in new_files:
-                vis_idx = len(self.current_files)
-                orig_idx = self._path_to_idx[f]
-                self.current_files.append(f)
-                self._visible_to_original_mapping[vis_idx] = orig_idx
-                self._original_to_visible_mapping[orig_idx] = vis_idx
-                self._visible_original_indices.append(orig_idx)
-            if self._virtual_grid:
-                self._virtual_grid.set_total_items(len(self.current_files))
-                self._virtual_grid.update_layout()
-                self._sync_virtual_viewport()
-            self._last_layout_file_count = len(self.all_files)
+            if not self._is_loading:
+                # Post-scan arrival (watchdog, ComfyUI): insert in sorted
+                # position so new files appear next to related originals.
+                self.reorder_files(sorted(self.all_files))
+            else:
+                # Append-only fast path during scan: batches arrive sorted,
+                # just extend mappings.  Avoids a full clear+rebuild which
+                # would destroy the label under the cursor and lose the
+                # CSS :hover state (causing the hover indicator to jump).
+                for f in new_files:
+                    vis_idx = len(self.current_files)
+                    orig_idx = self._path_to_idx[f]
+                    self.current_files.append(f)
+                    self._visible_to_original_mapping[vis_idx] = orig_idx
+                    self._original_to_visible_mapping[orig_idx] = vis_idx
+                    self._visible_original_indices.append(orig_idx)
+                if self._virtual_grid:
+                    self._virtual_grid.set_total_items(len(self.current_files))
+                    self._virtual_grid.update_layout()
+                    self._sync_virtual_viewport()
+                self._last_layout_file_count = len(self.all_files)
         else:
             # Filter is active — full rebuild needed to check which new
             # files pass the filter.
@@ -862,6 +865,21 @@ class ThumbnailViewWidget(QFrame):
 
         try:
             paths_set = set(paths)
+
+            # -- 1. Capture which visible indices are being removed ----------
+            removed_vis_indices: set = set()
+            for p in paths:
+                orig = self._path_to_idx.get(p)
+                if orig is not None:
+                    vis = self._original_to_visible_mapping.get(orig)
+                    if vis is not None:
+                        removed_vis_indices.add(vis)
+
+            # -- 2. Snapshot old hidden paths before index shift -------------
+            old_hidden_paths = {self.all_files[i] for i in self._hidden_indices
+                                if i < len(self.all_files)}
+
+            # -- 3. Rebuild data arrays with new indices (same as before) ----
             new_all_files = []
             new_image_states = {}
             new_pixmap_cache = {}
@@ -879,12 +897,6 @@ class ThumbnailViewWidget(QFrame):
                         new_thumb_path_cache[current_new_idx] = self._thumb_path_cache[original_idx]
                     current_new_idx += 1
 
-            # Recycle all materialized labels — they'll be re-materialized
-            # with correct indices by _sync_virtual_viewport.
-            if self._virtual_grid:
-                self._virtual_grid.clear(self._recycle_label)
-            self.labels.clear()
-
             self.all_files = new_all_files
             self._all_files_set = set(new_all_files)
             self._path_to_idx = {path: idx for idx, path in enumerate(new_all_files)}
@@ -892,10 +904,67 @@ class ThumbnailViewWidget(QFrame):
             self._pixmap_cache = new_pixmap_cache
             self._thumb_path_cache = new_thumb_path_cache
 
+            # -- 4. Shift _hidden_indices to match new original indices ------
+            self._hidden_indices = set()
+            for hp in old_hidden_paths:
+                new_idx = self._path_to_idx.get(hp)
+                if new_idx is not None:
+                    self._hidden_indices.add(new_idx)
+
+            # -- 5. Rebuild visible ↔ original mappings inline ---------------
+            self.current_files = []
+            self._visible_to_original_mapping.clear()
+            self._original_to_visible_mapping.clear()
+            self._visible_original_indices.clear()
+
+            visible_idx = 0
+            for orig_idx, file_path in enumerate(self.all_files):
+                if orig_idx not in self._hidden_indices:
+                    self.current_files.append(file_path)
+                    self._visible_to_original_mapping[visible_idx] = orig_idx
+                    self._original_to_visible_mapping[orig_idx] = visible_idx
+                    self._visible_original_indices.append(orig_idx)
+                    visible_idx += 1
+
+            # -- 6. Surgical grid splice — only recycle deleted labels -------
+            if self._virtual_grid and removed_vis_indices:
+                vis_to_orig = self._visible_to_original_mapping
+
+                def _update_label(label, new_vis_idx):
+                    new_orig = vis_to_orig[new_vis_idx]
+                    label._original_idx = new_orig
+                    label.file_path = self.all_files[new_orig]
+
+                self._virtual_grid.splice_items(
+                    removed_vis_indices,
+                    len(self.current_files),
+                    self._recycle_label,
+                    _update_label,
+                )
+
+                # Re-key self.labels from old original_idx → new original_idx.
+                new_labels = {}
+                for label in self._virtual_grid._mat_labels.values():
+                    new_labels[label._original_idx] = label
+                self.labels = new_labels
+            elif self._virtual_grid:
+                # Nothing visible was removed (all removed items were hidden).
+                self._virtual_grid.set_total_items(len(self.current_files))
+
+            # -- 7. Clear hover if the hovered label was deleted -------------
+            if self._hovered_label is not None:
+                if self._hovered_label.file_path in paths_set:
+                    self._hovered_label = None
+                    self.thumbnailLeft.emit()
+
+            # -- 8. Clear selection ------------------------------------------
             cmd = ReplaceSelectionCommand(paths=set(), source="thumbnail_view", timestamp=time.time())
             event_system.publish(cmd)
 
-            self.reapply_filters()
+            # -- 9. Fill any new gaps at viewport edges ----------------------
+            self._last_layout_file_count = len(self.all_files)
+            self._sync_virtual_viewport()
+            QTimer.singleShot(100, self._prioritize_visible_thumbnails)
 
             self._last_redraw_time = self._benchmark_timer.elapsed() / 1000.0
             self.benchmarkComplete.emit("Redraw", self._last_redraw_time)
