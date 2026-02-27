@@ -319,6 +319,10 @@ SQLite (WAL mode) stores:
 * Ratings
 * Content hashes
 
+### Cache Management
+
+The thumbnail and view-image cache (`~/.rabbitviewer/`) is capped by `max_cache_size_mb` (default 10 GB, 0 = unlimited). When the limit is reached, background scans pause and the least-recently-accessed entries are evicted. Direct GUI requests still work — they trigger eviction reactively.
+
 ### File Watching
 
 Based on watchdog.

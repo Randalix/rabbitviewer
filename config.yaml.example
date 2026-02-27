@@ -89,6 +89,7 @@ logging_level: INFO
 min_file_size: 8192
 system:
   socket_path: /tmp/rabbitviewer.sock
+max_cache_size_mb: 10240  # 10 GB; 0 = unlimited
 thumbnail_size: 128
 watch_paths:
 - ~/Pictures
