@@ -12,12 +12,12 @@ def run_script(api):
         meta = metadata.get(p, {}) if metadata else {}
         ts = meta.get("date_taken") or meta.get("mtime")
         if ts:
-            return ts
+            return float(ts)
         # why: fallback to stat only when daemon has no cached timestamp
         try:
             return os.path.getmtime(p)
         except OSError:
-            return 0
+            return 0.0
 
     sorted_paths = sorted(paths, key=date_key)
     if sorted_paths != paths:

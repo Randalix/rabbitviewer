@@ -406,7 +406,7 @@ class MetadataDatabase:
             metadata['file_size'] = file_size if file_size is not None else os.path.getsize(file_path)
 
             # Extract EXIF data via the persistent exiftool process (avoids per-file startup cost).
-            raw = _get_fallback_exiftool().execute(['-json', '-all', '-XMP:Rating', file_path])
+            raw = _get_fallback_exiftool().execute(['-json', '-d', '%s', '-all', '-XMP:Rating', file_path])
             exif_data = json.loads(raw)
             if exif_data and len(exif_data) > 0:
                 data = exif_data[0]
@@ -462,10 +462,13 @@ class MetadataDatabase:
                     except (ValueError, TypeError):
                         pass
 
-                # Date taken
+                # Date taken (epoch seconds via -d %s)
                 for date_field in ['DateTimeOriginal', 'CreateDate', 'DateTime']:
                     if date_field in data:
-                        metadata['date_taken'] = data[date_field]
+                        try:
+                            metadata['date_taken'] = float(data[date_field])
+                        except (ValueError, TypeError):
+                            pass
                         break
 
                 # Orientation

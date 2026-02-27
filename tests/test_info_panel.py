@@ -251,7 +251,7 @@ class TestMetadataProvider:
             "aperture": 1.2,
             "shutter_speed": "1/500",
             "iso": 400,
-            "date_taken": "2025:10:14 12:00:00",
+            "date_taken": 1728907200.0,
         }})
         sections = p.get_sections("/img.jpg")
         exp_sec = [s for s in sections if s.title == "Exposure"][0]
@@ -260,7 +260,9 @@ class TestMetadataProvider:
         assert row_dict["Aperture"] == "f/1.2"
         assert row_dict["Shutter Speed"] == "1/500"
         assert row_dict["ISO"] == "400"
-        assert row_dict["Date"] == "2025:10:14 12:00:00"
+        from datetime import datetime
+        expected = datetime.fromtimestamp(1728907200.0).strftime("%Y-%m-%d %H:%M:%S")
+        assert row_dict["Date"] == expected
 
     def test_exposure_section_absent_when_all_none(self):
         p = self._make_provider({"/img.jpg": {
@@ -287,7 +289,7 @@ class TestMetadataProvider:
             "width": 6000, "height": 4000, "file_size": 20_000_000, "rating": 5,
             "camera_make": "Canon", "camera_model": "R5", "lens_model": "RF 85",
             "focal_length": 85.0, "aperture": 1.2, "shutter_speed": "1/500",
-            "iso": 100, "date_taken": "2025:01:01",
+            "iso": 100, "date_taken": 1735689600.0,
         }
         p = self._make_provider({"/img.jpg": meta})
         sections = p.get_sections("/img.jpg")

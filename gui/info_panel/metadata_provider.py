@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import List
 
 from .content_provider import ContentProvider, Section
@@ -62,7 +63,11 @@ class MetadataProvider(ContentProvider):
         if _has(meta, "iso"):
             exp_rows.append(("ISO", str(meta["iso"])))
         if _has(meta, "date_taken"):
-            exp_rows.append(("Date", str(meta["date_taken"])))
+            try:
+                dt_str = datetime.fromtimestamp(float(meta["date_taken"])).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError, OSError):
+                dt_str = str(meta["date_taken"])
+            exp_rows.append(("Date", dt_str))
         if exp_rows:
             sections.append(Section("Exposure", exp_rows))
 
