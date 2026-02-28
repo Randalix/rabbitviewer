@@ -327,3 +327,202 @@ class TestWatchdogSidecar:
         handler.dispatch(self._make_event("modified", xmp))
 
         tm.render_manager.submit_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Embedded write path
+# ---------------------------------------------------------------------------
+
+class TestEmbeddedWrite:
+    """Tests for write_rating_embedded / write_tags_embedded."""
+
+    def _make_plugin(self):
+        from plugins.base_plugin import BasePlugin
+
+        class FakePlugin(BasePlugin):
+            def is_available(self): return True
+            def get_supported_formats(self): return [".fake"]
+            def generate_view_image(self, *a, **kw): return False
+            def generate_thumbnail(self, *a, **kw): return False
+            def process_thumbnail(self, *a, **kw): return None
+            def process_view_image(self, *a, **kw): return None
+
+        plugin = FakePlugin.__new__(FakePlugin)
+        plugin._local = type("Local", (), {})()
+        mock_et = MagicMock()
+        plugin._local.proc = mock_et
+        return plugin, mock_et
+
+    def test_write_rating_embedded(self, tmp_path):
+        plugin, mock_et = self._make_plugin()
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8")
+
+        mock_et.execute.return_value = b"    1 image files updated"
+        result = plugin.write_rating_embedded(str(img), 3)
+
+        assert result is True
+        call_args = mock_et.execute.call_args[0][0]
+        assert "-XMP-xmp:Rating=3" in call_args
+        assert "-overwrite_original" in call_args
+        assert str(img) in call_args
+
+    def test_write_rating_embedded_invalid_rating(self, tmp_path):
+        plugin, mock_et = self._make_plugin()
+        assert plugin.write_rating_embedded("/fake.jpg", 6) is False
+        assert plugin.write_rating_embedded("/fake.jpg", -1) is False
+        mock_et.execute.assert_not_called()
+
+    def test_write_tags_embedded(self, tmp_path):
+        plugin, mock_et = self._make_plugin()
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8")
+
+        mock_et.execute.return_value = b"    1 image files updated"
+        result = plugin.write_tags_embedded(str(img), ["bird", "nature"])
+
+        assert result is True
+        # First call clears, second call adds tags.
+        assert mock_et.execute.call_count == 2
+        add_args = mock_et.execute.call_args_list[1][0][0]
+        assert "-XMP:Subject+=bird" in add_args
+        assert "-XMP:Subject+=nature" in add_args
+        assert "-overwrite_original" in add_args
+
+    def test_write_tags_embedded_empty(self, tmp_path):
+        plugin, mock_et = self._make_plugin()
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8")
+
+        mock_et.execute.return_value = b"    1 image files updated"
+        result = plugin.write_tags_embedded(str(img), [])
+
+        assert result is True
+        # Only the clear call; no add call needed.
+        assert mock_et.execute.call_count == 1
+
+    def test_embedded_write_ok(self):
+        from plugins.base_plugin import BasePlugin
+        assert BasePlugin._embedded_write_ok(b"    1 image files updated") is True
+        assert BasePlugin._embedded_write_ok(b"    1 image files created") is True
+        assert BasePlugin._embedded_write_ok(b"    0 image files updated") is False
+        assert BasePlugin._embedded_write_ok(b"Nothing happened") is False
+
+
+# ---------------------------------------------------------------------------
+# Config resolution and ThumbnailManager dispatch
+# ---------------------------------------------------------------------------
+
+class TestWriteModeDispatch:
+    """Tests that ThumbnailManager dispatches sidecar vs embedded based on config."""
+
+    def _make_tm(self, default_mode="sidecar", format_overrides=None):
+        from core.thumbnail_manager import ThumbnailManager
+
+        config = MagicMock()
+        def fake_get(key, default=None):
+            if key == "metadata.default_write_mode":
+                return default_mode
+            if key == "metadata.format_write_mode":
+                return format_overrides or {}
+            return default
+        config.get = fake_get
+
+        db = MagicMock()
+        tm = ThumbnailManager.__new__(ThumbnailManager)
+        tm.config_manager = config
+        tm.metadata_db = db
+        tm.watchdog_handler = MagicMock()
+        tm.plugin_registry = MagicMock()
+        return tm
+
+    def test_resolve_default_sidecar(self):
+        tm = self._make_tm(default_mode="sidecar")
+        assert tm._resolve_write_mode(".jpg") == "sidecar"
+
+    def test_resolve_default_embedded(self):
+        tm = self._make_tm(default_mode="embedded")
+        assert tm._resolve_write_mode(".cr3") == "embedded"
+
+    def test_resolve_format_override(self):
+        tm = self._make_tm(default_mode="sidecar", format_overrides={".jpg": "embedded"})
+        assert tm._resolve_write_mode(".jpg") == "embedded"
+        assert tm._resolve_write_mode(".cr3") == "sidecar"
+
+    def test_dispatch_rating_sidecar(self, tmp_path):
+        tm = self._make_tm(default_mode="sidecar")
+        img = tmp_path / "photo.cr3"
+        img.write_bytes(b"\x00")
+
+        mock_plugin = MagicMock()
+        mock_plugin.is_available.return_value = True
+        mock_plugin.write_rating.return_value = True
+        tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
+
+        result = tm.write_rating_to_file(str(img), 3)
+
+        assert result is True
+        mock_plugin.write_rating.assert_called_once_with(str(img), 3)
+        mock_plugin.write_rating_embedded.assert_not_called()
+
+    def test_dispatch_rating_embedded(self, tmp_path):
+        tm = self._make_tm(default_mode="sidecar", format_overrides={".jpg": "embedded"})
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8")
+
+        mock_plugin = MagicMock()
+        mock_plugin.is_available.return_value = True
+        mock_plugin.write_rating_embedded.return_value = True
+        tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
+
+        result = tm.write_rating_to_file(str(img), 4)
+
+        assert result is True
+        mock_plugin.write_rating_embedded.assert_called_once_with(str(img), 4)
+        mock_plugin.write_rating.assert_not_called()
+
+    def test_dispatch_tags_embedded(self, tmp_path):
+        tm = self._make_tm(default_mode="embedded")
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8")
+
+        mock_plugin = MagicMock()
+        mock_plugin.is_available.return_value = True
+        mock_plugin.write_tags_embedded.return_value = True
+        tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
+
+        result = tm.write_tags_to_file(str(img), ["bird"])
+
+        assert result is True
+        mock_plugin.write_tags_embedded.assert_called_once_with(str(img), ["bird"])
+        mock_plugin.write_tags.assert_not_called()
+
+    def test_watchdog_suppresses_image_path_for_embedded(self, tmp_path):
+        tm = self._make_tm(default_mode="sidecar", format_overrides={".jpg": "embedded"})
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8")
+
+        mock_plugin = MagicMock()
+        mock_plugin.is_available.return_value = True
+        mock_plugin.write_rating_embedded.return_value = True
+        tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
+
+        tm.write_rating_to_file(str(img), 5)
+
+        # Embedded mode: suppress the image path itself, not the .xmp path.
+        tm.watchdog_handler.ignore_next_modification.assert_called_once_with(str(img))
+
+    def test_watchdog_suppresses_xmp_path_for_sidecar(self, tmp_path):
+        tm = self._make_tm(default_mode="sidecar")
+        img = tmp_path / "photo.cr3"
+        img.write_bytes(b"\x00")
+
+        mock_plugin = MagicMock()
+        mock_plugin.is_available.return_value = True
+        mock_plugin.write_rating.return_value = True
+        tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
+
+        tm.write_rating_to_file(str(img), 2)
+
+        expected_xmp = str(img) + ".xmp"
+        tm.watchdog_handler.ignore_next_modification.assert_called_once_with(expected_xmp)

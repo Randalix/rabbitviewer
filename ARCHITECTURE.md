@@ -206,7 +206,7 @@ Format handlers registered in a global `PluginRegistry` singleton (`plugins/base
 | `RawPlugin` | `.nef .nrw .arw .sr2 .srf .dng .raf .orf .rw2 .pef .srw .mrw .rwl .3fr .fff .mef .mos .iiq .cap .eip .cr2` | exiftool (CLI) |
 | `VideoPlugin` | `.mp4 .mov .mkv .avi .webm .m4v .wmv .flv .mpg .mpeg .3gp .ts` | ffmpeg + ffprobe (CLI) |
 
-Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate_thumbnail()`, `generate_view_image()`, `extract_metadata()`, `write_rating()`, `write_tags()`, `is_available()`.
+Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate_thumbnail()`, `generate_view_image()`, `extract_metadata()`, `write_rating()`, `write_rating_embedded()`, `write_tags()`, `write_tags_embedded()`, `is_available()`.
 
 **XMP sidecar files:** Metadata writes (ratings, tags) go to an XMP sidecar file (`FILENAME.xmp`, e.g. `photo.cr3` → `photo.xmp`) — the original image is never modified. Utility functions `sidecar_path_for()` and `find_image_for_sidecar()` live in `plugins/base_plugin.py`. On read, `extract_metadata()` and `_extract_metadata_from_file()` check for a sidecar and let its values override embedded metadata. The watchdog monitors `.xmp` file events and maps them back to the parent image for DB re-extraction.
 
@@ -381,7 +381,11 @@ database_path: metadata.db
 thumbnail_size: 128
 max_cache_size_mb: 10240  # 10 GB; 0 = unlimited
 watch_paths: [~/Pictures, ~/Downloads]
+metadata.default_write_mode: sidecar  # "sidecar" or "embedded"
+metadata.format_write_mode: {}        # per-extension overrides, e.g. {".jpg": "embedded"}
 ```
+
+**Metadata write mode**: Ratings and tags can be written to XMP sidecar files (`"sidecar"`, default) or directly into the image file (`"embedded"`). `metadata.default_write_mode` sets the global fallback; `metadata.format_write_mode` provides per-extension overrides (e.g. `{".jpg": "embedded", ".cr3": "sidecar"}`). `ThumbnailManager._resolve_write_mode(ext)` resolves the effective mode. Embedded writes use `BasePlugin.write_rating_embedded()` / `write_tags_embedded()` with `-overwrite_original`. Watchdog suppression targets the image path for embedded mode and the `.xmp` path for sidecar mode.
 
 ---
 

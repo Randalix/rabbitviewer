@@ -11,7 +11,7 @@ _mock_qtcore = types.ModuleType("PySide6.QtCore")
 _mock_qtcore.QObject = object
 _mock_qtcore.Signal = lambda *a, **kw: None
 sys.modules.setdefault("PySide6", _mock_pyside6)
-sys.modules["PySide6.QtCore"] = _mock_qtcore
+sys.modules.setdefault("PySide6.QtCore", _mock_qtcore)
 
 # Pre-mock network.daemon_signals so NotificationListener doesn't need Qt.
 _mock_ds_mod = types.ModuleType("network.daemon_signals")

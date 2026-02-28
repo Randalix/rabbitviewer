@@ -113,6 +113,10 @@ DEFAULT_CONFIG = {
     "max_cache_size_mb": 10240,  # 10 GB; 0 = unlimited
     "fullres_cache_threshold_ms": 500,  # Below this → RAM only; above → disk
     "fullres_mem_cache_mb": 512,        # Max daemon-side memory for fast fullres images
+    "metadata": {
+        "default_write_mode": "sidecar",   # "sidecar" or "embedded"
+        "format_write_mode": {".jpg": "embedded", ".cr3": "embedded"},
+    },
 }
 
 def _default_config_path() -> str:

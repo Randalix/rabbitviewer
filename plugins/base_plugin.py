@@ -357,6 +357,56 @@ class BasePlugin(ABC):
             and b"0 image files" not in output
         )
 
+    @staticmethod
+    def _embedded_write_ok(output: bytes) -> bool:
+        """Return True if exiftool output indicates a successful embedded write."""
+        return (
+            (b"image files updated" in output or b"image files created" in output)
+            and b"0 image files" not in output
+        )
+
+    def write_rating_embedded(self, file_path: str, rating: int) -> bool:
+        """Writes the rating directly into the image file's XMP metadata."""
+        if not 0 <= rating <= 5:
+            logging.error("Rating %d out of range [0..5] for %s", rating, file_path)
+            return False
+        try:
+            et = self._get_exiftool()
+            output = et.execute([f"-XMP-xmp:Rating={rating}", "-overwrite_original", file_path])
+            if self._embedded_write_ok(output):
+                logging.info("Wrote embedded rating %d to %s.", rating, file_path)
+                return True
+            logging.error("exiftool reported no update writing embedded rating to %s: %s",
+                          file_path, output.decode("utf-8", "replace").strip())
+            return False
+        except (RuntimeError, TimeoutError) as e:
+            logging.error("Failed to write embedded rating for %s: %s", file_path, e)
+            return False
+
+    def write_tags_embedded(self, file_path: str, tag_names: list) -> bool:
+        """Writes tags directly into the image file's XMP:Subject metadata.
+
+        Clears existing tags first, then adds the new set.
+        """
+        try:
+            et = self._get_exiftool()
+            # Clear existing tags first.
+            et.execute(["-XMP:Subject=", "-overwrite_original", file_path])
+            if tag_names:
+                args = [f"-XMP:Subject+={t}" for t in tag_names]
+                output = et.execute(args + ["-overwrite_original", file_path])
+            else:
+                output = b"    1 image files updated"
+            if self._embedded_write_ok(output):
+                logging.info("Wrote %d embedded tags to %s.", len(tag_names), file_path)
+                return True
+            logging.error("exiftool reported no update writing embedded tags to %s: %s",
+                          file_path, output.decode("utf-8", "replace").strip())
+            return False
+        except (RuntimeError, TimeoutError) as e:
+            logging.error("Failed to write embedded tags for %s: %s", file_path, e)
+            return False
+
     def _apply_orientation(self, img: Image.Image, orientation: int) -> Image.Image:
         """Apply rotation/flip to a PIL Image based on the EXIF Orientation tag value."""
         T = Image.Transpose

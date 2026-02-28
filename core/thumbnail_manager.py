@@ -827,25 +827,38 @@ class ThumbnailManager:
         duration = time.time() - start_time
         logger.debug(f"Full metadata for {os.path.basename(image_path)} took {duration:.4f}s")
 
+    def _resolve_write_mode(self, ext: str) -> str:
+        """Return 'sidecar' or 'embedded' for the given file extension."""
+        overrides = self.config_manager.get("metadata.format_write_mode", {})
+        if ext in overrides:
+            return overrides[ext]
+        return self.config_manager.get("metadata.default_write_mode", "sidecar")
+
     def write_rating_to_file(self, file_path: str, rating: int):
-        """
-        Finds the correct plugin and uses it to write the rating to an XMP sidecar.
-        This method is intended to be called by the RenderManager.
+        """Writes the rating via sidecar or embedded XMP based on config.
+
         Returns True on success, False on failure.
         """
         from plugins.base_plugin import sidecar_path_for
-        if self.watchdog_handler:
-            self.watchdog_handler.ignore_next_modification(sidecar_path_for(file_path))
 
         if not os.path.exists(file_path):
             logger.warning(f"File not found, cannot write rating: {file_path}")
             return False
 
         ext = os.path.splitext(file_path)[1].lower()
+        mode = self._resolve_write_mode(ext)
+
+        if self.watchdog_handler:
+            suppress_path = file_path if mode == "embedded" else sidecar_path_for(file_path)
+            self.watchdog_handler.ignore_next_modification(suppress_path)
+
         plugin = self.plugin_registry.get_plugin_for_format(ext)
 
         if plugin and plugin.is_available():
-            success = plugin.write_rating(file_path, rating)
+            if mode == "embedded":
+                success = plugin.write_rating_embedded(file_path, rating)
+            else:
+                success = plugin.write_rating(file_path, rating)
             if not success:
                 logger.error(f"Plugin failed to write rating for {file_path}")
             return success
@@ -854,23 +867,30 @@ class ThumbnailManager:
         return False
 
     def write_tags_to_file(self, file_path: str, tag_names: list):
-        """Writes the full tag list to the file's XMP:Subject via the appropriate plugin.
+        """Writes the full tag list via sidecar or embedded XMP based on config.
 
         Mirrors write_rating_to_file: watchdog suppression, plugin lookup, exiftool write.
         """
         from plugins.base_plugin import sidecar_path_for
-        if self.watchdog_handler:
-            self.watchdog_handler.ignore_next_modification(sidecar_path_for(file_path))
 
         if not os.path.exists(file_path):
             logger.warning(f"File not found, cannot write tags: {file_path}")
             return False
 
         ext = os.path.splitext(file_path)[1].lower()
+        mode = self._resolve_write_mode(ext)
+
+        if self.watchdog_handler:
+            suppress_path = file_path if mode == "embedded" else sidecar_path_for(file_path)
+            self.watchdog_handler.ignore_next_modification(suppress_path)
+
         plugin = self.plugin_registry.get_plugin_for_format(ext)
 
         if plugin and plugin.is_available():
-            success = plugin.write_tags(file_path, tag_names)
+            if mode == "embedded":
+                success = plugin.write_tags_embedded(file_path, tag_names)
+            else:
+                success = plugin.write_tags(file_path, tag_names)
             if not success:
                 logger.error(f"Plugin failed to write tags for {file_path}")
             return success
