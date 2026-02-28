@@ -13,7 +13,7 @@ from config.config_manager import ConfigManager
 from gui.main_window import MainWindow
 from network.socket_client import ThumbnailSocketClient
 from network.notification_client import NotificationListener
-from core.event_system import event_system
+from network.daemon_signals import DaemonSignals
 from cli.stop import pid_file_path as _pid_file_path, flock_is_held as _flock_is_held, \
     kill_by_pid_file as _kill_by_pid_file, wait_for_flock_release as _wait_for_flock_release
 
@@ -109,14 +109,17 @@ def main():
         )
         log_file.close()
 
-    # Start notification listener immediately — it retries with backoff
-    # until the daemon socket appears, so daemon lateness is fine.
-    notification_listener = NotificationListener(socket_path, event_system)
-    notification_listener.start()
-    logging.info("Notification listener thread started.")
-
     app = QApplication(sys.argv)
     app.setApplicationName("Rabbit Viewer")
+
+    # DaemonSignals must be created after QApplication.
+    daemon_signals = DaemonSignals()
+
+    # Start notification listener immediately — it retries with backoff
+    # until the daemon socket appears, so daemon lateness is fine.
+    notification_listener = NotificationListener(socket_path, daemon_signals)
+    notification_listener.start()
+    logging.info("Notification listener thread started.")
     icon_path = os.path.join(os.path.dirname(__file__), "logo", "rabbitViewerLogo.png")
     app.setWindowIcon(QIcon(icon_path))
 
@@ -126,7 +129,7 @@ def main():
             logging.error(f"Invalid directory provided: {target_dir}")
             return 1
 
-    window = MainWindow(config_manager, socket_client)
+    window = MainWindow(config_manager, socket_client, daemon_signals)
 
     app.aboutToQuit.connect(socket_client.shutdown)
     app.aboutToQuit.connect(notification_listener.stop)

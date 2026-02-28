@@ -189,6 +189,12 @@ class RequestViewImageResponse(Response):
     view_image_path: Optional[str] = None
     view_image_source: Optional[str] = None  # "disk", "memory", or None (queued)
 
+# --- Get Cached View Image (mem-cache only, binary response) ---
+@dataclasses.dataclass
+class GetCachedViewImageRequest(Request):
+    command: str = "get_cached_view_image"
+    image_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
+
 # --- Get Filtered File Paths ---
 @dataclasses.dataclass
 class GetFilteredFilePathsRequest(Request):

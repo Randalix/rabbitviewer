@@ -13,7 +13,6 @@ from core.metadata_database import MetadataDatabase
 from core.rendermanager import Priority, RenderManager, RenderTask, TaskState, TaskType
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import shutdown_all as _shutdown_exiftool_processes
-from core.event_system import EventSystem, EventType, DaemonNotificationEventData
 from network import protocol
 
 logger = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ def _get_mount_point(path: str) -> Optional[str]:
 
 
 class ThumbnailManager:
-    def __init__(self, config_manager, metadata_database: MetadataDatabase, watchdog_handler=None, event_system: Optional[EventSystem] = None, num_workers=8):
+    def __init__(self, config_manager, metadata_database: MetadataDatabase, watchdog_handler=None, event_system=None, num_workers=8):
         self.config_manager = config_manager
         self.metadata_db = metadata_database
         self.event_system = event_system
@@ -1229,17 +1228,3 @@ class ThumbnailManager:
             rating=rating
         )
 
-    def _handle_daemon_notification(self, message: dict):
-        """Translates a daemon message and publishes it to the event system."""
-        if not self.event_system or not isinstance(message, dict):
-            return
-
-        event = DaemonNotificationEventData(
-            event_type=EventType.DAEMON_NOTIFICATION,
-            source=self.__class__.__name__,
-            timestamp=time.time(),
-            notification_type=message.get("type"),
-            data=message.get("data", {})
-        )
-        logger.info(f"GUI-side Manager received and will publish notification: {event.notification_type}")
-        self.event_system.publish(event)

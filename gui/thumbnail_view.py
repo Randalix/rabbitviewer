@@ -18,7 +18,9 @@ from network import protocol
 _ValidationErrors = (ValueError, TypeError, KeyError)
 from gui.components.virtual_grid_manager import VirtualGridManager
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, RemoveFromSelectionCommand
-from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, DaemonNotificationEventData, StatusMessageEventData
+from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, StatusMessageEventData
+from network.daemon_signals import DaemonSignals
+from network.protocol import PreviewsReadyData, ScanProgressData, ScanCompleteData, FilesRemovedData
 from core.heatmap import compute_heatmap, THUMB_RING_COUNT
 from core.priority import Priority
 from core.event_system import ThumbnailOverlayEventData
@@ -152,7 +154,6 @@ class ThumbnailViewWidget(QFrame):
     filtersApplied = Signal()
     initialScanReady = Signal()
     _thumbnail_generated_signal = Signal(str, QImage, object)
-    _daemon_notification_received = Signal(object)
     # Dedicated signal for the DB-response file list so it always triggers an
     # immediate layout update, regardless of what fast-scan batches arrived first.
     _initial_files_signal = Signal(list)
@@ -273,13 +274,12 @@ class ThumbnailViewWidget(QFrame):
         event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
         event_system.subscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
         event_system.subscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
-        event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._handle_daemon_notification_from_thread)
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
 
         self.overlay_manager = OverlayManager(request_update=self._request_label_update)
         self.overlay_manager.register_renderer("stars", render_stars)
         self.overlay_manager.register_renderer("badge", render_badge)
-        self._daemon_notification_received.connect(self._process_daemon_notification)
+        self._daemon_signals: Optional[DaemonSignals] = None
         self._initial_files_signal.connect(self._on_initial_files_received)
         self._initial_thumbs_signal.connect(self._on_initial_thumbs_received)
         self._filtered_paths_ready.connect(self._on_filtered_paths_ready)
@@ -705,90 +705,83 @@ class ThumbnailViewWidget(QFrame):
                     if label:
                         label.update()
 
-    def _handle_daemon_notification_from_thread(self, event_data: DaemonNotificationEventData):
-        self._daemon_notification_received.emit(event_data)
+    def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
+        self._daemon_signals = daemon_signals
+        daemon_signals.previews_ready.connect(self._on_previews_ready)
+        daemon_signals.scan_progress.connect(self._on_scan_progress)
+        daemon_signals.files_removed.connect(self._on_files_removed)
+        daemon_signals.scan_complete.connect(self._on_scan_complete)
 
     @Slot(object)
-    def _process_daemon_notification(self, event_data: DaemonNotificationEventData):
-        logging.debug(
-            "[trace] _process_daemon_notification: type=%s, all_files=%d, is_loading=%s",
-            event_data.notification_type, len(self.all_files), self._is_loading,
-        )
-        if event_data.notification_type == "previews_ready":
-            try:
-                data = protocol.PreviewsReadyData.model_validate(event_data.data)
+    def _on_previews_ready(self, data: PreviewsReadyData) -> None:
+        logging.debug("[trace] previews_ready: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        if not self._startup_first_previews_ready and self._startup_t0 is not None:
+            self._startup_first_previews_ready = True
+            elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
+            logging.info("[startup] first previews_ready: %.0f ms after load_directory", elapsed_ms)
+        image_path = data.image_entry.path
+        logging.info("ThumbnailViewWidget received notification: Previews ready for %s", image_path)
+        if data.thumbnail_path:
+            # Skip notifications for files not in the current directory.
+            # Daemon background work (watchdog, previous sessions) can produce
+            # previews_ready for unrelated files that waste tick slots.
+            if image_path not in self._path_to_idx:
+                return
+            # Buffer the path instead of loading QImage immediately.  Draining
+            # the buffer via _preview_tick_timer lets the event loop repaint
+            # between batches, producing smooth progressive thumbnail reveal
+            # rather than a single large batch.
+            self._pending_previews.append((image_path, data.thumbnail_path))
+            if not self._preview_tick_timer.isActive():
+                self._preview_tick_timer.start()
+        else:
+            logging.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
 
-                if not self._startup_first_previews_ready and self._startup_t0 is not None:
-                    self._startup_first_previews_ready = True
-                    elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                    logging.info("[startup] first previews_ready: %.0f ms after load_directory", elapsed_ms)
-                image_path = data.image_entry.path
-                logging.info("ThumbnailViewWidget received notification: Previews ready for %s", image_path)
-
-                if data.thumbnail_path:
-                    # Skip notifications for files not in the current directory.
-                    # Daemon background work (watchdog, previous sessions) can produce
-                    # previews_ready for unrelated files that waste tick slots.
-                    if image_path not in self._path_to_idx:
-                        return
-                    # Buffer the path instead of loading QImage immediately.  Draining
-                    # the buffer via _preview_tick_timer lets the event loop repaint
-                    # between batches, producing smooth progressive thumbnail reveal
-                    # rather than a single large batch.
-                    self._pending_previews.append((image_path, data.thumbnail_path))
-                    if not self._preview_tick_timer.isActive():
-                        self._preview_tick_timer.start()
-                else:
-                    logging.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
-            except _ValidationErrors as e:
-                logging.error("Error processing 'previews_ready' notification: %s", e, exc_info=True)
-        elif event_data.notification_type == "scan_progress":
-            try:
-                # The GUI's only job is to add placeholders as they are discovered.
-                data = protocol.ScanProgressData.model_validate(event_data.data)
-                first_batch = not self._startup_first_scan_progress
-                if first_batch and self._startup_t0 is not None:
-                    self._startup_first_scan_progress = True
-                    elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                    logging.info("[startup] first scan_progress: %.0f ms after load_directory (%d files in batch)", elapsed_ms, len(data.files))
-                logging.info("Received scan_progress batch for '%s' with %d files.", data.path, len(data.files))
-                self._add_image_batch(sorted(f.path for f in data.files))
-                # Mark that the first layout after this batch should seed the
-                # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
-                # here because _visible_to_original_mapping is not yet populated —
-                # label creation and layout update happen asynchronously via timers.
-                if first_batch:
-                    self._needs_heatmap_seed = True
-            except _ValidationErrors as e:
-                logging.error("Error processing 'scan_progress' notification: %s", e, exc_info=True)
-            except Exception as e:
-                # why: protocol extensions in future daemon versions may produce
-                # unexpected field types; isolate to prevent notification loop crash.
-                logging.error("Unexpected exception in scan_progress handler: %s", e, exc_info=True)
-
-        elif event_data.notification_type == "files_removed":
-            try:
-                data = protocol.FilesRemovedData.model_validate(event_data.data)
-                if data.files:
-                    logging.info("Removing %d ghost files from view.", len(data.files))
-                    self.remove_images([f.path for f in data.files])
-            except _ValidationErrors as e:
-                logging.error("Error processing 'files_removed' notification: %s", e, exc_info=True)
-
-        elif event_data.notification_type == "scan_complete":
-            if self._startup_t0 is not None:
+    @Slot(object)
+    def _on_scan_progress(self, data: ScanProgressData) -> None:
+        logging.debug("[trace] scan_progress: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        try:
+            first_batch = not self._startup_first_scan_progress
+            if first_batch and self._startup_t0 is not None:
+                self._startup_first_scan_progress = True
                 elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                logging.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
-            logging.info(
-                "[virtual] scan_complete: all_files=%d, labels=%d, current_files(in layout)=%d",
-                len(self.all_files), len(self.labels), len(self.current_files),
-            )
-            # Stop any pending batched update, as this is the final one.
-            self._filter_update_timer.stop()
-            # Mark loading complete before reapply_filters() so the daemon is queried
-            # with the current filter rather than showing all files unconditionally.
-            self._is_loading = False
-            self.reapply_filters()
+                logging.info("[startup] first scan_progress: %.0f ms after load_directory (%d files in batch)", elapsed_ms, len(data.files))
+            logging.info("Received scan_progress batch for '%s' with %d files.", data.path, len(data.files))
+            self._add_image_batch(sorted(f.path for f in data.files))
+            # Mark that the first layout after this batch should seed the
+            # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
+            # here because _visible_to_original_mapping is not yet populated —
+            # label creation and layout update happen asynchronously via timers.
+            if first_batch:
+                self._needs_heatmap_seed = True
+        except Exception as e:
+            # why: protocol extensions in future daemon versions may produce
+            # unexpected field types; isolate to prevent notification loop crash.
+            logging.error("Unexpected exception in scan_progress handler: %s", e, exc_info=True)
+
+    @Slot(object)
+    def _on_files_removed(self, data: FilesRemovedData) -> None:
+        logging.debug("[trace] files_removed: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        if data.files:
+            logging.info("Removing %d ghost files from view.", len(data.files))
+            self.remove_images([f.path for f in data.files])
+
+    @Slot(object)
+    def _on_scan_complete(self, data: ScanCompleteData) -> None:
+        logging.debug("[trace] scan_complete: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        if self._startup_t0 is not None:
+            elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
+            logging.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
+        logging.info(
+            "[virtual] scan_complete: all_files=%d, labels=%d, current_files(in layout)=%d",
+            len(self.all_files), len(self.labels), len(self.current_files),
+        )
+        # Stop any pending batched update, as this is the final one.
+        self._filter_update_timer.stop()
+        # Mark loading complete before reapply_filters() so the daemon is queried
+        # with the current filter rather than showing all files unconditionally.
+        self._is_loading = False
+        self.reapply_filters()
 
     def _add_image_batch(self, files: List[str]):
         """Adds a batch of new file paths (data-only, no widget creation).
@@ -1042,8 +1035,12 @@ class ThumbnailViewWidget(QFrame):
         event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
         event_system.unsubscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
         event_system.unsubscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
-        event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._handle_daemon_notification_from_thread)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
+        if self._daemon_signals:
+            self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
+            self._daemon_signals.scan_progress.disconnect(self._on_scan_progress)
+            self._daemon_signals.files_removed.disconnect(self._on_files_removed)
+            self._daemon_signals.scan_complete.disconnect(self._on_scan_complete)
 
         # Stop timers
         if hasattr(self, '_resize_timer'):

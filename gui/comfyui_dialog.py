@@ -2,22 +2,20 @@
 
 Triggered by the G hotkey.  Exposes prompt and denoise controls,
 sends a generate request to the daemon, and displays status updates.
-
-Subscribes to DAEMON_NOTIFICATION directly and handles comfyui_complete
-notifications internally (same pattern as InspectorView/PictureView).
 """
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QTextEdit, QSlider, QPushButton, QComboBox,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 import json
 import logging
 import os
 
-from core.event_system import event_system, EventType
+from network.daemon_signals import DaemonSignals
+from network.protocol import ComfyUICompleteData
 
 _BUILTIN_LABEL = "(built-in: Flux Kontext)"
 
@@ -25,7 +23,6 @@ _BUILTIN_LABEL = "(built-in: Flux Kontext)"
 class ComfyUIDialog(QDialog):
 
     generate_requested = Signal(str, str, float, str)  # (image_path, prompt, denoise, workflow_json)
-    _daemon_notification = Signal(object)  # thread→GUI bridge
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,11 +33,7 @@ class ComfyUIDialog(QDialog):
 
         self._image_path = ""
         self._workflow_path = None  # None = built-in
-        self._subscribed = True
-
-        self._daemon_notification.connect(self._process_notification)
-        event_system.subscribe(EventType.DAEMON_NOTIFICATION,
-                               self._on_daemon_notification_from_thread)
+        self._daemon_signals: DaemonSignals | None = None
 
         layout = QVBoxLayout(self)
 
@@ -137,7 +130,7 @@ class ComfyUIDialog(QDialog):
         self._status_label.setText("")
         self._generate_btn.setEnabled(True)
         self._populate_workflow_combo()
-        self._resubscribe()
+        self._reconnect()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -171,45 +164,32 @@ class ComfyUIDialog(QDialog):
 
     # ── Notification handling ────────────────────────────────────
 
-    def _resubscribe(self):
-        """Re-subscribe to daemon notifications if previously unsubscribed (e.g. after close)."""
-        if not self._subscribed:
-            event_system.subscribe(EventType.DAEMON_NOTIFICATION,
-                                   self._on_daemon_notification_from_thread)
-            self._subscribed = True
+    def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
+        self._daemon_signals = daemon_signals
+        daemon_signals.comfyui_complete.connect(self._on_comfyui_complete)
 
-    def _on_daemon_notification_from_thread(self, event_data):
-        # why: notification arrives on NotificationClient thread; signal bridges to GUI thread
-        if event_data.notification_type == "comfyui_complete":
-            self._daemon_notification.emit(event_data)
+    def _reconnect(self) -> None:
+        """Reconnect after a closeEvent disconnect, called from open_for_image."""
+        if self._daemon_signals:
+            try:
+                self._daemon_signals.comfyui_complete.disconnect(self._on_comfyui_complete)
+            except RuntimeError:
+                pass
+            self._daemon_signals.comfyui_complete.connect(self._on_comfyui_complete)
 
-    def _process_notification(self, event_data):
-        data = event_data.data
-        from network.protocol import ComfyUICompleteData
-        try:
-            complete = ComfyUICompleteData.model_validate(data)
-        except (KeyError, TypeError, ValueError):  # why: daemon payload may be malformed
-            self.set_status("Error: malformed response")
+    @Slot(object)
+    def _on_comfyui_complete(self, data: ComfyUICompleteData) -> None:
+        if data.source_path != self._image_path:
             return
-        if complete.source_path != self._image_path:
-            return
-        if complete.status == "success" and complete.result_path:
-            basename = os.path.basename(complete.result_path)
-            self.set_status(f"Complete: {basename}")
+        if data.status == "success" and data.result_path:
+            self.set_status(f"Complete: {os.path.basename(data.result_path)}")
         else:
-            error_msg = complete.error or "Generation failed"
-            self.set_status(f"Error: {error_msg}")
-
-    def _unsubscribe(self):
-        if self._subscribed:
-            event_system.unsubscribe(EventType.DAEMON_NOTIFICATION,
-                                     self._on_daemon_notification_from_thread)
-            self._subscribed = False
+            self.set_status(f"Error: {data.error or 'Generation failed'}")
 
     def closeEvent(self, event):
-        self._unsubscribe()
+        if self._daemon_signals:
+            try:
+                self._daemon_signals.comfyui_complete.disconnect(self._on_comfyui_complete)
+            except RuntimeError:
+                pass
         super().closeEvent(event)
-
-    def __del__(self):
-        # why: guard against Qt parent destruction skipping closeEvent
-        self._unsubscribe()

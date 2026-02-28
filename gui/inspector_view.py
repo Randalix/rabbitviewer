@@ -9,9 +9,10 @@ from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QPointF, QSettings, QPoint, Signal, Slot
 from PySide6.QtGui import QPainter, QImage
 from .picture_base import PictureBase
-from core.event_system import event_system, EventType, InspectorEventData, DaemonNotificationEventData
+from core.event_system import event_system, EventType, InspectorEventData
+from network.daemon_signals import DaemonSignals
+from network.protocol import PreviewsReadyData
 from network.socket_client import ThumbnailSocketClient
-from network import protocol
 from plugins.video_plugin import VIDEO_EXTENSIONS
 
 _VIDEO_EXTENSIONS = frozenset(VIDEO_EXTENSIONS)
@@ -34,8 +35,6 @@ class InspectorView(QWidget):
     # Delivers background-thread socket results back to the GUI thread.
     # Args: (image_path, view_image_path_or_empty, normalized_position)
     _preview_status_ready = Signal(str, str, QPointF)
-    # Bridges DAEMON_NOTIFICATION from the NotificationClient thread to the GUI thread.
-    _daemon_notification_received = Signal(object)
     # Delivers a video frame grabbed on a background thread to the GUI thread.
     _video_frame_ready = Signal(QImage)
 
@@ -96,45 +95,35 @@ class InspectorView(QWidget):
 
         self._picture_base.viewStateChanged.connect(self.update)
         self._preview_status_ready.connect(self._on_preview_status_ready)
-        self._daemon_notification_received.connect(self._on_daemon_notification)
         self._video_frame_ready.connect(self._on_video_frame_ready)
 
         self._picture_base.setZoom(self._zoom_factor)
 
         event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
-        event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._daemon_notification_from_thread)
 
         self.socket_client: Optional[ThumbnailSocketClient] = None
+        self._daemon_signals: DaemonSignals | None = None
 
-    def _daemon_notification_from_thread(self, event_data: DaemonNotificationEventData):
-        # why: DAEMON_NOTIFICATION callbacks fire on the NotificationClient thread;
-        # emit a signal so _on_daemon_notification runs on the GUI thread.
-        self._daemon_notification_received.emit(event_data)
+    def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
+        self._daemon_signals = daemon_signals
+        daemon_signals.previews_ready.connect(self._on_previews_ready)
 
     @Slot(object)
-    def _on_daemon_notification(self, event_data: DaemonNotificationEventData):
-        if event_data.notification_type == "previews_ready":
-            try:
-                data = protocol.PreviewsReadyData.model_validate(event_data.data)
-
-                # Accept previews for the image we already display OR the image
-                # the user currently wants (slow-drive case: the fetch returned
-                # empty and _current_image_path was never set to the desired path).
-                # Skip if in video mode — scrub worker manages the display.
-                target = data.image_entry.path
-                is_target = (target == self._current_image_path
-                             or target == self._desired_image_path)
-                view_ready = data.view_image_path or data.view_image_source == "memory"
-                if view_ready and is_target and not self._is_video_mode:
-                    norm_pos = self._desired_norm_pos if self._view_mode == _ViewMode.TRACKING else QPointF(0.5, 0.5)
-                    if data.view_image_source == "memory":
-                        self._load_mem_cached_view(target, norm_pos)
-                    else:
-                        self.update_view(target, data.view_image_path, norm_pos)
-            # why: ValidationError covers malformed daemon payload; OSError covers
-            # loadImageFromPath on a path deleted between previews_ready and load
-            except (ValueError, TypeError, KeyError, OSError) as e:
-                logging.error("Error processing 'previews_ready' in InspectorView: %s", e, exc_info=True)
+    def _on_previews_ready(self, data: PreviewsReadyData) -> None:
+        # Accept previews for the image we already display OR the image
+        # the user currently wants (slow-drive case: the fetch returned
+        # empty and _current_image_path was never set to the desired path).
+        # Skip if in video mode — scrub worker manages the display.
+        target = data.image_entry.path
+        is_target = (target == self._current_image_path
+                     or target == self._desired_image_path)
+        view_ready = data.view_image_path or data.view_image_source == "memory"
+        if view_ready and is_target and not self._is_video_mode:
+            norm_pos = self._desired_norm_pos if self._view_mode == _ViewMode.TRACKING else QPointF(0.5, 0.5)
+            if data.view_image_source == "memory":
+                self._load_mem_cached_view(target, norm_pos)
+            else:
+                self.update_view(target, data.view_image_path, norm_pos)
 
     def toggle_pin(self):
         self._pinned = not self._pinned
@@ -237,11 +226,12 @@ class InspectorView(QWidget):
             if not view_image_path:
                 # Request generation; result will arrive via previews_ready daemon notification.
                 result = self.socket_client.request_view_image(image_path)
-                if isinstance(result, bytes):
-                    # Mem-cached — emit a sentinel so the slot fetches bytes.
-                    view_image_path = "memory"
-                elif result and hasattr(result, 'view_image_path') and result.view_image_path:
-                    view_image_path = result.view_image_path
+                if result and result.status == "success":
+                    if result.view_image_source == "memory":
+                        # Mem-cached — emit sentinel so main thread fetches bytes.
+                        view_image_path = "memory"
+                    elif result.view_image_path:
+                        view_image_path = result.view_image_path
         except Exception as e:
             # why: socket calls can raise ConnectionError/OSError/TimeoutError on
             # NAS drop or pool exhaustion; log and emit empty path to unblock GUI.
@@ -278,22 +268,22 @@ class InspectorView(QWidget):
         """Fetch mem-cached bytes from daemon and display in inspector."""
         if not self.socket_client:
             return
-        result = self.socket_client.request_view_image(image_path)
-        if isinstance(result, bytes):
-            if image_path != self._current_image_path:
-                success = self._picture_base.loadImageFromBytes(result)
-                if success:
-                    self._current_image_path = image_path
-                    self._view_image_ready = True
-                    self._picture_base.setViewportSize(self.size())
-                    if self._view_mode == _ViewMode.FIT:
-                        self._picture_base.setFitMode(True)
-                    else:
-                        self._picture_base.setZoom(self._zoom_factor)
-            if self._view_mode == _ViewMode.TRACKING:
-                self.set_center(norm_pos)
-        elif result and hasattr(result, 'view_image_path') and result.view_image_path:
-            self.update_view(image_path, result.view_image_path, norm_pos)
+        image_bytes = self.socket_client.get_cached_view_image(image_path)
+        if not image_bytes:
+            # Race: evicted from mem cache. Inspector will catch up on next mouse move.
+            return
+        if image_path != self._current_image_path:
+            success = self._picture_base.loadImageFromBytes(image_bytes)
+            if success:
+                self._current_image_path = image_path
+                self._view_image_ready = True
+                self._picture_base.setViewportSize(self.size())
+                if self._view_mode == _ViewMode.FIT:
+                    self._picture_base.setFitMode(True)
+                else:
+                    self._picture_base.setZoom(self._zoom_factor)
+        if self._view_mode == _ViewMode.TRACKING:
+            self.set_center(norm_pos)
 
     def update_view(self, original_image_path: str, view_image_path: str, norm_pos: QPointF):
         if not original_image_path:
@@ -596,7 +586,8 @@ class InspectorView(QWidget):
             self.config_manager.set("inspector.zoom_factor", self._zoom_factor)
         self._pinned = False
         event_system.unsubscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
-        event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._daemon_notification_from_thread)
+        if self._daemon_signals:
+            self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
         super().closeEvent(event)
         if event.isAccepted():
             self.closed.emit()

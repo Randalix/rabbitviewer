@@ -3,14 +3,14 @@ import json
 import logging
 import threading
 import time
-from core.event_system import EventSystem, EventType, DaemonNotificationEventData
+from network.daemon_signals import DaemonSignals
 from ._framing import recv_exactly, MAX_MESSAGE_SIZE
 
 class NotificationListener(threading.Thread):
-    def __init__(self, socket_path: str, event_system: EventSystem):
+    def __init__(self, socket_path: str, daemon_signals: DaemonSignals):
         super().__init__(daemon=True)
         self.socket_path = socket_path
-        self.event_system = event_system
+        self.daemon_signals = daemon_signals
         self._stop_event = threading.Event()
 
 
@@ -77,14 +77,10 @@ class NotificationListener(threading.Thread):
                                 logging.error(f"Unexpected notification type {type(notification)!r}; skipping.")
                                 continue
 
-                            event = DaemonNotificationEventData(
-                                    event_type=EventType.DAEMON_NOTIFICATION,
-                                    source=self.__class__.__name__,
-                                    timestamp=time.time(),
-                                    notification_type=notification.get("type", ""),
-                                    data=notification.get("data", {})
-                                )
-                            self.event_system.publish(event)
+                            self.daemon_signals.dispatch(
+                                notification.get("type", ""),
+                                notification.get("data", {}),
+                            )
                         except json.JSONDecodeError:
                             logging.error(f"Failed to decode notification JSON. Raw data: {message_data!r}")
 

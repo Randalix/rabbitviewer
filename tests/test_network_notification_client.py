@@ -4,37 +4,27 @@ import sys
 import types
 from unittest.mock import MagicMock, patch
 
-# Pre-mock heavy imports before importing the module under test.
-# Save originals so we can restore them after import.
-_saved_core = sys.modules.get("core")
-_saved_core_es = sys.modules.get("core.event_system")
+# Pre-mock the PySide6/Qt dependency pulled in by network.daemon_signals
+# before importing the module under test.
+_mock_pyside6 = types.ModuleType("PySide6")
+_mock_qtcore = types.ModuleType("PySide6.QtCore")
+_mock_qtcore.QObject = object
+_mock_qtcore.Signal = lambda *a, **kw: None
+sys.modules.setdefault("PySide6", _mock_pyside6)
+sys.modules["PySide6.QtCore"] = _mock_qtcore
 
-_mock_event_system = types.ModuleType("core.event_system")
-_mock_event_system.EventSystem = MagicMock  # type: ignore[attr-defined]
-_mock_event_system.EventType = MagicMock()  # type: ignore[attr-defined]
-_mock_event_system.DaemonNotificationEventData = MagicMock  # type: ignore[attr-defined]
-
-if "core" not in sys.modules:
-    sys.modules["core"] = types.ModuleType("core")
-sys.modules["core.event_system"] = _mock_event_system
+# Pre-mock network.daemon_signals so NotificationListener doesn't need Qt.
+_mock_ds_mod = types.ModuleType("network.daemon_signals")
+_mock_ds_mod.DaemonSignals = MagicMock  # type: ignore[attr-defined]
+sys.modules["network.daemon_signals"] = _mock_ds_mod
 
 from network.notification_client import NotificationListener  # noqa: E402
-
-# Restore sys.modules so other tests importing core.event_system get the real module.
-if _saved_core_es is not None:
-    sys.modules["core.event_system"] = _saved_core_es
-else:
-    sys.modules.pop("core.event_system", None)
-if _saved_core is not None:
-    sys.modules["core"] = _saved_core
-else:
-    sys.modules.pop("core", None)
 
 
 class TestNotificationListenerBackoff:
     def _make_listener(self):
-        mock_es = MagicMock()
-        return NotificationListener("/tmp/nonexistent_rabbitviewer_test.sock", mock_es)
+        mock_daemon_signals = MagicMock()
+        return NotificationListener("/tmp/nonexistent_rabbitviewer_test.sock", mock_daemon_signals)
 
     def test_exponential_backoff_delays(self):
         """Connection failures should produce exponential backoff: 1, 2, 4, 8..."""

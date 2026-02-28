@@ -63,7 +63,6 @@ class EventType(Enum):
 
     # Status messages
     STATUS_MESSAGE = "status_message"
-    DAEMON_NOTIFICATION = "daemon_notification"
 
 
 @dataclass
@@ -158,12 +157,6 @@ class ThumbnailOverlayEventData(EventData):
     params: dict = field(default_factory=dict)
     position: str = "center"
     duration: Optional[int] = None  # ms; None = permanent
-
-@dataclass
-class DaemonNotificationEventData(EventData):
-    notification_type: str
-    data: dict  # intentional: loose contract — daemon payloads vary by notification_type
-
 
 # High-frequency events that are not appended to history to avoid evicting
 # genuinely useful events and to reduce lock hold time.

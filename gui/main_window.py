@@ -23,6 +23,7 @@ from core.event_system import event_system, EventType, InspectorEventData, Mouse
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
 from network.socket_client import ThumbnailSocketClient
 from network.gui_server import GuiServer
+from network.daemon_signals import DaemonSignals
 
 if TYPE_CHECKING:
     from .inspector_view import InspectorView
@@ -41,10 +42,12 @@ def _is_video(path: str) -> bool:
 class MainWindow(QMainWindow):
     _hover_rating_ready = Signal(str, int)  # (path, rating)
     _hover_metadata_ready = Signal(str)  # path — emitted after cache populated
-    def __init__(self, config_manager, socket_client: ThumbnailSocketClient):
+    def __init__(self, config_manager, socket_client: ThumbnailSocketClient,
+                 daemon_signals: DaemonSignals):
         super().__init__()
         self.config_manager = config_manager
         self.socket_client = socket_client
+        self.daemon_signals = daemon_signals
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -116,6 +119,7 @@ class MainWindow(QMainWindow):
     def _setup_thumbnail_view(self):
         self.thumbnail_view = ThumbnailViewWidget(self.config_manager)
         self.thumbnail_view.set_socket_client(self.socket_client)
+        self.thumbnail_view.set_daemon_signals(self.daemon_signals)
         self.thumbnail_view.doubleClicked.connect(self._handle_thumbnail_double_click)
         self.thumbnail_view.benchmarkComplete.connect(self._handle_benchmark_result)
         self.stacked_widget.addWidget(self.thumbnail_view)
@@ -250,6 +254,7 @@ class MainWindow(QMainWindow):
         inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot)
         self._inspector_slot += 1
         inspector.set_socket_client(self.socket_client)
+        inspector.set_daemon_signals(self.daemon_signals)
         self.inspector_views.append(inspector)
         inspector.closed.connect(lambda: self._on_inspector_closed(inspector))
         inspector.show()
@@ -425,6 +430,7 @@ class MainWindow(QMainWindow):
             from .comfyui_dialog import ComfyUIDialog
             self.comfyui_dialog = ComfyUIDialog(self)
             self.comfyui_dialog.generate_requested.connect(self._on_comfyui_generate)
+            self.comfyui_dialog.set_daemon_signals(self.daemon_signals)
 
         self.comfyui_dialog.open_for_image(image_path)
 
@@ -701,6 +707,7 @@ class MainWindow(QMainWindow):
                 self.picture_view = PictureView()
                 self.picture_view.escapePressed.connect(self.close_picture_view)
                 self.picture_view.set_socket_client(self.socket_client)
+                self.picture_view.set_daemon_signals(self.daemon_signals)
                 self.stacked_widget.addWidget(self.picture_view)
             self.picture_view.loadImage(image_path)
             self._prefetch_neighbors(image_path)

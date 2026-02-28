@@ -7,9 +7,10 @@ import os
 import time
 import threading
 from .picture_base import PictureBase
-from core.event_system import event_system, EventType, InspectorEventData, DaemonNotificationEventData, StatusMessageEventData, StatusSection
+from core.event_system import event_system, EventType, InspectorEventData, StatusMessageEventData, StatusSection
+from network.daemon_signals import DaemonSignals
+from network.protocol import PreviewsReadyData
 from network.socket_client import ThumbnailSocketClient
-from network import protocol
 
 class PictureView(QWidget):
 
@@ -18,7 +19,6 @@ class PictureView(QWidget):
     zoomChanged = Signal(float)  # Signal with new zoom level
     imageChanged = Signal(str)  # Signal emitted when current image changes
     closeRequested = Signal()
-    _daemon_notification_received = Signal(object)
     _rating_ready = Signal(str, int)  # (path, rating) — marshalled from bg thread
     
     def __init__(self, config_manager=None, parent=None):
@@ -31,10 +31,8 @@ class PictureView(QWidget):
         self._current_path = None # This will store the ORIGINAL path
         self._picture_base = PictureBase()
         self._picture_base.viewStateChanged.connect(self.update)
-        # Marshal daemon notifications from the background thread to the main thread.
-        self._daemon_notification_received.connect(self._process_daemon_notification)
         self._rating_ready.connect(self._on_rating_ready)
-        event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._on_daemon_notification)
+        self._daemon_signals: DaemonSignals | None = None
         
         self._is_panning = False
         self._last_mouse_pos = QPoint()
@@ -81,16 +79,20 @@ class PictureView(QWidget):
             logging.error("Socket client not initialized in PictureView.")
             return False
         
-        # Request the view image at FULLRES_REQUEST priority. If already cached the
-        # response contains the path directly; otherwise generation is queued and we
-        # wait for the previews_ready notification.
-        # Returns: bytes (mem-cached), RequestViewImageResponse (disk/queued), or None.
+        # Request the view image at FULLRES_REQUEST priority. Always returns JSON.
+        # view_image_source="memory" → bytes available via get_cached_view_image.
+        # view_image_path set → disk-cached. Neither → generation queued.
         result = self.socket_client.request_view_image(image_path)
 
-        if isinstance(result, bytes):
-            # Mem-cached on daemon — got raw image bytes.
-            success = self._picture_base.loadImageFromBytes(result)
-        elif result and hasattr(result, 'view_image_path') and result.view_image_path:
+        if result is None or result.status != "success":
+            logging.error(f"Failed to request view image: {image_path}")
+            return False
+
+        if result.view_image_source == "memory":
+            # Mem-cached on daemon — fetch raw bytes via dedicated call.
+            image_bytes = self.socket_client.get_cached_view_image(image_path)
+            success = self._picture_base.loadImageFromBytes(image_bytes) if image_bytes else False
+        elif result.view_image_path:
             # Disk-cached — load from path.
             success = self._picture_base.loadImageFromPath(result.view_image_path)
         else:
@@ -185,23 +187,17 @@ class PictureView(QWidget):
                 section=StatusSection.RATING,
             ))
 
-    def _on_daemon_notification(self, event_data: DaemonNotificationEventData):
-        """Thread bridge: called from the NotificationListener background thread."""
-        self._daemon_notification_received.emit(event_data)
+    def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
+        self._daemon_signals = daemon_signals
+        daemon_signals.previews_ready.connect(self._on_previews_ready)
 
     @Slot(object)
-    def _process_daemon_notification(self, event_data: DaemonNotificationEventData):
-        if event_data.notification_type == "previews_ready":
-            try:
-                data = protocol.PreviewsReadyData.model_validate(event_data.data)
-
-                # If this is the image we are waiting for, load it.
-                view_ready = data.view_image_path or data.view_image_source == "memory"
-                if view_ready and data.image_entry.path == self._current_path:
-                    logging.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
-                    self.loadImage(data.image_entry.path, force_reload=True)
-            except Exception as e:  # why: protocol errors must not crash the view
-                logging.error(f"Error processing 'previews_ready' in PictureView: {e}", exc_info=True)
+    def _on_previews_ready(self, data: PreviewsReadyData) -> None:
+        # If this is the image we are waiting for, load it.
+        view_ready = data.view_image_path or data.view_image_source == "memory"
+        if view_ready and data.image_entry.path == self._current_path:
+            logging.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
+            self.loadImage(data.image_entry.path, force_reload=True)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         if not self._picture_base.has_image():
@@ -296,5 +292,6 @@ class PictureView(QWidget):
         self.zoomChanged.emit(self._picture_base.viewState().zoom)
 
     def closeEvent(self, event):
-        event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._on_daemon_notification)
+        if self._daemon_signals:
+            self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
         super().closeEvent(event)

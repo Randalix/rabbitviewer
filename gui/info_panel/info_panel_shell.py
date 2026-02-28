@@ -4,7 +4,6 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QPushButton, QH
 from PySide6.QtCore import Qt, Signal, QSettings
 from PySide6.QtGui import QFont
 
-from core.event_system import event_system, EventType
 from .content_provider import ContentProvider
 from ..components.collapsible_section import CollapsibleSection
 
@@ -52,8 +51,6 @@ class InfoPanelShell(QWidget):
             self.resize(320, 500)
 
         self._build_ui()
-
-        event_system.subscribe(EventType.DAEMON_NOTIFICATION, self._on_daemon_notification)
 
     def _build_ui(self):
         self.setStyleSheet(f"""
@@ -227,14 +224,10 @@ class InfoPanelShell(QWidget):
         else:
             self.setWindowTitle(base)
 
-    def _on_daemon_notification(self, event_data):
-        pass
-
     def closeEvent(self, event):
         settings = QSettings("RabbitViewer", "InfoPanel")
         settings.setValue(f"geometry_{self._panel_index}", self.saveGeometry())
         settings.sync()
-        event_system.unsubscribe(EventType.DAEMON_NOTIFICATION, self._on_daemon_notification)
         self._provider.on_cleanup()
         super().closeEvent(event)
         if event.isAccepted():

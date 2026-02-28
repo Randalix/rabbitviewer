@@ -254,35 +254,34 @@ class ThumbnailSocketClient:
         )
         return self._send_request(request, protocol.RequestPreviewsResponse)
 
-    def request_view_image(self, image_path: str):
-        """Requests view image generation at FULLRES_REQUEST priority.
+    def request_view_image(self, image_path: str) -> Optional['protocol.RequestViewImageResponse']:
+        """Queue view image generation at FULLRES_REQUEST priority.
 
-        Returns:
-            bytes — raw image bytes if the view image was mem-cached on the daemon.
-            RequestViewImageResponse — with view_image_path (disk) or None (queued).
-            None — on communication failure.
+        Returns RequestViewImageResponse with:
+            view_image_source="memory" — image is in daemon mem cache (call get_cached_view_image for bytes).
+            view_image_path set — image is on disk.
+            both None — generation queued; wait for previews_ready notification.
+        Returns None on communication failure.
         """
         protocol = _lazy_protocol()
         request = protocol.RequestViewImageRequest(image_entry=protocol.ImageEntryModel(path=image_path))
+        return self._send_request(request, protocol.RequestViewImageResponse)
+
+    def get_cached_view_image(self, image_path: str) -> Optional[bytes]:
+        """Fetch mem-cached view image bytes from daemon. Returns raw bytes if cached, None otherwise."""
+        protocol = _lazy_protocol()
+        request = protocol.GetCachedViewImageRequest(image_entry=protocol.ImageEntryModel(path=image_path))
         request.session_id = self.session_id
         conn = self.connection_pool.get_connection()
         if not conn:
             return None
         try:
             result = conn.send_receive_binary(request.model_dump())
-            if result is None:
-                return None
             if isinstance(result, bytes):
-                return result  # Raw image bytes from daemon mem cache.
-            # JSON dict — validate as usual.
-            if result.get("status") == "error":
-                return protocol.ErrorResponse.model_validate(result)
-            return protocol.RequestViewImageResponse.model_validate(result)
-        except _ValidationErrors as e:
-            logging.error(f"Client-side validation error for request_view_image: {e}")
-            return protocol.ErrorResponse(message=str(e))
-        except Exception as e:  # why: socket and protocol errors from external daemon
-            logging.error(f"request_view_image failed: {e}")
+                return result
+            return None
+        except (ConnectionError, socket.error) as e:  # why: socket errors from daemon; return None so caller treats as miss
+            logging.debug(f"get_cached_view_image failed for {image_path}: {e}")
             conn.close()
             return None
         finally:

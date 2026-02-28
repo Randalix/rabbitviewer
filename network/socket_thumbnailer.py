@@ -38,6 +38,7 @@ class ThumbnailSocketServer:
             "shutdown":              self._handle_shutdown,
             "update_viewport":       self._handle_update_viewport,
             "request_view_image":    self._handle_request_view_image,
+            "get_cached_view_image": self._handle_get_cached_view_image,
             "get_filtered_file_paths": self._handle_get_filtered_file_paths,
             "get_directory_files":   self._handle_get_directory_files,
             "move_records":          self._handle_move_records,
@@ -349,7 +350,7 @@ class ThumbnailSocketServer:
 
         return protocol.Response(message=f"{success_count} upgraded")
 
-    def _handle_request_view_image(self, request_data: dict):
+    def _handle_request_view_image(self, request_data: dict) -> protocol.Response:
         req = protocol.RequestViewImageRequest.model_validate(request_data)
         image_path = req.image_entry.path
         logging.info(f"SocketServer: Received request_view_image for {image_path}")
@@ -357,11 +358,10 @@ class ThumbnailSocketServer:
             image_path, self._get_session_id()
         )
         if result == "memory":
-            image_bytes = self.thumbnail_manager._mem_cache_get(image_path)
-            if image_bytes is not None:
-                return image_bytes  # Raw bytes → binary response path.
-            # Race: evicted between request_view_image and _mem_cache_get.
-            result = None
+            return protocol.RequestViewImageResponse(
+                view_image_path=None,
+                view_image_source="memory",
+            )
         if isinstance(result, str) and result.startswith("direct:"):
             return protocol.RequestViewImageResponse(
                 view_image_path=result[len("direct:"):],
@@ -371,6 +371,14 @@ class ThumbnailSocketServer:
             view_image_path=result,
             view_image_source="disk" if result else None,
         )
+
+    def _handle_get_cached_view_image(self, request_data: dict):
+        """Return mem-cached bytes for an image, or a JSON miss if not cached."""
+        req = protocol.GetCachedViewImageRequest.model_validate(request_data)
+        image_bytes = self.thumbnail_manager._mem_cache_get(req.image_entry.path)
+        if image_bytes is not None:
+            return image_bytes  # Binary response via handle_client.
+        return protocol.Response(message="miss")
 
     def _handle_get_filtered_file_paths(self, request_data: dict) -> protocol.Response:
         req = protocol.GetFilteredFilePathsRequest.model_validate(request_data)
