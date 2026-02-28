@@ -124,9 +124,13 @@ class InspectorView(QWidget):
                 target = data.image_entry.path
                 is_target = (target == self._current_image_path
                              or target == self._desired_image_path)
-                if data.view_image_path and is_target and not self._is_video_mode:
+                view_ready = data.view_image_path or data.view_image_source == "memory"
+                if view_ready and is_target and not self._is_video_mode:
                     norm_pos = self._desired_norm_pos if self._view_mode == _ViewMode.TRACKING else QPointF(0.5, 0.5)
-                    self.update_view(target, data.view_image_path, norm_pos)
+                    if data.view_image_source == "memory":
+                        self._load_mem_cached_view(target, norm_pos)
+                    else:
+                        self.update_view(target, data.view_image_path, norm_pos)
             # why: ValidationError covers malformed daemon payload; OSError covers
             # loadImageFromPath on a path deleted between previews_ready and load
             except (ValueError, TypeError, KeyError, OSError) as e:
@@ -232,7 +236,12 @@ class InspectorView(QWidget):
 
             if not view_image_path:
                 # Request generation; result will arrive via previews_ready daemon notification.
-                self.socket_client.request_view_image(image_path)
+                result = self.socket_client.request_view_image(image_path)
+                if isinstance(result, bytes):
+                    # Mem-cached — emit a sentinel so the slot fetches bytes.
+                    view_image_path = "memory"
+                elif result and hasattr(result, 'view_image_path') and result.view_image_path:
+                    view_image_path = result.view_image_path
         except Exception as e:
             # why: socket calls can raise ConnectionError/OSError/TimeoutError on
             # NAS drop or pool exhaustion; log and emit empty path to unblock GUI.
@@ -255,11 +264,36 @@ class InspectorView(QWidget):
             # Not ready yet; request was already sent in the background thread.
             return
 
+        if view_image_path == "memory":
+            self._load_mem_cached_view(image_path, norm_pos)
+            return
+
         if self._view_mode != _ViewMode.TRACKING:
             if image_path != self._current_image_path:
                 self.update_view(image_path, view_image_path, QPointF(0.5, 0.5))
         else:
             self.update_view(image_path, view_image_path, norm_pos)
+
+    def _load_mem_cached_view(self, image_path: str, norm_pos: QPointF):
+        """Fetch mem-cached bytes from daemon and display in inspector."""
+        if not self.socket_client:
+            return
+        result = self.socket_client.request_view_image(image_path)
+        if isinstance(result, bytes):
+            if image_path != self._current_image_path:
+                success = self._picture_base.loadImageFromBytes(result)
+                if success:
+                    self._current_image_path = image_path
+                    self._view_image_ready = True
+                    self._picture_base.setViewportSize(self.size())
+                    if self._view_mode == _ViewMode.FIT:
+                        self._picture_base.setFitMode(True)
+                    else:
+                        self._picture_base.setZoom(self._zoom_factor)
+            if self._view_mode == _ViewMode.TRACKING:
+                self.set_center(norm_pos)
+        elif result and hasattr(result, 'view_image_path') and result.view_image_path:
+            self.update_view(image_path, result.view_image_path, norm_pos)
 
     def update_view(self, original_image_path: str, view_image_path: str, norm_pos: QPointF):
         if not original_image_path:

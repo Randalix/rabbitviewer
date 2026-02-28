@@ -187,6 +187,7 @@ class RequestViewImageRequest(Request):
 @dataclasses.dataclass
 class RequestViewImageResponse(Response):
     view_image_path: Optional[str] = None
+    view_image_source: Optional[str] = None  # "disk", "memory", or None (queued)
 
 # --- Get Filtered File Paths ---
 @dataclasses.dataclass
@@ -334,7 +335,31 @@ class PreviewsReadyData(Message):
     image_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
     thumbnail_path: Optional[str] = None
     view_image_path: Optional[str] = None
+    view_image_source: Optional[str] = None  # "disk", "memory", or None
 
 @dataclasses.dataclass
 class FilesRemovedData(Message):
     files: List[ImageEntryModel] = dataclasses.field(default_factory=list)
+
+# ==============================================================================
+#  ComfyUI Generation
+# ==============================================================================
+
+@dataclasses.dataclass
+class ComfyUIGenerateRequest(Request):
+    command: str = "comfyui_generate"
+    image_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
+    prompt: str = ""
+    denoise: float = 0.30
+    workflow: str = ""
+
+@dataclasses.dataclass
+class ComfyUIGenerateResponse(Response):
+    task_id: str = ""
+
+@dataclasses.dataclass
+class ComfyUICompleteData(Message):
+    source_path: str = ""
+    result_path: str = ""
+    status: str = "success"  # "success" or "error"
+    error: str = ""

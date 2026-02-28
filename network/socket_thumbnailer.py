@@ -10,7 +10,7 @@ import sys
 from core.directory_scanner import DirectoryScanner, ReconcileContext
 from core.rendermanager import Priority, TaskType, SourceJob
 from . import protocol
-from ._framing import MAX_MESSAGE_SIZE
+from ._framing import MAX_MESSAGE_SIZE, FRAME_JSON, FRAME_BINARY
 _ValidationErrors = (ValueError, TypeError, KeyError)
 import queue
 
@@ -46,6 +46,7 @@ class ThumbnailSocketServer:
             "remove_tags":           self._handle_remove_tags,
             "get_tags":              self._handle_get_tags,
             "get_image_tags":        self._handle_get_image_tags,
+            "comfyui_generate":      self._handle_comfyui_generate,
         }
 
         self.directory_scanner = DirectoryScanner(thumbnail_manager, thumbnail_manager.config_manager)
@@ -163,9 +164,13 @@ class ThumbnailSocketServer:
                     response = self.handle_request(request_data)
 
                     logging.debug(f"Server prepared response for '{command}', sending...")
-                    response_data = response.encode()
-                    length_prefix = len(response_data).to_bytes(4, byteorder='big')
-                    conn.sendall(length_prefix + response_data)
+                    if isinstance(response, bytes):
+                        # Binary response (e.g. mem-cached fullres image).
+                        payload = FRAME_BINARY + response
+                    else:
+                        payload = FRAME_JSON + response.encode()
+                    length_prefix = len(payload).to_bytes(4, byteorder='big')
+                    conn.sendall(length_prefix + payload)
                     logging.debug(f"Server successfully sent response for '{command}'.")
 
                 except socket.timeout:
@@ -205,18 +210,18 @@ class ThumbnailSocketServer:
         from ._framing import recv_exactly
         return recv_exactly(conn, n)
 
-    def handle_request(self, request_data: dict) -> str:
-        """
-        Handle incoming socket requests by validating against the protocol.
-        """
+    def handle_request(self, request_data: dict):
+        """Handle incoming socket requests. Returns JSON str or raw bytes (binary response)."""
         try:
             command = request_data.get("command")
             if not command:
                 return protocol.ErrorResponse(message="Request missing 'command' field.").model_dump_json()
 
             # --- Command Dispatcher ---
-            response_model = self._dispatch_command(command, request_data)
-            return response_model.model_dump_json()
+            result = self._dispatch_command(command, request_data)
+            if isinstance(result, bytes):
+                return result  # Binary response — pass through to handle_client.
+            return result.model_dump_json()
 
         except _ValidationErrors as e:
             return protocol.ErrorResponse(message=f"Validation Error: {e}").model_dump_json()
@@ -344,14 +349,28 @@ class ThumbnailSocketServer:
 
         return protocol.Response(message=f"{success_count} upgraded")
 
-    def _handle_request_view_image(self, request_data: dict) -> protocol.Response:
+    def _handle_request_view_image(self, request_data: dict):
         req = protocol.RequestViewImageRequest.model_validate(request_data)
         image_path = req.image_entry.path
         logging.info(f"SocketServer: Received request_view_image for {image_path}")
-        view_image_path = self.thumbnail_manager.request_view_image(
+        result = self.thumbnail_manager.request_view_image(
             image_path, self._get_session_id()
         )
-        return protocol.RequestViewImageResponse(view_image_path=view_image_path)
+        if result == "memory":
+            image_bytes = self.thumbnail_manager._mem_cache_get(image_path)
+            if image_bytes is not None:
+                return image_bytes  # Raw bytes → binary response path.
+            # Race: evicted between request_view_image and _mem_cache_get.
+            result = None
+        if isinstance(result, str) and result.startswith("direct:"):
+            return protocol.RequestViewImageResponse(
+                view_image_path=result[len("direct:"):],
+                view_image_source="direct",
+            )
+        return protocol.RequestViewImageResponse(
+            view_image_path=result,
+            view_image_source="disk" if result else None,
+        )
 
     def _handle_get_filtered_file_paths(self, request_data: dict) -> protocol.Response:
         req = protocol.GetFilteredFilePathsRequest.model_validate(request_data)
@@ -558,6 +577,18 @@ class ThumbnailSocketServer:
         db = self.thumbnail_manager.metadata_db
         result = {path: db.get_image_tags(path) for path in paths}
         return protocol.GetImageTagsResponse(tags=result)
+
+    def _handle_comfyui_generate(self, request_data: dict) -> protocol.Response:
+        req = protocol.ComfyUIGenerateRequest.model_validate(request_data)
+        image_path = req.image_entry.path
+        if not image_path:
+            return protocol.ErrorResponse(message="comfyui_generate requires an image path")
+        session_id = self._get_session_id()
+        task_id = self.thumbnail_manager.submit_comfyui_generation(
+            image_path, req.prompt, req.denoise, session_id,
+            workflow=req.workflow,
+        )
+        return protocol.ComfyUIGenerateResponse(task_id=task_id)
 
     def send_notification(self, notification: protocol.Notification):
         """Sends a JSON notification to all registered listener clients."""

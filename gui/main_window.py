@@ -428,11 +428,13 @@ class MainWindow(QMainWindow):
 
         self.comfyui_dialog.open_for_image(image_path)
 
-    def _on_comfyui_generate(self, image_path: str, prompt: str, denoise: float):
+    def _on_comfyui_generate(self, image_path: str, prompt: str, denoise: float,
+                             workflow_json: str = ""):
         def _send():
             if not self.socket_client:
                 return
-            resp = self.socket_client.comfyui_generate(image_path, prompt, denoise)
+            resp = self.socket_client.comfyui_generate(image_path, prompt, denoise,
+                                                        workflow=workflow_json)
             if resp and hasattr(resp, 'task_id'):
                 logging.debug(f"ComfyUI generation queued: {resp.task_id}")
             else:

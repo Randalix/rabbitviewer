@@ -155,6 +155,14 @@ class PictureBase(QObject):
             logging.debug("Loaded image: %s", path_to_load)
             return True
         return False
+
+    def loadImageFromBytes(self, data: bytes) -> bool:
+        image = QImage()
+        if image.loadFromData(data) and not image.isNull():
+            self.setImage(image)
+            logging.debug("Loaded image from %d bytes", len(data))
+            return True
+        return False
             
     def _updatePaddingRect(self) -> None:
         if not self._image:

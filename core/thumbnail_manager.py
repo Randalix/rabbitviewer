@@ -6,6 +6,7 @@ import time
 import logging
 import fnmatch
 import threading
+from collections import OrderedDict
 from queue import Full
 from typing import Optional, Dict, List, Set, Tuple, Any, Callable
 from core.metadata_database import MetadataDatabase
@@ -16,6 +17,12 @@ from core.event_system import EventSystem, EventType, DaemonNotificationEventDat
 from network import protocol
 
 logger = logging.getLogger(__name__)
+
+# Formats that Qt/PIL can load directly without extraction.
+# When orientation == 1, the GUI can display the original file as-is.
+_NATIVELY_VIEWABLE = frozenset({
+    '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp',
+})
 
 
 def _get_mount_point(path: str) -> Optional[str]:
@@ -56,11 +63,50 @@ class ThumbnailManager:
         self.cache_size_manager = None  # set by daemon after construction
         self._volume_cache_lock = threading.Lock()
 
+        # In-memory LRU cache for fast fullres extractions (below threshold → RAM only).
+        self._fullres_mem_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._fullres_mem_cache_lock = threading.Lock()
+        self._fullres_mem_cache_bytes = 0
+        max_mb = config_manager.get("fullres_mem_cache_mb", 512)
+        self._fullres_mem_cache_max = max_mb * 1024 * 1024
+        threshold_ms = config_manager.get("fullres_cache_threshold_ms", 500)
+        self._fullres_cache_threshold = threshold_ms / 1000.0
+
         self._task_operations: Dict[str, Callable] = {
             "send2trash": self._op_send2trash,
             "remove_records": self._op_remove_records,
         }
 
+
+    # -- Fullres memory cache (LRU, byte-size bounded) -----------------------
+
+    def _mem_cache_put(self, image_path: str, data: bytes) -> None:
+        with self._fullres_mem_cache_lock:
+            # Remove old entry if present (size accounting).
+            if image_path in self._fullres_mem_cache:
+                self._fullres_mem_cache_bytes -= len(self._fullres_mem_cache.pop(image_path))
+            self._fullres_mem_cache[image_path] = data
+            self._fullres_mem_cache.move_to_end(image_path)
+            self._fullres_mem_cache_bytes += len(data)
+            # Evict oldest until under budget.
+            while self._fullres_mem_cache_bytes > self._fullres_mem_cache_max and self._fullres_mem_cache:
+                _, evicted = self._fullres_mem_cache.popitem(last=False)
+                self._fullres_mem_cache_bytes -= len(evicted)
+
+    def _mem_cache_get(self, image_path: str) -> Optional[bytes]:
+        with self._fullres_mem_cache_lock:
+            data = self._fullres_mem_cache.get(image_path)
+            if data is not None:
+                self._fullres_mem_cache.move_to_end(image_path)
+            return data
+
+    def _mem_cache_remove(self, image_path: str) -> None:
+        with self._fullres_mem_cache_lock:
+            data = self._fullres_mem_cache.pop(image_path, None)
+            if data is not None:
+                self._fullres_mem_cache_bytes -= len(data)
+
+    # -----------------------------------------------------------------------
 
     def load_plugins(self) -> None:
         """Load and register all format plugins. Called after the socket is bound."""
@@ -333,17 +379,19 @@ class ThumbnailManager:
             return None
 
         # Slow step: exiftool -JpgFromRaw, 7-17s per CR3 on NAS.
-        view_image_path = self._process_view_image_task(image_path, md5_hash)
-        if not view_image_path:
+        result = self._process_view_image_task(image_path, md5_hash)
+        if not result:
             logger.error(f"View image generation failed for {image_path}.")
             return None
 
         # Send final notification with both paths now available.
         thumbnail_path = self.metadata_db.get_thumbnail_paths(image_path).get('thumbnail_path')
+        is_mem_cached = (result == "memory")
         notification_data = protocol.PreviewsReadyData(
             image_entry=protocol.ImageEntryModel(path=image_path),
             thumbnail_path=thumbnail_path,
-            view_image_path=view_image_path
+            view_image_path=None if is_mem_cached else result,
+            view_image_source="memory" if is_mem_cached else "disk",
         )
         notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
         try:
@@ -351,7 +399,7 @@ class ThumbnailManager:
         except Full:
             logger.warning("Notification queue full; dropping previews_ready (view image) for %s", image_path)
 
-        return view_image_path
+        return result
 
     def request_thumbnail(self, image_path: str, priority: Priority,
                           gui_session_id: Optional[str] = None) -> bool:
@@ -502,25 +550,112 @@ class ThumbnailManager:
 
         return len(cached_paths) + len(uncached_paths)
 
+    # ── ComfyUI generation ──────────────────────────────────────
+
+    def submit_comfyui_generation(self, image_path: str, prompt: str,
+                                   denoise: float, session_id: Optional[str] = None,
+                                   workflow: str = "") -> str:
+        """Submit a ComfyUI generation task. Returns the task_id."""
+        if not hasattr(self, '_comfyui_client') or self._comfyui_client is None:
+            from core.comfyui_client import ComfyUIClient
+            host = self.config_manager.get("comfyui.host", "192.168.50.4")
+            port = self.config_manager.get("comfyui.port", 8188)
+            self._comfyui_client = ComfyUIClient(host, port)
+
+        task_id = f"comfyui::{image_path}"
+        self.render_manager.submit_task(
+            task_id,
+            Priority.NORMAL,
+            self._run_comfyui_generation,
+            image_path, prompt, denoise, session_id, workflow,
+        )
+        return task_id
+
+    def _run_comfyui_generation(self, image_path: str, prompt: str,
+                                 denoise: float, session_id: Optional[str] = None,
+                                 workflow: str = "",
+                                 cancel_event=None):
+        """Worker function for ComfyUI generation."""
+        result_path = self._comfyui_client.generate(
+            image_path, prompt, denoise, cancel_event,
+            workflow_json=workflow,
+        )
+
+        if result_path:
+            # Submit thumbnail + metadata tasks for the new file so it
+            # appears with a proper thumbnail once the GUI adds it.
+            try:
+                tasks = self.create_tasks_for_file(result_path, Priority.HIGH)
+                for task in tasks:
+                    self.render_manager.submit_task(
+                        task.task_id, task.priority, task.func, *task.args,
+                        dependencies=task.dependencies, task_type=task.task_type,
+                        on_complete_callback=task.on_complete_callback, **task.kwargs
+                    )
+            except Exception as e:
+                logger.error("Failed to create tasks for ComfyUI result %s: %s", result_path, e)
+
+            # Notify the GUI to add the new file to the thumbnail grid.
+            scan_notification = protocol.Notification(
+                type="scan_progress",
+                data=protocol.ScanProgressData(
+                    path=os.path.dirname(result_path),
+                    files=[protocol.ImageEntryModel(path=result_path)],
+                ).model_dump(),
+                session_id=session_id,
+            )
+            try:
+                self.render_manager.notification_queue.put_nowait(scan_notification)
+            except Full:
+                logger.warning("Notification queue full; dropping scan_progress for ComfyUI result.")
+
+        notification_data = protocol.ComfyUICompleteData(
+            source_path=image_path,
+            result_path=result_path or "",
+            status="success" if result_path else "error",
+            error="" if result_path else "Generation failed",
+        )
+        notification = protocol.Notification(
+            type="comfyui_complete",
+            data=notification_data.model_dump(),
+            session_id=session_id,
+        )
+        try:
+            self.render_manager.notification_queue.put_nowait(notification)
+        except Full:
+            logger.warning("Notification queue full; dropping comfyui_complete.")
+
     def request_view_image(self, image_path: str,
                            gui_session_id: Optional[str] = None) -> Optional[str]:
         """
         Requests view image generation at FULLRES_REQUEST priority (highest non-shutdown).
 
+        - If the view image is in the mem cache: returns ``"memory"`` sentinel.
         - If the view image is already on disk: returns its path immediately (no task).
         - If a view image task is in the graph: upgrades it to FULLRES_REQUEST.
         - If no task exists yet: submits _generate_view_image_task at FULLRES_REQUEST.
 
-        Returns the cached view image path, or None if generation has been queued.
+        Returns ``"memory"`` (mem-cached), a disk path, or None (generation queued).
         """
         if not image_path:
             return None
+
+        # Fast path: view image in daemon memory cache.
+        if self._mem_cache_get(image_path) is not None:
+            return "memory"
 
         # Fast path: view image already cached on disk.
         paths = self.metadata_db.get_thumbnail_paths(image_path)
         existing_view = paths.get('view_image_path')
         if existing_view and os.path.exists(existing_view):
             return existing_view
+
+        # Fast path: natively viewable format with no rotation needed.
+        _, ext = os.path.splitext(image_path)
+        if ext.lower() in _NATIVELY_VIEWABLE:
+            meta = self.metadata_db.get_metadata(image_path)
+            if meta and meta.get('orientation', 1) == 1:
+                return "direct:" + image_path
 
         view_task_id = f"view::{image_path}"
 
@@ -622,13 +757,31 @@ class ThumbnailManager:
         view_image_path = plugin.process_view_image(image_path, md5_hash)
         duration = time.time() - start_time
         logger.debug(f"plugin.process_view_image for {os.path.basename(image_path)} took {duration:.4f} seconds.")
-        if view_image_path:
-            self.metadata_db.set_thumbnail_paths(image_path, view_image_path=view_image_path)
-            if self.cache_size_manager:
-                try:
-                    self.cache_size_manager.record_cache_write(os.path.getsize(view_image_path))
-                except OSError:
-                    pass
+        if not view_image_path:
+            return None
+
+        if duration < self._fullres_cache_threshold:
+            # Fast extraction → RAM only, delete disk file.
+            try:
+                with open(view_image_path, 'rb') as f:
+                    image_bytes = f.read()
+                os.remove(view_image_path)
+            except OSError:
+                # Disk file vanished — fall through to disk-cache path.
+                logger.warning("Failed to read/remove fast view image for mem cache: %s", view_image_path)
+                return view_image_path
+            self._mem_cache_put(image_path, image_bytes)
+            logger.debug("View image for %s stored in mem cache (%d bytes, %.1fms)",
+                         os.path.basename(image_path), len(image_bytes), duration * 1000)
+            return "memory"
+
+        # Slow extraction → persist to disk as before.
+        self.metadata_db.set_thumbnail_paths(image_path, view_image_path=view_image_path)
+        if self.cache_size_manager:
+            try:
+                self.cache_size_manager.record_cache_write(os.path.getsize(view_image_path))
+            except OSError:
+                pass
         return view_image_path
 
     def _process_metadata_task(self, image_path: str):

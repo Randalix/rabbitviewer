@@ -94,7 +94,16 @@ DEFAULT_CONFIG = {
         "menu:tags": {
             "sequence": "T",
             "description": "Open tags menu"
+        },
+        "open_comfyui": {
+            "sequence": "G",
+            "description": "Open ComfyUI generation dialog"
         }
+    },
+    "comfyui": {
+        "host": "192.168.50.4",
+        "port": 8188,
+        "workflows_dir": "",
     },
     "thumbnail_size": 128,
     "cache_dir": "~/.rabbitviewer",
@@ -102,6 +111,8 @@ DEFAULT_CONFIG = {
     "min_file_size": 8192,  # bytes; 8 KB floor
     "ignore_patterns": ["._*"],  # glob patterns
     "max_cache_size_mb": 10240,  # 10 GB; 0 = unlimited
+    "fullres_cache_threshold_ms": 500,  # Below this → RAM only; above → disk
+    "fullres_mem_cache_mb": 512,        # Max daemon-side memory for fast fullres images
 }
 
 def _default_config_path() -> str:

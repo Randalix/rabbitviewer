@@ -84,12 +84,16 @@ class PictureView(QWidget):
         # Request the view image at FULLRES_REQUEST priority. If already cached the
         # response contains the path directly; otherwise generation is queued and we
         # wait for the previews_ready notification.
-        path_to_load = None
-        response = self.socket_client.request_view_image(image_path)
-        if response and response.status == "success" and response.view_image_path:
-            path_to_load = response.view_image_path
+        # Returns: bytes (mem-cached), RequestViewImageResponse (disk/queued), or None.
+        result = self.socket_client.request_view_image(image_path)
 
-        if not path_to_load:
+        if isinstance(result, bytes):
+            # Mem-cached on daemon — got raw image bytes.
+            success = self._picture_base.loadImageFromBytes(result)
+        elif result and hasattr(result, 'view_image_path') and result.view_image_path:
+            # Disk-cached — load from path.
+            success = self._picture_base.loadImageFromPath(result.view_image_path)
+        else:
             # Generation queued — show placeholder and wait for previews_ready notification.
             self._picture_base.setImage(QImage())  # Clear the view
             self._current_path = image_path  # Set path so notification handler knows what to load
@@ -108,8 +112,6 @@ class PictureView(QWidget):
                 section=StatusSection.PROCESS,
             ))
             return False  # Indicate loading is in progress
-
-        success = self._picture_base.loadImageFromPath(path_to_load)
 
         if success:
             self._current_path = image_path  # Store original path for navigation and external use
@@ -194,7 +196,8 @@ class PictureView(QWidget):
                 data = protocol.PreviewsReadyData.model_validate(event_data.data)
 
                 # If this is the image we are waiting for, load it.
-                if data.view_image_path and data.image_entry.path == self._current_path:
+                view_ready = data.view_image_path or data.view_image_source == "memory"
+                if view_ready and data.image_entry.path == self._current_path:
                     logging.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
                     self.loadImage(data.image_entry.path, force_reload=True)
             except Exception as e:  # why: protocol errors must not crash the view

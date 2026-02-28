@@ -9,7 +9,7 @@ import time
 import uuid
 from typing import List, Optional, TYPE_CHECKING
 _ValidationErrors = (ValueError, TypeError, KeyError)
-from ._framing import recv_exactly, MAX_MESSAGE_SIZE
+from ._framing import recv_exactly, MAX_MESSAGE_SIZE, MAX_BINARY_MESSAGE_SIZE, FRAME_JSON, FRAME_BINARY
 if TYPE_CHECKING:
     from . import protocol as protocol
 
@@ -54,6 +54,29 @@ class SocketConnection:
             self.connected = False
             return False
 
+    def _send_and_recv(self, data: dict):
+        """Send JSON request and receive raw response frame. Returns (frame_type, payload)."""
+        message = json.dumps(data).encode()
+        length_prefix = len(message).to_bytes(4, byteorder='big')
+        self.sock.sendall(length_prefix + message)
+
+        length_data = self._recv_exactly(4)
+        if not length_data:
+            raise ConnectionError("Failed to read message length")
+
+        message_length = int.from_bytes(length_data, byteorder='big')
+        if message_length > MAX_BINARY_MESSAGE_SIZE:
+            raise ConnectionError(f"Message too large: {message_length} bytes")
+
+        message_data = self._recv_exactly(message_length)
+        if not message_data:
+            raise ConnectionError("Failed to read complete message")
+
+        # Peek at the 1-byte type discriminator.
+        frame_type = message_data[0:1]
+        payload = message_data[1:]
+        return frame_type, payload
+
     def send_receive(self, data: dict, max_retries: int = 2) -> Optional[dict]:
         retries = 0
         while retries <= max_retries:
@@ -64,23 +87,11 @@ class SocketConnection:
                     continue
 
                 with self.lock:
-                    message = json.dumps(data).encode()
-                    length_prefix = len(message).to_bytes(4, byteorder='big')
-                    self.sock.sendall(length_prefix + message)
+                    frame_type, payload = self._send_and_recv(data)
 
-                    length_data = self._recv_exactly(4)
-                    if not length_data:
-                        raise ConnectionError("Failed to read message length")
-
-                    message_length = int.from_bytes(length_data, byteorder='big')
-                    if message_length > MAX_MESSAGE_SIZE:
-                        raise ConnectionError(f"Message too large: {message_length} bytes")
-
-                    message_data = self._recv_exactly(message_length)
-                    if not message_data:
-                        raise ConnectionError("Failed to read complete message")
-
-                    return json.loads(message_data.decode())
+                    if frame_type == FRAME_BINARY:
+                        raise ConnectionError("Unexpected binary response on JSON channel")
+                    return json.loads(payload.decode())
 
             except (ConnectionError, socket.error) as e:
                 logging.debug(f"Communication error (attempt {retries + 1}): {e}")
@@ -89,6 +100,34 @@ class SocketConnection:
                 retries += 1
                 if retries <= max_retries:
                     time.sleep(0.1 * (2 ** retries))  # Exponential backoff: 0.2s, 0.4s
+
+        logging.error("Failed to communicate after retries")
+        return None
+
+    def send_receive_binary(self, data: dict, max_retries: int = 2):
+        """Send JSON request, receive response that may be JSON dict or raw bytes."""
+        retries = 0
+        while retries <= max_retries:
+            try:
+                if not self.ensure_connected():
+                    retries += 1
+                    time.sleep(0.1 * (2 ** retries))
+                    continue
+
+                with self.lock:
+                    frame_type, payload = self._send_and_recv(data)
+
+                    if frame_type == FRAME_BINARY:
+                        return payload  # Raw image bytes.
+                    return json.loads(payload.decode())  # JSON dict.
+
+            except (ConnectionError, socket.error) as e:
+                logging.debug(f"Communication error (attempt {retries + 1}): {e}")
+                with self.lock:
+                    self.connected = False
+                retries += 1
+                if retries <= max_retries:
+                    time.sleep(0.1 * (2 ** retries))
 
         logging.error("Failed to communicate after retries")
         return None
@@ -215,14 +254,39 @@ class ThumbnailSocketClient:
         )
         return self._send_request(request, protocol.RequestPreviewsResponse)
 
-    def request_view_image(self, image_path: str) -> Optional[protocol.RequestViewImageResponse]:
+    def request_view_image(self, image_path: str):
         """Requests view image generation at FULLRES_REQUEST priority.
 
-        Returns the response immediately. `response.view_image_path` is set when
-        the view image was already cached; None means generation has been queued."""
+        Returns:
+            bytes — raw image bytes if the view image was mem-cached on the daemon.
+            RequestViewImageResponse — with view_image_path (disk) or None (queued).
+            None — on communication failure.
+        """
         protocol = _lazy_protocol()
         request = protocol.RequestViewImageRequest(image_entry=protocol.ImageEntryModel(path=image_path))
-        return self._send_request(request, protocol.RequestViewImageResponse)
+        request.session_id = self.session_id
+        conn = self.connection_pool.get_connection()
+        if not conn:
+            return None
+        try:
+            result = conn.send_receive_binary(request.model_dump())
+            if result is None:
+                return None
+            if isinstance(result, bytes):
+                return result  # Raw image bytes from daemon mem cache.
+            # JSON dict — validate as usual.
+            if result.get("status") == "error":
+                return protocol.ErrorResponse.model_validate(result)
+            return protocol.RequestViewImageResponse.model_validate(result)
+        except _ValidationErrors as e:
+            logging.error(f"Client-side validation error for request_view_image: {e}")
+            return protocol.ErrorResponse(message=str(e))
+        except Exception as e:  # why: socket and protocol errors from external daemon
+            logging.error(f"request_view_image failed: {e}")
+            conn.close()
+            return None
+        finally:
+            self.connection_pool.return_connection(conn)
 
     def get_previews_status(self, image_paths: List[str]) -> Optional[protocol.GetPreviewsStatusResponse]:
         protocol = _lazy_protocol()
@@ -282,6 +346,18 @@ class ThumbnailSocketClient:
         protocol = _lazy_protocol()
         request = protocol.RunTasksRequest(operations=operations)
         return self._send_request(request, protocol.RunTasksResponse)
+
+    def comfyui_generate(self, image_path: str, prompt: str, denoise: float = 0.30,
+                         workflow: str = "") -> Optional[protocol.ComfyUIGenerateResponse]:
+        """Request ComfyUI generation for an image."""
+        protocol = _lazy_protocol()
+        request = protocol.ComfyUIGenerateRequest(
+            image_entry=protocol.ImageEntryModel(path=image_path),
+            prompt=prompt,
+            denoise=denoise,
+            workflow=workflow,
+        )
+        return self._send_request(request, protocol.ComfyUIGenerateResponse)
 
     # --- Daemon Control Methods ---
     def is_socket_file_present(self) -> bool:

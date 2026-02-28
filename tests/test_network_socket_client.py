@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 
-from network._framing import MAX_MESSAGE_SIZE
+from network._framing import MAX_MESSAGE_SIZE, FRAME_JSON
 from network.socket_client import SocketConnection, ConnectionPool
 
 
@@ -36,8 +36,8 @@ def _serve_once(sock_path: str, response: dict, ready: threading.Event):
         length_data = conn.recv(4)
         msg_len = int.from_bytes(length_data, "big")
         conn.recv(msg_len)
-        # Send framed response
-        body = json.dumps(response).encode()
+        # Send framed response with type prefix byte
+        body = FRAME_JSON + json.dumps(response).encode()
         conn.sendall(len(body).to_bytes(4, "big") + body)
     finally:
         conn.close()

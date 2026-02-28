@@ -179,8 +179,8 @@ def _make_view(all_files=None, is_loading=False):
 class TestAppendFastPath:
 
     def test_new_files_extend_mappings(self):
-        """Appending files extends visible mappings without clearing labels."""
-        view = _make_view(all_files=["/img/a.jpg", "/img/b.jpg"])
+        """During scan, appending files extends visible mappings without clearing labels."""
+        view = _make_view(all_files=["/img/a.jpg", "/img/b.jpg"], is_loading=True)
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/c.jpg", "/img/d.jpg"])
@@ -194,8 +194,8 @@ class TestAppendFastPath:
         assert view._original_to_visible_mapping[3] == 3
 
     def test_fast_path_calls_sync_viewport(self):
-        """Fast path updates the virtual grid and syncs viewport."""
-        view = _make_view(all_files=["/img/a.jpg"])
+        """Scan fast path updates the virtual grid and syncs viewport."""
+        view = _make_view(all_files=["/img/a.jpg"], is_loading=True)
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
@@ -204,9 +204,9 @@ class TestAppendFastPath:
         view._virtual_grid.update_layout.assert_called()
 
     def test_fast_path_does_not_clear_labels(self):
-        """Fast path preserves existing materialized labels (hover state)."""
+        """Scan fast path preserves existing materialized labels (hover state)."""
         existing_label = MagicMock()
-        view = _make_view(all_files=["/img/a.jpg"])
+        view = _make_view(all_files=["/img/a.jpg"], is_loading=True)
         view.labels[0] = existing_label
 
         with patch("gui.thumbnail_view.event_system"):
@@ -218,8 +218,8 @@ class TestAppendFastPath:
         view._virtual_grid.clear.assert_not_called()
 
     def test_fast_path_no_debounce_timer(self):
-        """Fast path does not start the debounce timer."""
-        view = _make_view(all_files=["/img/a.jpg"])
+        """Scan fast path does not start the debounce timer."""
+        view = _make_view(all_files=["/img/a.jpg"], is_loading=True)
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
@@ -235,16 +235,16 @@ class TestAppendFastPath:
 
         assert len(view.all_files) == 2
 
-    def test_cached_folder_uses_fast_path(self):
-        """Cached folder (is_loading=False) still takes fast path for appends."""
-        view = _make_view(all_files=["/img/a.jpg"], is_loading=False)
+    def test_post_scan_arrival_sorts_into_position(self):
+        """Post-scan arrivals (is_loading=False) are sorted into position."""
+        view = _make_view(all_files=["/img/a.jpg", "/img/c.jpg"], is_loading=False)
 
         with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg", "/img/c.jpg"])
+            ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
 
-        # Should use fast path: sync viewport called, no debounce
-        view._virtual_grid.set_total_items.assert_called_with(3)
-        view._filter_update_timer.start.assert_not_called()
+        # b.jpg should be sorted between a.jpg and c.jpg
+        assert view.current_files == ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
+        assert len(view.all_files) == 3
 
     def test_uncached_folder_uses_fast_path(self):
         """Uncached folder (is_loading=True) takes fast path when no filter."""

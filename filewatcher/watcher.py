@@ -122,6 +122,7 @@ class WatchdogHandler(FileSystemEventHandler):
             file_path = event.dest_path
         elif event.event_type == 'deleted':
             logging.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
+            self.thumbnail_manager._mem_cache_remove(event.src_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_cleanup_deleted::{event.src_path}",
                 Priority.HIGH,
@@ -143,6 +144,7 @@ class WatchdogHandler(FileSystemEventHandler):
             return
 
         logging.debug(f"Watchdog: Submitting {event.event_type} task for {file_path}")
+        self.thumbnail_manager._mem_cache_remove(file_path)
         try:
             tasks = self.thumbnail_manager.create_tasks_for_file(file_path, Priority.LOW)
         except Exception as e:
