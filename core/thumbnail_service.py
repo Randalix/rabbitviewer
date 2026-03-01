@@ -73,7 +73,7 @@ class ThumbnailService:
                         files=[ImageEntryModel(path=p) for p in reconcile_ctx.ghost_files]
                     ).model_dump(),
                 )
-                self.rm._notify(notification)
+                self.rm.notify(notification)
                 self.db.remove_records(reconcile_ctx.ghost_files)
 
             discovered = reconcile_ctx.discovered_files
@@ -319,5 +319,4 @@ class ThumbnailService:
     # ------------------------------------------------------------------
 
     def shutdown(self):
-        """Shut down the in-process workers."""
         self.tm.shutdown()

@@ -284,9 +284,8 @@ class MetadataDatabase:
         if not plugin or not hasattr(plugin, 'extract_metadata'):
             return
         try:
-            # why: plugins are user-supplied; any exception must not abort the metadata pipeline
             plugin_meta = plugin.extract_metadata(file_path)
-        except Exception as e:
+        except Exception as e:  # why: plugins are user-supplied; any exception must not abort the metadata pipeline
             logging.debug(f"Fast metadata extraction failed for {file_path}: {e}")
             return
         if plugin_meta is None:

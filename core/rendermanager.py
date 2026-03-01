@@ -49,13 +49,13 @@ class RenderManager:
         with self._notification_callbacks_lock:
             self._notification_callbacks.append(cb)
 
-    def _notify(self, notification) -> None:
+    def notify(self, notification) -> None:
         with self._notification_callbacks_lock:
             callbacks = list(self._notification_callbacks)
         for cb in callbacks:
             try:
                 cb(notification)
-            except Exception as e:
+            except Exception as e:  # why: callbacks are user-supplied; one failure must not block other listeners
                 logging.warning(f"Notification callback failed: {e}", exc_info=True)
 
     def pause(self) -> None:
@@ -64,7 +64,6 @@ class RenderManager:
         logger.info("RenderManager: paused.")
 
     def resume(self) -> None:
-        """Resume paused workers."""
         self._resume_event.set()
         logger.info("RenderManager: resumed.")
 
@@ -366,7 +365,7 @@ class RenderManager:
         if "gui_scan" in job.job_id:
             completion_data = ScanCompleteData(path=job_path, file_count=slice_index, files=[])
             notification = Notification(type="scan_complete", data=completion_data.model_dump())
-            self._notify(notification)
+            self.notify(notification)
 
     def _cooperative_generator_runner(self, job: SourceJob, slice_index: int):
         logger.debug(f"Executing job slice '{job.job_id}::{slice_index}'.")
@@ -432,7 +431,7 @@ class RenderManager:
                 f"[chunking] generator_runner: scan_progress for '{job.job_id}' "
                 f"slice={slice_index}, files_in_batch={len(items_to_process)}"
             )
-            self._notify(notification)
+            self.notify(notification)
 
         # Only create backend processing tasks if the job is configured to do so.
         # For fast GUI scans, this will be false.

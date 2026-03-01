@@ -5,7 +5,6 @@ import time
 import fnmatch
 from dataclasses import dataclass, field
 from typing import List, Set, Optional
-from core.rendermanager import Priority, SourceJob
 from core.thumbnail_manager import ThumbnailManager
 
 
@@ -23,7 +22,6 @@ class ReconcileContext:
     discovered_files: List[str] = field(default_factory=list)
 
 class DirectoryScanner:
-    """Handles scanning directories for supported image files."""
 
     def __init__(self, thumbnail_manager: Optional[ThumbnailManager], config_manager=None):
         self.thumbnail_manager = thumbnail_manager
@@ -68,48 +66,6 @@ class DirectoryScanner:
             return False
 
         return True
-
-    def _scan(self, directory_path: str, recursive: bool) -> List[str]:
-        """Internal helper to scan a directory."""
-        found_files = []
-        if not os.path.isdir(directory_path):
-            logging.warning(f"Directory to scan does not exist or is not a directory: {directory_path}")
-            return found_files
-
-        if recursive:
-            for root, _, files in os.walk(directory_path):
-                for filename in files:
-                    full_path = os.path.join(root, filename)
-                    if self.is_supported_file(full_path):
-                        found_files.append(full_path)
-        else:
-            try:
-                for filename in os.listdir(directory_path):
-                    full_path = os.path.join(directory_path, filename)
-                    if self.is_supported_file(full_path):
-                        found_files.append(full_path)
-            except OSError as e:
-                logging.error(f"Error scanning directory {directory_path}: {e}")
-
-        return found_files
-
-    def scan_directory(self, directory_path: str, priority: Priority = Priority.GUI_REQUEST_LOW, recursive: bool = True) -> None:
-        """Initiates an asynchronous, incremental scan of a directory by submitting a SourceJob."""
-        if not self.thumbnail_manager:
-            logging.warning("DirectoryScanner: ThumbnailManager not available, cannot start scan job.")
-            return
-
-        job_id = f"gui_scan::{directory_path}"
-        logging.info(f"Submitting scan job '{job_id}' with priority {priority.name}")
-
-        job = SourceJob(
-            priority=priority,
-            job_id=job_id,
-            generator=self.scan_incremental(directory_path, recursive),
-            task_factory=self.thumbnail_manager.create_tasks_for_file
-        )
-
-        self.thumbnail_manager.render_manager.submit_source_job(job)
 
     def scan_incremental(self, directory_path: str, recursive: bool = True, batch_size: int = 10):
         """
@@ -176,6 +132,3 @@ class DirectoryScanner:
         if self._supported_extensions:
             ctx.ghost_files = list(ctx.db_file_set)
 
-    def scan_single_directory_no_queue(self, directory_path: str) -> List[str]:
-        """Scans a single directory non-recursively and returns supported files."""
-        return self._scan(directory_path, recursive=False)

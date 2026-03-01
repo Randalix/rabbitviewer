@@ -110,57 +110,12 @@ class ThumbnailManager:
     # -----------------------------------------------------------------------
 
     def load_plugins(self) -> None:
-        """Load and register all format plugins. Called after the socket is bound."""
         plugin_registry.load_plugins_from_directory(self._plugins_dir, self.cache_dir, self.thumbnail_size)
         self.supported_formats = self.plugin_registry.get_supported_formats()
         if not self.supported_formats:
             logger.warning("No format plugins loaded — scanning and thumbnailing will be non-functional.")
         else:
             logger.info(f"ThumbnailManager supports {len(self.supported_formats)} formats: {sorted(self.supported_formats)}")
-
-    def start_chunked_db_cleanup(self, chunk_size: int = 250):
-        """
-        Initiates a non-blocking, chunked cleanup of stale database records.
-        """
-        logging.info("Starting chunked database cleanup for missing files...")
-
-        all_paths = self.metadata_db.get_all_file_paths()
-        if not all_paths:
-            logging.info("No records in database to check.")
-            return
-
-        logging.info(f"Checking {len(all_paths)} database records in chunks of {chunk_size}...")
-
-        chunk_count = 0
-        for i in range(0, len(all_paths), chunk_size):
-            chunk = all_paths[i:i + chunk_size]
-            task_id = f"db-cleanup-chunk-{chunk_count}"
-            self.render_manager.submit_task(
-                task_id=task_id,
-                priority=Priority.LOW,
-                func=self._check_and_clean_chunk,
-                paths_chunk=chunk
-            )
-            chunk_count += 1
-        logging.info(f"Submitted {chunk_count} cleanup chunks to the render queue.")
-
-    def _check_and_clean_chunk(self, paths_chunk: List[str]):
-        """
-        Worker task that checks a chunk of paths for existence and removes stale records.
-        """
-        # Sample the first path — chunks are typically single-volume; if the volume
-        # is unreachable, skip rather than risk a 2s timeout per path.
-        if paths_chunk:
-            sample = paths_chunk[0]
-            if not self._is_volume_accessible(sample):
-                logger.warning("Skipping DB cleanup chunk — volume inaccessible for: %s", sample)
-                return
-
-        missing_paths = [path for path in paths_chunk if not os.path.exists(path)]
-
-        if missing_paths:
-            logging.debug(f"Found {len(missing_paths)} missing files in chunk. Removing records.")
-            self.metadata_db.remove_records(missing_paths)
 
     def get_thumbnail(self, image_path):
         """
@@ -276,7 +231,7 @@ class ThumbnailManager:
                 view_image_path=paths.get('view_image_path')
             )
             notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-            self.render_manager._notify(notification)
+            self.render_manager.notify(notification)
             return paths.get('thumbnail_path')
 
         _, ext = os.path.splitext(image_path)
@@ -312,7 +267,7 @@ class ThumbnailManager:
             view_image_path=existing_view
         )
         notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-        self.render_manager._notify(notification)
+        self.render_manager.notify(notification)
 
         return thumbnail_path
 
@@ -388,7 +343,7 @@ class ThumbnailManager:
             view_image_source="memory" if is_mem_cached else "disk",
         )
         notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-        self.render_manager._notify(notification)
+        self.render_manager.notify(notification)
 
         return result
 
@@ -411,7 +366,7 @@ class ThumbnailManager:
                 view_image_path=cached.get('view_image_path')
             )
             notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-            self.render_manager._notify(notification)
+            self.render_manager.notify(notification)
             return True
 
         # Slow path: check whether the task already exists in the graph.
@@ -472,7 +427,7 @@ class ThumbnailManager:
                     view_image_path=info.get('view_image_path'),
                 ).model_dump()
             )
-            self.render_manager._notify(notification)
+            self.render_manager.notify(notification)
 
         # For uncached paths, check task graph in a single lock scope.
         tasks_to_upgrade = set()
@@ -523,7 +478,6 @@ class ThumbnailManager:
     def _run_comfyui_generation(self, image_path: str, prompt: str,
                                  denoise: float, workflow: str = "",
                                  cancel_event=None):
-        """Worker function for ComfyUI generation."""
         result_path = self._comfyui_client.generate(
             image_path, prompt, denoise, cancel_event,
             workflow_json=workflow,
@@ -540,7 +494,7 @@ class ThumbnailManager:
                         dependencies=task.dependencies, task_type=task.task_type,
                         on_complete_callback=task.on_complete_callback, **task.kwargs
                     )
-            except Exception as e:
+            except Exception as e:  # why: ComfyUI result may reference a format with no plugin; must not abort the notification path
                 logger.error("Failed to create tasks for ComfyUI result %s: %s", result_path, e)
 
             # Notify the GUI to add the new file to the thumbnail grid.
@@ -551,7 +505,7 @@ class ThumbnailManager:
                     files=[protocol.ImageEntryModel(path=result_path)],
                 ).model_dump(),
             )
-            self.render_manager._notify(scan_notification)
+            self.render_manager.notify(scan_notification)
 
         notification_data = protocol.ComfyUICompleteData(
             source_path=image_path,
@@ -563,7 +517,7 @@ class ThumbnailManager:
             type="comfyui_complete",
             data=notification_data.model_dump(),
         )
-        self.render_manager._notify(notification)
+        self.render_manager.notify(notification)
 
     def request_view_image(self, image_path: str) -> Optional[str]:
         """Requests view image generation at FULLRES_REQUEST priority.
@@ -843,28 +797,8 @@ class ThumbnailManager:
         return False
 
     def get_cached_thumbnail_path(self, md5_hash: str) -> str:
-        """Get the path where a thumbnail should be stored."""
         return os.path.join(self.thumbnail_cache_dir, f"{md5_hash}.jpg")
     
-    def get_cached_paths(self, image_path: str) -> Optional[Dict[str, str]]:
-        """Get cached thumbnail and full resolution paths for an image."""
-        paths = self.metadata_db.get_thumbnail_paths(image_path)
-        if paths['thumbnail_path'] or paths['view_image_path']:
-            return {
-                'thumbnail_path': paths['thumbnail_path'],
-                'full_res_path': paths['view_image_path'] if paths['view_image_path'] else image_path
-            }
-        return None
-    
-    def _hash_and_process_view_image(self, image_path: str):
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image not found: {image_path}")
-            
-        md5_hash = self._hash_file(image_path)
-        if not md5_hash:
-            raise ValueError(f"Could not hash file: {image_path}")
-        return self._process_view_image_task(image_path, md5_hash)
-
     def is_format_supported(self, image_path: str) -> bool:
         _, ext = os.path.splitext(image_path)
         return self.plugin_registry.get_plugin_for_format(ext.lower()) is not None
@@ -946,30 +880,7 @@ class ThumbnailManager:
             logger.error(f"ThumbnailManager: Error reading header of {file_path} after {duration:.4f}s: {e}")
             return None
 
-    def check_thumbnails_status(self, image_paths: List[str]) -> Dict[str, Dict[str, Any]]:
-        """Check the status of multiple thumbnails using database cache."""
-        statuses = {}
-        for image_path in image_paths:
-            if not os.path.exists(image_path):
-                statuses[image_path] = {"ready": False, "error": "File not found"}
-                continue
-                
-            if self.metadata_db.is_thumbnail_valid(image_path):
-                paths = self.metadata_db.get_thumbnail_paths(image_path)
-                thumbnail_path = paths.get('thumbnail_path')
-                
-                if thumbnail_path and os.path.exists(thumbnail_path):
-                    statuses[image_path] = {
-                        "ready": True,
-                        "path": thumbnail_path
-                    }
-                else:
-                    statuses[image_path] = {"ready": False}
-                
-        return statuses
-
     def request_metadata_extraction(self, image_paths: List[str], priority: Priority = Priority.NORMAL):
-        """Submit or upgrade metadata extraction tasks for a list of images."""
         logger.info(f"Queueing metadata extraction for {len(image_paths)} images with {priority.name} priority.")
         for image_path in image_paths:
             if os.path.exists(image_path):
@@ -999,7 +910,7 @@ class ThumbnailManager:
                     view_image_path=paths.get('view_image_path')
                 )
                 notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-                self.render_manager._notify(notification)
+                self.render_manager.notify(notification)
             return []
 
         # Establish a baseline priority for new thumbnails. All thumbnails from a background

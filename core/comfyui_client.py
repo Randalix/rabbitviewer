@@ -73,7 +73,7 @@ class ComfyUIClient:
         except urllib.error.URLError as e:
             logger.error("ComfyUI network error: %s", e)
             return None
-        except Exception as e:
+        except Exception as e:  # why: ComfyUI server returns arbitrary errors (JSON decode, key errors); caller expects None on failure
             logger.error("ComfyUI generation failed: %s", e, exc_info=True)
             return None
 
