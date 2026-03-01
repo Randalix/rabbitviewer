@@ -142,6 +142,17 @@ fi
 # can recreate the venv with the same interpreter.
 SAVED_PYTHON=""
 if [[ "$MODE" == "--clean" ]]; then
+    # Stop the running daemon before wiping the venv.
+    if [[ -d "$VENV_DIR" && -x "$VENV_DIR/bin/python" ]]; then
+        yellow "Stopping running daemon (if any) …"
+        "$VENV_DIR/bin/python" -c "
+import logging, sys
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+sys.path.insert(0, '$REPO_DIR')
+from cli.stop import stop_daemon
+stop_daemon()
+" 2>&1 || true
+    fi
     if [[ -d "$VENV_DIR" && -x "$VENV_DIR/bin/python" ]]; then
         # Resolve to the real system executable before the venv is deleted.
         # The venv's python is a symlink; we follow it so the path survives rm -rf.
@@ -164,6 +175,19 @@ fi
 # ── optional update ───────────────────────────────────────────────────────────
 
 if [[ "$MODE" == "--update" ]]; then
+    # Stop the running daemon before replacing code, so the old process
+    # doesn't keep running with stale modules or a mismatched venv.
+    yellow "Stopping running daemon (if any) …"
+    if [[ -x "$VENV_DIR/bin/python" ]]; then
+        "$VENV_DIR/bin/python" -c "
+import logging, sys
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+sys.path.insert(0, '$REPO_DIR')
+from cli.stop import stop_daemon
+stop_daemon()
+" 2>&1 || true
+    fi
+
     yellow "Pulling latest changes …"
     if git -C "$REPO_DIR" pull --ff-only 2>&1; then
         green "Repository up to date."
