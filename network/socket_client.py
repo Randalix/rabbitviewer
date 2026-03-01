@@ -346,8 +346,8 @@ class ThumbnailSocketClient:
         request = protocol.RunTasksRequest(operations=operations)
         return self._send_request(request, protocol.RunTasksResponse)
 
-    def comfyui_generate(self, image_path: str, prompt: str, denoise: float = 0.30,
-                         workflow: str = "") -> Optional[protocol.ComfyUIGenerateResponse]:
+    def comfyui_generate(self, image_path: str, prompt: str = "",
+                         denoise: float = 0.0, workflow: str = "") -> Optional[protocol.ComfyUIGenerateResponse]:
         """Request ComfyUI generation for an image."""
         protocol = _lazy_protocol()
         request = protocol.ComfyUIGenerateRequest(

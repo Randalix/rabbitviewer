@@ -112,7 +112,8 @@ _BUILTIN_WORKFLOW: dict = {
 
 class ComfyUIDialog(QDialog):
 
-    generate_requested = Signal(str, str, float, str)  # (image_path, prompt, denoise, workflow_json)
+    # (image_paths: list[str], workflow_json: str)
+    generate_requested = Signal(list, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -244,8 +245,7 @@ class ComfyUIDialog(QDialog):
             return
         patched = self._form.patch_workflow(self._current_workflow)
         workflow_json = json.dumps(patched)
-        for path in self._image_paths:
-            self.generate_requested.emit(path, "", 0.0, workflow_json)
+        self.generate_requested.emit(list(self._image_paths), workflow_json)
         self.close()
 
     # ── Notification handling ────────────────────────────────────
