@@ -184,13 +184,6 @@ def _run_gui(args, config_manager):
 
     window = MainWindow(config_manager, service, daemon_signals)
 
-    def _shutdown():
-        watcher.stop()
-        thumbnail_manager.shutdown()
-        release_gui_lock(gui_lock_fd)
-
-    app.aboutToQuit.connect(_shutdown)
-
     window.show()
     app.processEvents()
     logging.info("[startup] window shown, services ready")
@@ -199,6 +192,13 @@ def _run_gui(args, config_manager):
         QTimer.singleShot(0, lambda: window.load_directory(target_dir, recursive_scan))
 
     exit_code = app.exec()
+
+    # Blocking shutdown runs after the event loop exits so the window
+    # can close and repaint immediately rather than freezing.
+    logging.info("GUI closed. Shutting down workers...")
+    watcher.stop()
+    thumbnail_manager.shutdown()
+    release_gui_lock(gui_lock_fd)
 
     logging.info(f"Application exiting with code {exit_code}.")
     return exit_code
