@@ -2,15 +2,18 @@ import logging
 from typing import Optional, List, Union
 from PIL import Image, ImageOps
 from .base_plugin import BasePlugin
-from .exiftool_process import is_exiftool_available
 import os
 
 class PILPlugin(BasePlugin):
     """Plugin for handling standard image formats using PIL/Pillow."""
 
     def is_available(self) -> bool:
-        """Check if PIL and exiftool are available."""
-        return is_exiftool_available()
+        """Check if PIL is importable. Exiftool is optional (metadata/ratings only)."""
+        try:
+            from PIL import Image
+            return True
+        except ImportError:
+            return False
     
     def get_supported_formats(self) -> List[str]:
         """Return list of supported file extensions."""
