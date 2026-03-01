@@ -13,8 +13,8 @@ class MetadataCache:
 
     MAX_ENTRIES = 2000
 
-    def __init__(self, socket_client):
-        self._socket_client = socket_client
+    def __init__(self, service):
+        self._service = service
         self._cache: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.Lock()
 
@@ -50,10 +50,10 @@ class MetadataCache:
         Called from background threads only.
         """
         try:
-            resp = self._socket_client.get_metadata_batch(paths)
-            if resp and hasattr(resp, 'metadata'):
-                self.put_batch(resp.metadata)
-                return resp.metadata
+            resp = self._service.get_metadata_batch(paths)
+            if resp:
+                self.put_batch(resp)
+                return resp
         except Exception as e:
             logging.debug(f"MetadataCache fetch failed: {e}")
         return {}

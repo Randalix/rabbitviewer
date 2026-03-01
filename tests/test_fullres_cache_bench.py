@@ -13,10 +13,7 @@ Run with:
 
 import json
 import os
-import socket
-import threading
 import time
-import uuid
 from collections import OrderedDict
 from pathlib import Path
 
@@ -79,16 +76,6 @@ def jpeg_on_disk(tmp_path_factory, jpeg_bytes_large):
     with open(path, "wb") as f:
         f.write(jpeg_bytes_large)
     return path
-
-
-@pytest.fixture()
-def sock_path():
-    path = f"/tmp/rv_bench_{uuid.uuid4().hex[:8]}.sock"
-    yield path
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -250,169 +237,6 @@ class TestBinaryFramingPerformance:
         stats = _bench(decode, iterations=10_000)
         print(f"\n  JSON frame decode (path response): {stats['mean_ms']:.4f} ms mean")
         assert stats["mean_ms"] < 0.1
-
-
-# ---------------------------------------------------------------------------
-# Benchmarks: Unix Socket Round-Trip
-# ---------------------------------------------------------------------------
-
-def _serve_n_requests(sock_path, responses, ready, binary_indices=None):
-    """Serve N sequential requests on the same connection.
-
-    *responses* is a list of (frame_type_byte, payload_bytes) tuples.
-    """
-    binary_indices = binary_indices or set()
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(sock_path)
-    server.listen(1)
-    ready.set()
-    conn, _ = server.accept()
-    try:
-        for frame_type, payload in responses:
-            # Read the request (consume and discard).
-            length_data = conn.recv(4)
-            if not length_data:
-                break
-            msg_len = int.from_bytes(length_data, "big")
-            _consume(conn, msg_len)
-            # Send framed response.
-            body = frame_type + payload
-            conn.sendall(len(body).to_bytes(4, "big") + body)
-    finally:
-        conn.close()
-        server.close()
-
-
-def _consume(sock, n):
-    """Read exactly n bytes from sock (discard)."""
-    remaining = n
-    while remaining > 0:
-        chunk = sock.recv(min(remaining, 65536))
-        if not chunk:
-            break
-        remaining -= len(chunk)
-
-
-class TestSocketRoundTripPerformance:
-    """Benchmarks for JSON vs binary vs direct responses over a Unix socket."""
-
-    def _run_roundtrip_bench(self, sock_path, responses, iterations, send_fn):
-        """Helper: start server, run *iterations* send/receive calls, return stats."""
-        ready = threading.Event()
-        t = threading.Thread(
-            target=_serve_n_requests, args=(sock_path, responses, ready))
-        t.start()
-        ready.wait(timeout=2)
-
-        from network.socket_client import SocketConnection
-        conn = SocketConnection(sock_path, timeout=5.0)
-        try:
-            timings = []
-            for _ in range(iterations):
-                t0 = time.perf_counter()
-                send_fn(conn)
-                timings.append((time.perf_counter() - t0) * 1000)
-            return {
-                "iterations": iterations,
-                "total_ms": sum(timings),
-                "mean_ms": sum(timings) / len(timings),
-                "min_ms": min(timings),
-                "max_ms": max(timings),
-                "p50_ms": sorted(timings)[len(timings) // 2],
-            }
-        finally:
-            conn.close()
-            t.join(timeout=5)
-
-    def test_json_roundtrip_path_response(self, sock_path):
-        """Time a full JSON round-trip returning a file path (disk-cache hit)."""
-        n = 50
-        response_dict = {"status": "success",
-                         "view_image_path": "/cache/images/abc123.jpg",
-                         "view_image_source": "disk"}
-        payload = json.dumps(response_dict).encode()
-        responses = [(FRAME_JSON, payload)] * n
-
-        stats = self._run_roundtrip_bench(
-            sock_path, responses, n,
-            lambda conn: conn.send_receive({"command": "request_view_image"}),
-        )
-        print(f"\n  JSON round-trip (path response): {stats['mean_ms']:.3f} ms mean, "
-              f"p50={stats['p50_ms']:.3f} ms")
-        assert stats["mean_ms"] < 10
-
-    def test_binary_roundtrip_small(self, sock_path, jpeg_bytes_small):
-        """Time a binary round-trip returning a small JPEG (~50 KB)."""
-        n = 50
-        responses = [(FRAME_BINARY, jpeg_bytes_small)] * n
-
-        stats = self._run_roundtrip_bench(
-            sock_path, responses, n,
-            lambda conn: conn.send_receive_binary({"command": "request_view_image"}),
-        )
-        print(f"\n  binary round-trip ({len(jpeg_bytes_small)} bytes): "
-              f"{stats['mean_ms']:.3f} ms mean, p50={stats['p50_ms']:.3f} ms")
-        assert stats["mean_ms"] < 10
-
-    def test_binary_roundtrip_large(self, sock_path, jpeg_bytes_large):
-        """Time a binary round-trip returning a large JPEG (~2-5 MB)."""
-        n = 20
-        responses = [(FRAME_BINARY, jpeg_bytes_large)] * n
-
-        stats = self._run_roundtrip_bench(
-            sock_path, responses, n,
-            lambda conn: conn.send_receive_binary({"command": "request_view_image"}),
-        )
-        print(f"\n  binary round-trip ({len(jpeg_bytes_large)} bytes): "
-              f"{stats['mean_ms']:.3f} ms mean, p50={stats['p50_ms']:.3f} ms")
-        assert stats["mean_ms"] < 50
-
-    def test_json_vs_binary_roundtrip(self, sock_path, jpeg_bytes_small):
-        """Compare JSON path response vs binary image response."""
-        n = 30
-
-        # JSON path response
-        json_payload = json.dumps({
-            "status": "success",
-            "view_image_path": "/cache/images/abc123.jpg",
-            "view_image_source": "disk",
-        }).encode()
-        json_responses = [(FRAME_JSON, json_payload)] * n
-        # Binary image response
-        binary_responses = [(FRAME_BINARY, jpeg_bytes_small)] * n
-        all_responses = json_responses + binary_responses
-
-        ready = threading.Event()
-        t = threading.Thread(
-            target=_serve_n_requests, args=(sock_path, all_responses, ready))
-        t.start()
-        ready.wait(timeout=2)
-
-        from network.socket_client import SocketConnection
-        conn = SocketConnection(sock_path, timeout=5.0)
-        try:
-            # Measure JSON round-trips
-            json_timings = []
-            for _ in range(n):
-                t0 = time.perf_counter()
-                conn.send_receive({"command": "ping"})
-                json_timings.append((time.perf_counter() - t0) * 1000)
-
-            # Measure binary round-trips
-            binary_timings = []
-            for _ in range(n):
-                t0 = time.perf_counter()
-                conn.send_receive_binary({"command": "ping"})
-                binary_timings.append((time.perf_counter() - t0) * 1000)
-
-            json_mean = sum(json_timings) / len(json_timings)
-            binary_mean = sum(binary_timings) / len(binary_timings)
-            print(f"\n  JSON path round-trip: {json_mean:.3f} ms mean")
-            print(f"  binary {len(jpeg_bytes_small)} bytes round-trip: {binary_mean:.3f} ms mean")
-            print(f"  binary overhead vs JSON: {binary_mean - json_mean:+.3f} ms")
-        finally:
-            conn.close()
-            t.join(timeout=5)
 
 
 # ---------------------------------------------------------------------------
@@ -658,46 +482,6 @@ class TestScalingWithImageSize:
             size_kb = len(jpeg_bytes) / 1024
             print(f"    {label:>12s} ({size_kb:7.1f} KB): "
                   f"{stats['mean_ms']:.4f} ms  (p50={stats['p50_ms']:.4f} ms)")
-
-    # -- socket round-trip ------------------------------------------------
-
-    def test_binary_socket_scaling(self, scaling_images):
-        """Binary Unix socket round-trip across image sizes."""
-        from network.socket_client import SocketConnection
-
-        print("\n  binary socket round-trip scaling:")
-        for label, _, jpeg_bytes in scaling_images:
-            sock_path = f"/tmp/rv_scale_{uuid.uuid4().hex[:8]}.sock"
-            iters = max(10, 100 // max(1, len(jpeg_bytes) // 500_000))
-            responses = [(FRAME_BINARY, jpeg_bytes)] * iters
-
-            ready = threading.Event()
-            t = threading.Thread(target=_serve_n_requests,
-                                 args=(sock_path, responses, ready))
-            t.start()
-            ready.wait(timeout=2)
-
-            conn = SocketConnection(sock_path, timeout=5.0)
-            try:
-                timings = []
-                for _ in range(iters):
-                    t0 = time.perf_counter()
-                    conn.send_receive_binary({"command": "request_view_image"})
-                    timings.append((time.perf_counter() - t0) * 1000)
-                mean_ms = sum(timings) / len(timings)
-                p50_ms = sorted(timings)[len(timings) // 2]
-                size_kb = len(jpeg_bytes) / 1024
-                throughput = (len(jpeg_bytes) / 1024 / 1024) / (mean_ms / 1000) if mean_ms > 0 else 0
-                print(f"    {label:>12s} ({size_kb:7.1f} KB): "
-                      f"{mean_ms:.3f} ms  (p50={p50_ms:.3f} ms, "
-                      f"{throughput:.0f} MB/s)")
-            finally:
-                conn.close()
-                t.join(timeout=5)
-                try:
-                    os.unlink(sock_path)
-                except FileNotFoundError:
-                    pass
 
     # -- disk I/O ---------------------------------------------------------
 

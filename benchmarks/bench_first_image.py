@@ -28,7 +28,6 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from statistics import mean, median, stdev
 from typing import List, Tuple
 
@@ -286,14 +285,12 @@ def main() -> None:
     print(f"Notifier registered: {t_connected*1000:.0f} ms", flush=True)
 
     # ── 5. Send get_directory_files (triggers three SourceJobs) ──────────
-    session_id = str(uuid.uuid4())
     t_scan_sent = time.perf_counter() - t0
     try:
         resp = _send_recv({
             "command":    "get_directory_files",
             "path":       directory,
             "recursive":  args.recursive,
-            "session_id": session_id,
         })
     except Exception as exc:
         print(f"ERROR: get_directory_files failed: {exc}", file=sys.stderr)

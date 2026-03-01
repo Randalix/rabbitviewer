@@ -1,24 +1,19 @@
 import threading
 from collections import deque
-from queue import PriorityQueue, Empty, Full, Queue
-import time
+from queue import PriorityQueue, Empty
 import logging
-from PySide6.QtCore import QObject, Signal
 from typing import Callable, Any, Optional, Dict, List, Set, Generator
 from core.priority import Priority, TaskState, TaskType, SourceJob, RenderTask  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-class RenderManager(QObject):
+class RenderManager:
     """
     Manages background tasks with a dependency graph, a fixed number of workers,
     a priority queue, and preemption logic for orchestrating complex workflows.
     """
-    taskCompleted = Signal()
-    shutdownFinished = Signal()
 
     def __init__(self, num_workers: int = 4):
-        super().__init__()
         self.num_workers = num_workers
         self._running = False
         self._shutting_down = threading.Event()
@@ -39,12 +34,39 @@ class RenderManager(QObject):
         self.active_jobs: Dict[str, SourceJob] = {}
         self.active_jobs_lock = threading.Lock()
         
-        # --- Notification Queue for outbound messages to the SocketServer ---
-        # Bounded to prevent unbounded memory growth under high throughput.
-        self.notification_queue: Queue = Queue(maxsize=5000)
+        # --- Notification callbacks (replaces the old Queue-based IPC) ---
+        self._notification_callbacks: List[Callable] = []
+        self._notification_callbacks_lock = threading.Lock()
 
         # why: injected post-construction by daemon; None disables cache-full gating
         self.cache_size_manager = None
+
+        # Pause/resume: when cleared, workers block before picking up new tasks.
+        self._resume_event = threading.Event()
+        self._resume_event.set()  # start unpaused
+
+    def add_notification_callback(self, cb: Callable) -> None:
+        with self._notification_callbacks_lock:
+            self._notification_callbacks.append(cb)
+
+    def _notify(self, notification) -> None:
+        with self._notification_callbacks_lock:
+            callbacks = list(self._notification_callbacks)
+        for cb in callbacks:
+            try:
+                cb(notification)
+            except Exception as e:
+                logging.warning(f"Notification callback failed: {e}", exc_info=True)
+
+    def pause(self) -> None:
+        """Pause all workers — they finish their current task then block."""
+        self._resume_event.clear()
+        logger.info("RenderManager: paused.")
+
+    def resume(self) -> None:
+        """Resume paused workers."""
+        self._resume_event.set()
+        logger.info("RenderManager: resumed.")
 
     def start(self):
         if self._running:
@@ -338,17 +360,13 @@ class RenderManager(QObject):
 
     def _emit_scan_complete(self, job: SourceJob, slice_index: int):
         """Emit a scan_complete notification for gui_scan jobs."""
-        from network import protocol
-        job_parts = job.job_id.split('::', 2)
-        session_id = job_parts[1] if len(job_parts) > 2 else None
-        job_path = job_parts[2] if len(job_parts) > 2 else job_parts[-1]
+        from core.notifications import ScanCompleteData, Notification
+        job_parts = job.job_id.split('::', 1)
+        job_path = job_parts[1] if len(job_parts) > 1 else job_parts[0]
         if "gui_scan" in job.job_id:
-            completion_data = protocol.ScanCompleteData(path=job_path, file_count=slice_index, files=[])
-            notification = protocol.Notification(type="scan_complete", data=completion_data.model_dump(), session_id=session_id)
-            try:
-                self.notification_queue.put_nowait(notification)
-            except Full:
-                logging.warning(f"Notification queue full; dropping scan_complete for job '{job.job_id}'.")
+            completion_data = ScanCompleteData(path=job_path, file_count=slice_index, files=[])
+            notification = Notification(type="scan_complete", data=completion_data.model_dump())
+            self._notify(notification)
 
     def _cooperative_generator_runner(self, job: SourceJob, slice_index: int):
         logger.debug(f"Executing job slice '{job.job_id}::{slice_index}'.")
@@ -396,31 +414,25 @@ class RenderManager(QObject):
         # 5. Process the yielded item and create child tasks.
         items_to_process = item if isinstance(item, list) else [item]
         _is_daemon_job = job.job_id.startswith("daemon_idx::")
-        job_parts = job.job_id.split('::', 2)
-        # Daemon indexing jobs have no GUI session; session_id only applies to gui_scan jobs.
-        session_id = None if _is_daemon_job else (job_parts[1] if len(job_parts) > 2 else None)
-        job_path = job_parts[2] if len(job_parts) > 2 else job_parts[-1]
+        job_parts = job.job_id.split('::', 1)
+        job_path = job_parts[1] if len(job_parts) > 1 else job_parts[0]
 
         # Suppress scan_progress for daemon indexing and post-scan task-creation
         # jobs — the GUI blindly adds every file from scan_progress to its model,
         # which would pollute the view or duplicate already-known entries.
         _suppress_progress = _is_daemon_job or job.job_id.startswith("post_scan::")
         if not _suppress_progress:
-            from network import protocol
-            notification_data = protocol.ScanProgressData(
+            from core.notifications import ScanProgressData, ImageEntryModel, Notification
+            notification_data = ScanProgressData(
                 path=job_path,
-                files=[protocol.ImageEntryModel(path=p) for p in items_to_process],
+                files=[ImageEntryModel(path=p) for p in items_to_process],
             )
-            notification = protocol.Notification(type="scan_progress", data=notification_data.model_dump(), session_id=session_id)
+            notification = Notification(type="scan_progress", data=notification_data.model_dump())
             logger.info(
                 f"[chunking] generator_runner: scan_progress for '{job.job_id}' "
-                f"slice={slice_index}, files_in_batch={len(items_to_process)}, "
-                f"queue_size={self.notification_queue.qsize()}"
+                f"slice={slice_index}, files_in_batch={len(items_to_process)}"
             )
-            try:
-                self.notification_queue.put_nowait(notification)
-            except Full:
-                logging.warning(f"Notification queue full; dropping scan_progress for job '{job.job_id}'.")
+            self._notify(notification)
 
         # Only create backend processing tasks if the job is configured to do so.
         # For fast GUI scans, this will be false.
@@ -492,6 +504,8 @@ class RenderManager(QObject):
         thread_name = threading.current_thread().name
         logging.debug(f"RenderManager: Worker {worker_id} ({thread_name}) started.")
         while self._running:
+            # Block while paused (e.g. daemon yields to GUI).
+            self._resume_event.wait()
             task: Optional[RenderTask] = None
             try:
                 # Get the next highest priority task. Short timeout to allow shutdown check.
@@ -527,10 +541,7 @@ class RenderManager(QObject):
                 if task:
                     with self.active_tasks_lock:
                         self.active_tasks.pop(worker_id, None)
-                    self.task_queue.task_done() # Indicate task is complete for queue.join()
-                    
-                    # Emit signal if shutting down (used by main_window to know when shutdown is safe)
-                    if self._shutting_down.is_set(): self.taskCompleted.emit()
+                    self.task_queue.task_done()
 
     def _execute_simple_task(self, task: RenderTask):
         """Executes a standard, short-lived function and its callback on completion."""
@@ -672,4 +683,3 @@ class RenderManager(QObject):
             self.task_graph.clear()
             
         logger.info("RenderManager: Shutdown complete.")
-        self.shutdownFinished.emit()

@@ -21,7 +21,7 @@ class ScriptAPI:
             main_window: Reference to the MainWindow instance
         """
         self.main_window = main_window
-        self.socket_client = main_window.socket_client
+        self.service = main_window.service
         self._last_operation_time = 0
         self._operation_stats = {}
 
@@ -107,17 +107,13 @@ class ScriptAPI:
         ``"remove_records"``).
         """
         try:
-            from network.protocol import TaskOperation
-            ops = [TaskOperation(name=name, file_paths=paths) for name, paths in operations]
-            response = self.socket_client.run_tasks(ops)
+            ops = [{"name": name, "file_paths": paths} for name, paths in operations]
+            response = self.service.run_tasks(ops)
             if response is None:
                 logging.error("daemon_tasks failed: no response (connection issue)")
                 return False
-            if response.status == "success":
-                logging.info(f"Submitted {len(ops)} daemon task(s): {[op.name for op in ops]}")
-                return True
-            logging.error(f"daemon_tasks failed: {getattr(response, 'message', response)}")
-            return False
+            logging.info(f"Submitted {len(ops)} daemon task(s): {[op['name'] for op in ops]}")
+            return True
         except Exception as e:
             logging.error(f"Error submitting daemon tasks: {e}", exc_info=True)
             return False
@@ -230,11 +226,9 @@ class ScriptAPI:
         dict on failure.
         """
         try:
-            resp = self.socket_client.get_metadata_batch(image_paths)
-            if resp and hasattr(resp, "metadata"):
-                return resp.metadata
-            return {}
-        except Exception as e:  # why: socket_client may raise on connection loss or malformed response
+            resp = self.service.get_metadata_batch(image_paths)
+            return resp if resp else {}
+        except Exception as e:  # why: service may raise on internal error
             logging.error(f"Error in get_metadata_batch: {e}", exc_info=True)
             return {}
 
@@ -259,11 +253,11 @@ class ScriptAPI:
         start_time = time.time()
 
         # The new API handles DB updates and file writes in one call
-        response = self.socket_client.set_rating(image_paths, rating)
+        success = self.service.set_rating(image_paths, rating)
 
         duration = time.time() - start_time
 
-        if response and response.status == "success":
+        if success:
             logging.debug(
                 f"set_rating_for_images: {num_images} images rated in {duration:.2f}s."
             )
@@ -280,7 +274,7 @@ class ScriptAPI:
             if tv and tv.filter_affects_rating():
                 tv.reapply_filters()
         else:
-            logging.error(f"ScriptAPI: Failed to set rating. Response: {response}")
+            logging.error(f"ScriptAPI: Failed to set rating.")
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message="Failed to set rating for images.", timeout=5000
@@ -290,30 +284,28 @@ class ScriptAPI:
         """Adds tags to the given images via the daemon."""
         if not image_paths or not tags:
             return
-        response = self.socket_client.set_tags(image_paths, tags)
-        if response and response.status == "success":
+        success = self.service.set_tags(image_paths, tags)
+        if success:
             logging.debug(f"set_tags_for_images: {len(tags)} tags set on {len(image_paths)} images.")
         else:
-            logging.error(f"ScriptAPI: Failed to set tags. Response: {response}")
+            logging.error("ScriptAPI: Failed to set tags.")
 
     def remove_tags_from_images(self, image_paths: List[str], tags: List[str]) -> None:
         """Removes tags from the given images via the daemon."""
         if not image_paths or not tags:
             return
-        response = self.socket_client.remove_tags(image_paths, tags)
-        if response and response.status == "success":
+        success = self.service.remove_tags(image_paths, tags)
+        if success:
             logging.debug(f"remove_tags_from_images: {len(tags)} tags removed from {len(image_paths)} images.")
         else:
-            logging.error(f"ScriptAPI: Failed to remove tags. Response: {response}")
+            logging.error("ScriptAPI: Failed to remove tags.")
 
     def get_image_tags(self, image_paths: List[str]) -> dict:
         """Returns {path: [tag_names]} for the given images."""
         if not image_paths:
             return {}
-        response = self.socket_client.get_image_tags(image_paths)
-        if response and response.status == "success":
-            return response.tags
-        return {}
+        response = self.service.get_image_tags(image_paths)
+        return response if response else {}
 
     def show_overlay(self, image_paths: List[str], renderer: str,
                      params: dict = None, position: str = "center",

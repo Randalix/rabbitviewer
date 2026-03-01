@@ -272,7 +272,7 @@ def _make_filter_view(all_files=None, is_loading=False, socket_client=None):
     view._filter_update_timer = MagicMock()
     view._virtual_grid = None
     view.labels = {}
-    view.socket_client = socket_client
+    view.service = socket_client
 
     view.filtersApplied = MagicMock()
     view._filtered_paths_ready = MagicMock()

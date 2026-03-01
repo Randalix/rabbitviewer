@@ -66,8 +66,14 @@ class _MockRenderManager:
 
 
 @pytest.fixture()
-def rm():
+def collected_notifications():
+    return []
+
+
+@pytest.fixture()
+def rm(collected_notifications):
     manager = RenderManager(num_workers=2)
+    manager.add_notification_callback(lambda n: collected_notifications.append(n))
     manager.start()
     yield manager
     manager.shutdown(timeout=5)
@@ -158,49 +164,11 @@ class TestStartIndexing:
 
 
 # ---------------------------------------------------------------------------
-# Job ID convention: daemon_idx:: survives GUI disconnect
-# ---------------------------------------------------------------------------
-
-class TestJobIdConvention:
-    def test_daemon_idx_not_matched_by_session_prefix_filter(self):
-        session_id = "abc12345-session-uuid"
-        daemon_job_ids = [
-            "daemon_idx::/home/user/Photos",
-        ]
-        gui_job_ids = [
-            f"gui_scan_tasks::{session_id}::/home/user/Photos",
-            f"gui_view_images::{session_id}::/home/user/Photos",
-        ]
-        all_jobs = daemon_job_ids + gui_job_ids
-
-        _GUI_JOB_PREFIXES = ("gui_scan", "gui_view_images")
-        to_cancel = [
-            jid for jid in all_jobs
-            if jid.startswith(_GUI_JOB_PREFIXES) and session_id in jid
-        ]
-        assert set(to_cancel) == set(gui_job_ids)
-        for djid in daemon_job_ids:
-            assert djid not in to_cancel
-
-    def test_old_substring_match_would_fail_with_uuid_in_path(self):
-        """Prefix-qualifying prevents false matches when session string appears in path."""
-        session_id = "photos"
-        daemon_job = f"daemon_idx::/home/{session_id}/Pictures"
-
-        # Old logic: substring match would incorrectly cancel this daemon job
-        assert session_id in daemon_job
-
-        # New logic: prefix-qualified — does not match
-        _GUI_JOB_PREFIXES = ("gui_scan", "gui_view_images")
-        assert not (daemon_job.startswith(_GUI_JOB_PREFIXES) and session_id in daemon_job)
-
-
-# ---------------------------------------------------------------------------
 # RenderManager: scan_progress suppression for daemon_idx:: jobs
 # ---------------------------------------------------------------------------
 
 class TestScanProgressSuppression:
-    def test_daemon_idx_jobs_produce_no_scan_progress(self, rm, tmp_path):
+    def test_daemon_idx_jobs_produce_no_scan_progress(self, rm, collected_notifications, tmp_path):
         watch = str(tmp_path / "photos")
         os.makedirs(watch)
         scanner = _StubDirectoryScanner({watch: [f"{watch}/a.jpg"]})
@@ -212,11 +180,7 @@ class TestScanProgressSuppression:
         # Poll until the job completes (no active jobs left)
         _poll_until(lambda: rm.get_all_job_ids() == [])
 
-        notifications = []
-        while not rm.notification_queue.empty():
-            notifications.append(rm.notification_queue.get_nowait())
-
-        scan_progress = [n for n in notifications if n.type == "scan_progress"]
+        scan_progress = [n for n in collected_notifications if n.type == "scan_progress"]
         assert scan_progress == [], f"daemon_idx jobs must not emit scan_progress, got {len(scan_progress)}"
 
     def test_gui_job_not_suppressed(self):
@@ -227,34 +191,3 @@ class TestScanProgressSuppression:
         assert "daemon_idx::/p".startswith("daemon_idx::")
 
 
-# ---------------------------------------------------------------------------
-# RenderManager: session_id extraction for daemon_idx:: jobs
-# ---------------------------------------------------------------------------
-
-class TestSessionIdExtraction:
-    def test_gui_job_notifications_carry_session_id(self, rm, tmp_path):
-        watch = str(tmp_path / "photos")
-        os.makedirs(watch)
-
-        def gen():
-            yield [f"{watch}/x.jpg"]
-
-        tm = _StubThumbnailManager(rm)
-        gui_job = SourceJob(
-            job_id=f"gui_scan_tasks::sess42::{watch}",
-            priority=Priority.GUI_REQUEST_LOW,
-            generator=gen(),
-            task_factory=tm.create_all_tasks_for_file,
-        )
-        rm.submit_source_job(gui_job)
-
-        # Poll until notifications arrive
-        _poll_until(lambda: not rm.notification_queue.empty())
-
-        notifications = []
-        while not rm.notification_queue.empty():
-            notifications.append(rm.notification_queue.get_nowait())
-
-        for n in notifications:
-            if n.type in ("scan_progress", "scan_complete"):
-                assert n.session_id == "sess42", f"Expected session_id 'sess42', got '{n.session_id}'"

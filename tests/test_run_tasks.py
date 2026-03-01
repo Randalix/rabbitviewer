@@ -2,7 +2,6 @@
 import os
 import time
 import threading
-import uuid
 
 import pytest
 
@@ -222,74 +221,6 @@ class TestCompoundTaskAsync:
         assert event.wait(timeout=5), "compound task did not execute"
         assert results_holder["paths"] == ["/a.jpg", "/b.jpg"]
         assert results_holder["thread"] != threading.current_thread().name
-
-
-# ===========================================================================
-#  Dispatch Handler (socket_thumbnailer)
-# ===========================================================================
-
-class TestRunTasksDispatch:
-    """Tests _handle_run_tasks via a minimal ThumbnailSocketServer."""
-
-    @pytest.fixture()
-    def server(self, tm):
-        """Minimal socket server with a short /tmp path for macOS."""
-        sock_path = f"/tmp/rv_test_{uuid.uuid4().hex[:8]}.sock"
-
-        from network.socket_thumbnailer import ThumbnailSocketServer
-        server = ThumbnailSocketServer(sock_path, tm)
-        yield server
-        server.running = False
-        try:
-            server.server_socket.close()
-        except Exception:
-            pass
-        try:
-            os.unlink(sock_path)
-        except FileNotFoundError:
-            pass
-
-    def _make_request(self, operations):
-        """Build a run_tasks request dict with pre-constructed TaskOperation objects."""
-        ops = [protocol.TaskOperation(name=n, file_paths=[protocol.ImageEntryModel(path=fp) for fp in p]) for n, p in operations]
-        return {"command": "run_tasks", "operations": ops}
-
-    def test_dispatch_run_tasks_success(self, server):
-        server.thumbnail_manager._task_operations["noop"] = lambda paths: {"ok": True}
-        req_data = self._make_request([("noop", ["/a.jpg"])])
-        response = server._handle_run_tasks(req_data)
-        assert response.status == "success"
-        assert response.queued_count == 1
-        assert response.task_id.startswith("script_task::")
-
-    def test_dispatch_run_tasks_empty_operations(self, server):
-        req_data = self._make_request([])
-        response = server._handle_run_tasks(req_data)
-        assert response.status == "error"
-
-    def test_dispatch_run_tasks_unknown_operation(self, server):
-        req_data = self._make_request([("does_not_exist", ["/a.jpg"])])
-        response = server._handle_run_tasks(req_data)
-        assert response.status == "error"
-        assert "does_not_exist" in response.message
-
-    def test_dispatch_table_routes_to_handler(self, server):
-        assert "run_tasks" in server._command_handlers
-        assert server._command_handlers["run_tasks"] == server._handle_run_tasks
-
-    def test_dispatch_command_unknown(self, server):
-        response = server._dispatch_command("nonexistent_command", {})
-        assert response.status == "error"
-        assert "Unknown command" in response.message
-
-    def test_task_id_increments(self, server):
-        server.thumbnail_manager._task_operations["noop"] = lambda paths: {}
-        req_data = self._make_request([("noop", [])])
-        r1 = server._handle_run_tasks(req_data)
-        r2 = server._handle_run_tasks(req_data)
-        id1 = int(r1.task_id.split("::")[-1])
-        id2 = int(r2.task_id.split("::")[-1])
-        assert id2 == id1 + 1
 
 
 # ===========================================================================

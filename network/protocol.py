@@ -83,7 +83,6 @@ class ImageEntryModel(Message):
 class Request(Message):
     """Base model for all client-to-server requests."""
     command: str = ""
-    session_id: Optional[str] = None
 
 @dataclasses.dataclass
 class Response(Message):
@@ -244,12 +243,7 @@ class GetImageTagsRequest(Request):
 class GetImageTagsResponse(Response):
     tags: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
 
-@dataclasses.dataclass
-class Notification(Message):
-    """Base model for all server-to-client notifications."""
-    type: str = ""
-    data: Dict[str, Any] = dataclasses.field(default_factory=dict)  # why: typed at construction (XxxData.model_dump()); validated at consumption (XxxData.model_validate()); loose dict is an intentional serialization seam
-    session_id: Optional[str] = None
+from core.notifications import Notification  # noqa: E402,F811
 
 # ==============================================================================
 #  Move Records (Daemon)
@@ -322,30 +316,13 @@ class GuiErrorResponse(Message):
     message: str = ""
 
 # ==============================================================================
-#  Notification Models
+#  Notification Models (canonical definitions in core.notifications)
 # ==============================================================================
 
-@dataclasses.dataclass
-class ScanCompleteData(Message):
-    path: str = ""
-    file_count: int = 0
-    files: List[ImageEntryModel] = dataclasses.field(default_factory=list)
-
-@dataclasses.dataclass
-class ScanProgressData(Message):
-    path: str = ""
-    files: List[ImageEntryModel] = dataclasses.field(default_factory=list)
-
-@dataclasses.dataclass
-class PreviewsReadyData(Message):
-    image_entry: ImageEntryModel = dataclasses.field(default_factory=ImageEntryModel)
-    thumbnail_path: Optional[str] = None
-    view_image_path: Optional[str] = None
-    view_image_source: Optional[str] = None  # "disk", "memory", or None
-
-@dataclasses.dataclass
-class FilesRemovedData(Message):
-    files: List[ImageEntryModel] = dataclasses.field(default_factory=list)
+from core.notifications import (  # noqa: E402
+    ScanCompleteData, ScanProgressData, PreviewsReadyData,
+    FilesRemovedData, ComfyUICompleteData,
+)
 
 # ==============================================================================
 #  ComfyUI Generation
@@ -363,9 +340,4 @@ class ComfyUIGenerateRequest(Request):
 class ComfyUIGenerateResponse(Response):
     task_id: str = ""
 
-@dataclasses.dataclass
-class ComfyUICompleteData(Message):
-    source_path: str = ""
-    result_path: str = ""
-    status: str = "success"  # "success" or "error"
-    error: str = ""
+  # ComfyUICompleteData is imported from core.notifications above

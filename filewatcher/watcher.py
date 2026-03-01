@@ -119,7 +119,19 @@ class WatchdogHandler(FileSystemEventHandler):
         if event.event_type in ['created', 'modified']:
             file_path = event.src_path
         elif event.event_type == 'moved':
-            file_path = event.dest_path
+            old_path = event.src_path
+            new_path = event.dest_path
+            logging.debug(f"Watchdog: Submitting move task for {old_path} → {new_path}")
+            self.thumbnail_manager._mem_cache_remove(old_path)
+            self.thumbnail_manager.render_manager.submit_task(
+                f"db_move::{old_path}::{new_path}",
+                Priority.HIGH,
+                self.thumbnail_manager.metadata_db.move_records,
+                [{"old_path": old_path, "new_path": new_path}],
+            )
+            # Also re-index the new path so thumbnail/metadata tasks are created
+            # if plugins are available; if not, the DB record is still preserved.
+            file_path = new_path
         elif event.event_type == 'deleted':
             logging.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
             self.thumbnail_manager._mem_cache_remove(event.src_path)

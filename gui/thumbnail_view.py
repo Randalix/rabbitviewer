@@ -13,14 +13,12 @@ from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QScrollArea, QWidget, QFrame
 )
 
-from network.socket_client import ThumbnailSocketClient
-from network import protocol
 _ValidationErrors = (ValueError, TypeError, KeyError)
 from gui.components.virtual_grid_manager import VirtualGridManager
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, RemoveFromSelectionCommand
 from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, StatusMessageEventData
 from network.daemon_signals import DaemonSignals
-from network.protocol import PreviewsReadyData, ScanProgressData, ScanCompleteData, FilesRemovedData
+from core.notifications import PreviewsReadyData, ScanProgressData, ScanCompleteData, FilesRemovedData
 from core.heatmap import compute_heatmap, THUMB_RING_COUNT
 from core.priority import Priority
 from core.event_system import ThumbnailOverlayEventData
@@ -169,7 +167,7 @@ class ThumbnailViewWidget(QFrame):
         self.display_size = int(config_manager.get("thumbnail_size", 128))
         self.cache_dir = os.path.expanduser(config_manager.get("cache_dir"))
         self.spacing = self.gui_config.get("spacing", 5)
-        self.socket_client: Optional[ThumbnailSocketClient] = None
+        self.service = None
         self.current_directory_path: Optional[str] = None
 
         # VirtualGridManager is created in _setupUI
@@ -299,8 +297,8 @@ class ThumbnailViewWidget(QFrame):
         if self._virtual_grid:
             self._virtual_grid.update_layout()
 
-    def set_socket_client(self, socket_client: ThumbnailSocketClient):
-        self.socket_client = socket_client
+    def set_service(self, service):
+        self.service = service
 
     def _set_hovered_label(self, label: ThumbnailLabel):
         if self._hovered_label != label:
@@ -592,22 +590,24 @@ class ThumbnailViewWidget(QFrame):
         thread.start()
 
     def _get_files_from_daemon(self, directory_path: str, recursive: bool = True):
-        response = self.socket_client.get_directory_files(directory_path, recursive)
-        if response and response.status == "success":
-            thumb_count = len(response.thumbnail_paths) if hasattr(response, 'thumbnail_paths') and response.thumbnail_paths else 0
+        response = self.service.get_directory_files(directory_path, recursive)
+        if response:
+            files = response.get('files', [])
+            thumbnail_paths = response.get('thumbnail_paths', {})
+            thumb_count = len(thumbnail_paths)
             logging.info(
                 "[trace] daemon response: files=%d, thumbs=%d for %s",
-                len(response.files), thumb_count, directory_path,
+                len(files), thumb_count, directory_path,
             )
             # Emit via the dedicated signal so the DB-response batch always shows
             # placeholders immediately, even if fast-scan notifications arrived first
             # and consumed the is_first_batch shortcut in _add_image_batch.
-            self._initial_files_signal.emit(sorted(f.path for f in response.files))
+            self._initial_files_signal.emit(sorted(files))
             # Feed cached thumbnail paths directly into the preview pipeline
             # so the GUI loads QImages from local cache without a daemon round-trip.
-            if hasattr(response, 'thumbnail_paths') and response.thumbnail_paths:
-                logging.info("[startup] %d cached thumbnail paths from initial response", len(response.thumbnail_paths))
-                self._initial_thumbs_signal.emit(response.thumbnail_paths)
+            if thumbnail_paths:
+                logging.info("[startup] %d cached thumbnail paths from initial response", len(thumbnail_paths))
+                self._initial_thumbs_signal.emit(thumbnail_paths)
         else:
             logging.error("Failed to request file list for %s from daemon. Response: %s", directory_path, response)
 
@@ -1103,10 +1103,10 @@ class ThumbnailViewWidget(QFrame):
         self._last_layout_file_count = 0
         # Cancel any in-flight speculative fullres tasks from the old directory
         # so workers don't waste time on files no longer visible.
-        if self._last_fullres_pairs and self.socket_client:
+        if self._last_fullres_pairs and self.service:
             paths_to_cancel = list(self._last_fullres_pairs.keys())
             self._viewport_executor.submit(
-                self.socket_client.update_viewport_heatmap,
+                self.service.update_viewport_heatmap,
                 [], [], [], paths_to_cancel,
             )
         self._last_thumb_pairs = {}
@@ -1373,8 +1373,8 @@ class ThumbnailViewWidget(QFrame):
             self._is_loading, len(self.all_files), len(self.labels),
         )
 
-        if not self.all_files or not self.socket_client:
-            logging.warning("Cannot apply filters: file list or socket client is not ready.")
+        if not self.all_files or not self.service:
+            logging.warning("Cannot apply filters: file list or service is not ready.")
             return
 
         if self._is_loading:
@@ -1399,13 +1399,13 @@ class ThumbnailViewWidget(QFrame):
     def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list):
         """Runs on _viewport_executor thread — never blocks the GUI."""
         try:
-            response = self.socket_client.get_filtered_file_paths(
+            response = self.service.get_filtered_file_paths(
                 text_filter, star_filter, tag_names=tag_filter or None
             )
-            if response and response.status == "success":
-                self._filtered_paths_ready.emit(set(p.path for p in response.paths))
+            if response is not None:
+                self._filtered_paths_ready.emit(set(response))
             else:
-                logging.error("Failed to get filtered paths from daemon. Response: %s", response)
+                logging.error("Failed to get filtered paths from daemon.")
                 self._filtered_paths_ready.emit(None)
         except Exception as e:
             # why: socket_client can raise ConnectionError/OSError/ValidationError;
@@ -1586,7 +1586,7 @@ class ThumbnailViewWidget(QFrame):
         For cached/post-scan folders the full visible viewport is requested
         at GUI_REQUEST_LOW.
         """
-        if not self.socket_client or not self.labels or not self.current_files or not self._virtual_grid:
+        if not self.service or not self.labels or not self.current_files or not self._virtual_grid:
             return
 
         columns = self._virtual_grid.columns
@@ -1736,7 +1736,7 @@ class ThumbnailViewWidget(QFrame):
             def _send_if_current(generation, up, down, fr, fc):
                 if self._viewport_generation != generation:
                     return
-                self.socket_client.update_viewport_heatmap(up, down, fr, fc)
+                self.service.update_viewport_heatmap(up, down, fr, fc)
 
             self._viewport_executor.submit(
                 _send_if_current, gen,

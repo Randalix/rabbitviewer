@@ -7,13 +7,12 @@ import logging
 import fnmatch
 import threading
 from collections import OrderedDict
-from queue import Full
 from typing import Optional, Dict, List, Set, Tuple, Any, Callable
 from core.metadata_database import MetadataDatabase
 from core.rendermanager import Priority, RenderManager, RenderTask, TaskState, TaskType
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import shutdown_all as _shutdown_exiftool_processes
-from network import protocol
+from core import notifications as protocol
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,6 @@ class ThumbnailManager:
         self.render_manager = RenderManager(num_workers=num_workers)
         self.render_manager.start()
         self.watchdog_handler = watchdog_handler
-        self.socket_server = None  # set by rabbitviewer_daemon.py after server construction
 
         self._volume_cache: Dict[str, Tuple[bool, float]] = {}   # mount_point → (ok, expiry)
         self.cache_size_manager = None  # set by daemon after construction
@@ -75,6 +73,10 @@ class ThumbnailManager:
             "send2trash": self._op_send2trash,
             "remove_records": self._op_remove_records,
         }
+
+        # Limit speculative view tasks to 1 concurrent worker so user
+        # requests at FULLRES_REQUEST are never starved.
+        self._speculative_view_sem = threading.Semaphore(1)
 
 
     # -- Fullres memory cache (LRU, byte-size bounded) -----------------------
@@ -111,11 +113,10 @@ class ThumbnailManager:
         """Load and register all format plugins. Called after the socket is bound."""
         plugin_registry.load_plugins_from_directory(self._plugins_dir, self.cache_dir, self.thumbnail_size)
         self.supported_formats = self.plugin_registry.get_supported_formats()
-        logger.info(f"ThumbnailManager supports {len(self.supported_formats)} formats: {sorted(self.supported_formats)}")
-
-    def set_socket_server(self, socket_server_instance):
-        """Sets the reference to the ThumbnailSocketServer instance."""
-        self.socket_server = socket_server_instance
+        if not self.supported_formats:
+            logger.warning("No format plugins loaded — scanning and thumbnailing will be non-functional.")
+        else:
+            logger.info(f"ThumbnailManager supports {len(self.supported_formats)} formats: {sorted(self.supported_formats)}")
 
     def start_chunked_db_cleanup(self, chunk_size: int = 250):
         """
@@ -248,14 +249,9 @@ class ThumbnailManager:
         
         return True
 
-    def _generate_thumbnail_task(self, image_path: str, expected_session_id: Optional[str] = None):
-        """
-        Worker task (Stage A/B): generates the embedded thumbnail only (~1-2s on NAS).
+    def _generate_thumbnail_task(self, image_path: str):
+        """Worker task (Stage A/B): generates the embedded thumbnail only (~1-2s on NAS).
         Sends previews_ready immediately on success. No view image is generated here.
-
-        expected_session_id is accepted for API compatibility with the priority-upgrade
-        path in request_thumbnail but is intentionally not checked — thumbnails are fast
-        enough that we always complete them so the result is cached for the next session.
         """
         if not os.path.exists(image_path):
             logger.warning(f"File not found during thumbnail processing: '{image_path}'. Queuing JIT database cleanup.")
@@ -280,10 +276,7 @@ class ThumbnailManager:
                 view_image_path=paths.get('view_image_path')
             )
             notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-            try:
-                self.render_manager.notification_queue.put_nowait(notification)
-            except Full:
-                logger.warning("Notification queue full; dropping previews_ready for %s", image_path)
+            self.render_manager._notify(notification)
             return paths.get('thumbnail_path')
 
         _, ext = os.path.splitext(image_path)
@@ -319,20 +312,33 @@ class ThumbnailManager:
             view_image_path=existing_view
         )
         notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-        try:
-            self.render_manager.notification_queue.put_nowait(notification)
-        except Full:
-            logger.warning("Notification queue full; dropping previews_ready for %s", image_path)
+        self.render_manager._notify(notification)
 
         return thumbnail_path
 
-    def _generate_view_image_task(self, image_path: str, expected_session_id: Optional[str] = None,
+    def _generate_view_image_task(self, image_path: str,
                                     cancel_event: Optional[threading.Event] = None):
         """Worker task (Stage C): generates the full-resolution view image.
 
-        Aborts before the expensive exiftool call if *expected_session_id* is
-        stale or *cancel_event* is set.
+        Aborts if *cancel_event* is set.  Speculative tasks (those with a
+        *cancel_event*) are throttled to one concurrent worker via semaphore.
         """
+        is_speculative = cancel_event is not None
+        if is_speculative:
+            # Poll cancel_event while waiting for the semaphore so we abort
+            # promptly if a FULLRES_REQUEST cancels this speculative task.
+            while not self._speculative_view_sem.acquire(timeout=0.25):
+                if cancel_event.is_set():
+                    return None
+
+        try:
+            return self._generate_view_image_task_inner(image_path, cancel_event)
+        finally:
+            if is_speculative:
+                self._speculative_view_sem.release()
+
+    def _generate_view_image_task_inner(self, image_path: str,
+                                         cancel_event: Optional[threading.Event] = None):
         if not os.path.exists(image_path):
             logger.warning(f"File not found during view image processing: '{image_path}'. Queuing JIT database cleanup.")
             self.render_manager.submit_task(
@@ -353,17 +359,6 @@ class ThumbnailManager:
             logger.debug(f"View image for {image_path} already exists. Skipping.")
             return existing_view
 
-        # Session guard: skip expensive work if the user has navigated away.
-        if (expected_session_id is not None
-                and self.socket_server is not None
-                and self.socket_server.active_gui_session_id != expected_session_id):
-            logger.debug(
-                f"Session changed ({expected_session_id[:8]}→"
-                f"{str(self.socket_server.active_gui_session_id)[:8]}), "
-                f"skipping view-image for: {os.path.basename(image_path)}"
-            )
-            return None
-
         _, ext = os.path.splitext(image_path)
         plugin = self.plugin_registry.get_plugin_for_format(ext.lower())
         if not plugin:
@@ -378,7 +373,7 @@ class ThumbnailManager:
             return None
 
         # Slow step: exiftool -JpgFromRaw, 7-17s per CR3 on NAS.
-        result = self._process_view_image_task(image_path, md5_hash)
+        result = self._process_view_image_task(image_path, md5_hash, cancel_event=cancel_event)
         if not result:
             logger.error(f"View image generation failed for {image_path}.")
             return None
@@ -393,26 +388,14 @@ class ThumbnailManager:
             view_image_source="memory" if is_mem_cached else "disk",
         )
         notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-        try:
-            self.render_manager.notification_queue.put_nowait(notification)
-        except Full:
-            logger.warning("Notification queue full; dropping previews_ready (view image) for %s", image_path)
+        self.render_manager._notify(notification)
 
         return result
 
-    def request_thumbnail(self, image_path: str, priority: Priority,
-                          gui_session_id: Optional[str] = None) -> bool:
-        """
-        Asynchronously request a thumbnail generation using the RenderManager.
+    def request_thumbnail(self, image_path: str, priority: Priority) -> bool:
+        """Asynchronously request a thumbnail generation using the RenderManager.
         This method is now primarily for upgrading task priorities, not creating them.
         The actual task creation is handled once by the 'gui_scan_tasks' SourceJob.
-
-        gui_session_id: the active GUI session at the time of the request.  It is
-        stamped onto preview tasks so that _generate_previews_task can abort early
-        (before the expensive view-image step) if the user navigates away.
-
-        Returns:
-            True if request was queued successfully, False otherwise.
         """
         if not image_path:
             return False
@@ -428,10 +411,7 @@ class ThumbnailManager:
                 view_image_path=cached.get('view_image_path')
             )
             notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-            try:
-                self.render_manager.notification_queue.put_nowait(notification)
-            except Full:
-                logger.warning("Notification queue full; dropping previews_ready notification for %s", image_path)
+            self.render_manager._notify(notification)
             return True
 
         # Slow path: check whether the task already exists in the graph.
@@ -441,16 +421,6 @@ class ThumbnailManager:
         task_id = image_path
         with self.render_manager.graph_lock:
             task_exists = task_id in self.render_manager.task_graph
-            if task_exists and gui_session_id:
-                # Stamp expected_session_id onto the pending preview task so that
-                # _generate_previews_task can detect a session change before its
-                # expensive view-image step and abort early, freeing the worker.
-                preview_task = self.render_manager.task_graph.get(task_id)
-                if (preview_task is not None
-                        and preview_task.state not in (TaskState.RUNNING,
-                                                       TaskState.COMPLETED,
-                                                       TaskState.FAILED)):
-                    preview_task.kwargs['expected_session_id'] = gui_session_id
 
         if task_exists:
             tasks_to_upgrade = {f"meta::{image_path}", task_id}
@@ -458,15 +428,10 @@ class ThumbnailManager:
             logger.debug(f"ThumbnailManager: Upgraded priority to {priority.name} for: {image_path}")
         else:
             # Task hasn't been created by the background scanner yet.
-            # Submit tasks directly without going through create_tasks_for_file —
-            # that function calls _passes_pre_checks which does blocking stat calls
-            # (os.path.isfile, os.path.getsize) that are slow on network storage.
-            # Running those on the socket handler thread serialises them and stalls
-            # the handler for every visible image. The task functions themselves
+            # Submit tasks directly — the task functions themselves
             # re-check validity when executed by a worker thread.
             self.render_manager.submit_task(
                 image_path, priority, self._generate_thumbnail_task, image_path,
-                expected_session_id=gui_session_id
             )
             self.render_manager.submit_task(
                 f"meta::{image_path}", priority, self._process_metadata_task, image_path
@@ -474,10 +439,8 @@ class ThumbnailManager:
             logger.debug(f"ThumbnailManager: Submitted on-demand tasks at {priority.name} for: {image_path}")
         return True
 
-    def batch_request_thumbnails(self, image_paths: List[str], priority: Priority,
-                                  gui_session_id: Optional[str] = None) -> int:
-        """
-        Batch version of request_thumbnail.  Checks thumbnail validity for all
+    def batch_request_thumbnails(self, image_paths: List[str], priority: Priority) -> int:
+        """Batch version of request_thumbnail.  Checks thumbnail validity for all
         paths in a single DB query, then upgrades or submits tasks with minimal
         lock contention.
 
@@ -509,10 +472,7 @@ class ThumbnailManager:
                     view_image_path=info.get('view_image_path'),
                 ).model_dump()
             )
-            try:
-                self.render_manager.notification_queue.put_nowait(notification)
-            except Full:
-                logger.warning("Notification queue full; dropping batch notification for %s", path)
+            self.render_manager._notify(notification)
 
         # For uncached paths, check task graph in a single lock scope.
         tasks_to_upgrade = set()
@@ -522,14 +482,6 @@ class ThumbnailManager:
                 if path in self.render_manager.task_graph:
                     tasks_to_upgrade.add(path)
                     tasks_to_upgrade.add(f"meta::{path}")
-                    # Stamp session ID for session-aware abort.
-                    if gui_session_id:
-                        task = self.render_manager.task_graph.get(path)
-                        if (task is not None
-                                and task.state not in (TaskState.RUNNING,
-                                                       TaskState.COMPLETED,
-                                                       TaskState.FAILED)):
-                            task.kwargs['expected_session_id'] = gui_session_id
                 else:
                     paths_to_submit.append(path)
 
@@ -541,7 +493,6 @@ class ThumbnailManager:
         for path in paths_to_submit:
             self.render_manager.submit_task(
                 path, priority, self._generate_thumbnail_task, path,
-                expected_session_id=gui_session_id
             )
             self.render_manager.submit_task(
                 f"meta::{path}", priority, self._process_metadata_task, path
@@ -552,8 +503,7 @@ class ThumbnailManager:
     # ── ComfyUI generation ──────────────────────────────────────
 
     def submit_comfyui_generation(self, image_path: str, prompt: str,
-                                   denoise: float, session_id: Optional[str] = None,
-                                   workflow: str = "") -> str:
+                                   denoise: float, workflow: str = "") -> str:
         """Submit a ComfyUI generation task. Returns the task_id."""
         if not hasattr(self, '_comfyui_client') or self._comfyui_client is None:
             from core.comfyui_client import ComfyUIClient
@@ -566,13 +516,12 @@ class ThumbnailManager:
             task_id,
             Priority.NORMAL,
             self._run_comfyui_generation,
-            image_path, prompt, denoise, session_id, workflow,
+            image_path, prompt, denoise, workflow,
         )
         return task_id
 
     def _run_comfyui_generation(self, image_path: str, prompt: str,
-                                 denoise: float, session_id: Optional[str] = None,
-                                 workflow: str = "",
+                                 denoise: float, workflow: str = "",
                                  cancel_event=None):
         """Worker function for ComfyUI generation."""
         result_path = self._comfyui_client.generate(
@@ -601,12 +550,8 @@ class ThumbnailManager:
                     path=os.path.dirname(result_path),
                     files=[protocol.ImageEntryModel(path=result_path)],
                 ).model_dump(),
-                session_id=session_id,
             )
-            try:
-                self.render_manager.notification_queue.put_nowait(scan_notification)
-            except Full:
-                logger.warning("Notification queue full; dropping scan_progress for ComfyUI result.")
+            self.render_manager._notify(scan_notification)
 
         notification_data = protocol.ComfyUICompleteData(
             source_path=image_path,
@@ -617,17 +562,11 @@ class ThumbnailManager:
         notification = protocol.Notification(
             type="comfyui_complete",
             data=notification_data.model_dump(),
-            session_id=session_id,
         )
-        try:
-            self.render_manager.notification_queue.put_nowait(notification)
-        except Full:
-            logger.warning("Notification queue full; dropping comfyui_complete.")
+        self.render_manager._notify(notification)
 
-    def request_view_image(self, image_path: str,
-                           gui_session_id: Optional[str] = None) -> Optional[str]:
-        """
-        Requests view image generation at FULLRES_REQUEST priority (highest non-shutdown).
+    def request_view_image(self, image_path: str) -> Optional[str]:
+        """Requests view image generation at FULLRES_REQUEST priority.
 
         - If the view image is in the mem cache: returns ``"memory"`` sentinel.
         - If the view image is already on disk: returns its path immediately (no task).
@@ -660,13 +599,6 @@ class ThumbnailManager:
 
         with self.render_manager.graph_lock:
             task_exists = view_task_id in self.render_manager.task_graph
-            if task_exists and gui_session_id:
-                view_task = self.render_manager.task_graph.get(view_task_id)
-                if (view_task is not None
-                        and view_task.state not in (TaskState.RUNNING,
-                                                    TaskState.COMPLETED,
-                                                    TaskState.FAILED)):
-                    view_task.kwargs['expected_session_id'] = gui_session_id
 
         if task_exists:
             self.render_manager.update_task_priorities(
@@ -677,9 +609,19 @@ class ThumbnailManager:
             self.render_manager.submit_task(
                 view_task_id, Priority.FULLRES_REQUEST,
                 self._generate_view_image_task, image_path,
-                expected_session_id=gui_session_id
             )
             logger.debug(f"ThumbnailManager: Submitted FULLRES_REQUEST view image task for: {image_path}")
+
+        # Cancel speculative view tasks to free workers for this request.
+        # Speculative tasks have a cancel_event; direct requests do not.
+        with self.render_manager.graph_lock:
+            speculative_to_cancel = [
+                tid for tid, t in self.render_manager.task_graph.items()
+                if tid.startswith("view::") and tid != view_task_id and t.cancel_event
+            ]
+        if speculative_to_cancel:
+            self.render_manager.cancel_tasks(speculative_to_cancel)
+            logger.debug("Cancelled %d speculative view tasks for FULLRES_REQUEST", len(speculative_to_cancel))
 
         return None
 
@@ -696,8 +638,7 @@ class ThumbnailManager:
             task_ids.add(f"meta::{path}")   # metadata task id
         self.render_manager.downgrade_task_priorities(task_ids, priority)
 
-    def request_speculative_fullres(self, image_path: str, priority: Priority,
-                                     gui_session_id: Optional[str] = None):
+    def request_speculative_fullres(self, image_path: str, priority: Priority):
         """Submit or upgrade a speculative fullres task for heatmap pre-caching."""
         if self.cache_size_manager and self.cache_size_manager.is_cache_full():
             return
@@ -718,7 +659,6 @@ class ThumbnailManager:
         self.render_manager.submit_task(
             view_task_id, priority,
             self._generate_view_image_task, image_path,
-            expected_session_id=gui_session_id,
             cancel_event=evt,
         )
 
@@ -728,7 +668,8 @@ class ThumbnailManager:
     def cancel_speculative_fullres_batch(self, image_paths: List[str]):
         self.render_manager.cancel_tasks([f"view::{p}" for p in image_paths])
 
-    def _process_view_image_task(self, image_path: str, md5_hash: str):
+    def _process_view_image_task(self, image_path: str, md5_hash: str,
+                                   cancel_event: Optional[threading.Event] = None):
         logger.debug(f"Starting view image task for {image_path}")
         if not os.path.exists(image_path):
             logger.warning(f"File not found for view image processing: '{image_path}'. Queuing JIT database cleanup.")
@@ -745,6 +686,9 @@ class ThumbnailManager:
         if current_view_image_path and os.path.exists(current_view_image_path):
             logger.debug(f"View image for {image_path} already exists at {current_view_image_path}. Skipping generation.")
             return current_view_image_path
+
+        if cancel_event and cancel_event.is_set():
+            return None
 
         _, ext = os.path.splitext(image_path)
         plugin = self.plugin_registry.get_plugin_for_format(ext.lower())
@@ -1055,10 +999,7 @@ class ThumbnailManager:
                     view_image_path=paths.get('view_image_path')
                 )
                 notification = protocol.Notification(type="previews_ready", data=notification_data.model_dump())
-                try:
-                    self.render_manager.notification_queue.put_nowait(notification)
-                except Full:
-                    logger.warning("Notification queue full; dropping previews_ready for %s", file_path)
+                self.render_manager._notify(notification)
             return []
 
         # Establish a baseline priority for new thumbnails. All thumbnails from a background

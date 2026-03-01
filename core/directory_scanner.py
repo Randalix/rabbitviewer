@@ -30,10 +30,12 @@ class DirectoryScanner:
         self.config_manager = config_manager
         self.min_file_size = config_manager.get("min_file_size", 8192) if config_manager else 8192
         self.ignore_patterns = config_manager.get("ignore_patterns", ["._*"]) if config_manager else ["._*"]
-        # Cache once — supported formats never change after plugin load.
-        self._supported_extensions: Set[str] = (
-            set(thumbnail_manager.get_supported_formats()) if thumbnail_manager else set()
-        )
+
+    @property
+    def _supported_extensions(self) -> Set[str]:
+        if self.thumbnail_manager:
+            return set(self.thumbnail_manager.get_supported_formats())
+        return set()
 
     def is_supported_file(self, file_path: str) -> bool:
         """Single-stat check: regular file, not ignored, supported extension, big enough.
@@ -91,15 +93,13 @@ class DirectoryScanner:
 
         return found_files
 
-    def scan_directory(self, directory_path: str, priority: Priority = Priority.GUI_REQUEST_LOW, recursive: bool = True, session_id: str = None) -> None:
-        """
-        Initiates an asynchronous, incremental scan of a directory by submitting a SourceJob.
-        """
+    def scan_directory(self, directory_path: str, priority: Priority = Priority.GUI_REQUEST_LOW, recursive: bool = True) -> None:
+        """Initiates an asynchronous, incremental scan of a directory by submitting a SourceJob."""
         if not self.thumbnail_manager:
             logging.warning("DirectoryScanner: ThumbnailManager not available, cannot start scan job.")
             return
 
-        job_id = f"gui_scan::{session_id or 'default'}::{directory_path}"
+        job_id = f"gui_scan::{directory_path}"
         logging.info(f"Submitting scan job '{job_id}' with priority {priority.name}")
 
         job = SourceJob(
@@ -170,7 +170,11 @@ class DirectoryScanner:
             ctx.discovered_files.extend(batch)
             yield batch
 
-        ctx.ghost_files = list(ctx.db_file_set)
+        # Only mark ghosts if we had formats to scan for. With 0 supported
+        # extensions the scan rejects everything — treating all DB entries as
+        # ghosts would cause irreversible data loss.
+        if self._supported_extensions:
+            ctx.ghost_files = list(ctx.db_file_set)
 
     def scan_single_directory_no_queue(self, directory_path: str) -> List[str]:
         """Scans a single directory non-recursively and returns supported files."""

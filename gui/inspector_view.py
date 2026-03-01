@@ -11,8 +11,7 @@ from PySide6.QtGui import QPainter, QImage
 from .picture_base import PictureBase
 from core.event_system import event_system, EventType, InspectorEventData
 from network.daemon_signals import DaemonSignals
-from network.protocol import PreviewsReadyData
-from network.socket_client import ThumbnailSocketClient
+from core.notifications import PreviewsReadyData
 from plugins.video_plugin import VIDEO_EXTENSIONS
 
 _VIDEO_EXTENSIONS = frozenset(VIDEO_EXTENSIONS)
@@ -101,7 +100,7 @@ class InspectorView(QWidget):
 
         event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
 
-        self.socket_client: Optional[ThumbnailSocketClient] = None
+        self.socket_client = None
         self._daemon_signals: DaemonSignals | None = None
 
     def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
@@ -218,20 +217,20 @@ class InspectorView(QWidget):
         try:
             response = self.socket_client.get_previews_status([image_path])
             view_image_path = ""
-            if response and response.status == "success":
-                status = response.statuses.get(image_path)
-                if status and status.view_image_ready and status.view_image_path:
-                    view_image_path = status.view_image_path
+            if response:
+                status = response.get(image_path, {})
+                if status.get('view_image_ready') and status.get('view_image_path'):
+                    view_image_path = status['view_image_path']
 
             if not view_image_path:
                 # Request generation; result will arrive via previews_ready daemon notification.
                 result = self.socket_client.request_view_image(image_path)
-                if result and result.status == "success":
-                    if result.view_image_source == "memory":
+                if result:
+                    if result.get('view_image_source') == "memory":
                         # Mem-cached — emit sentinel so main thread fetches bytes.
                         view_image_path = "memory"
-                    elif result.view_image_path:
-                        view_image_path = result.view_image_path
+                    elif result.get('view_image_path'):
+                        view_image_path = result['view_image_path']
         except Exception as e:
             # why: socket calls can raise ConnectionError/OSError/TimeoutError on
             # NAS drop or pool exhaustion; log and emit empty path to unblock GUI.
@@ -458,8 +457,8 @@ class InspectorView(QWidget):
         self.set_zoom_factor(self._zoom_factor * factor)
         event.accept()
 
-    def set_socket_client(self, socket_client: ThumbnailSocketClient):
-        self.socket_client = socket_client
+    def set_service(self, service):
+        self.socket_client = service
 
     # --------------------------------------------------------- video scrub player
 

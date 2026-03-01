@@ -96,9 +96,7 @@ class TestMetadataCache:
 
     def test_fetch_and_cache_success(self):
         mock_client = MagicMock()
-        resp = MagicMock()
-        resp.metadata = {"/img.jpg": {"rating": 5, "iso": 400}}
-        mock_client.get_metadata_batch.return_value = resp
+        mock_client.get_metadata_batch.return_value = {"/img.jpg": {"rating": 5, "iso": 400}}
 
         cache = self._make_cache(mock_client)
         result = cache.fetch_and_cache(["/img.jpg"])

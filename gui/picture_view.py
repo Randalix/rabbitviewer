@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import Qt, Signal, Slot, QPointF, QSizeF, QPoint
+from PySide6.QtCore import Qt, Signal, Slot, QPointF, QSizeF, QPoint, QTimer
 from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QKeyEvent
 
 import logging
@@ -9,8 +9,7 @@ import threading
 from .picture_base import PictureBase
 from core.event_system import event_system, EventType, InspectorEventData, StatusMessageEventData, StatusSection
 from network.daemon_signals import DaemonSignals
-from network.protocol import PreviewsReadyData
-from network.socket_client import ThumbnailSocketClient
+from core.notifications import PreviewsReadyData
 
 class PictureView(QWidget):
 
@@ -39,8 +38,8 @@ class PictureView(QWidget):
 
         self.socket_client = None # Will be set by main window
 
-    def set_socket_client(self, socket_client: ThumbnailSocketClient):
-        self.socket_client = socket_client
+    def set_service(self, service):
+        self.socket_client = service
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:
@@ -84,17 +83,27 @@ class PictureView(QWidget):
         # view_image_path set → disk-cached. Neither → generation queued.
         result = self.socket_client.request_view_image(image_path)
 
-        if result is None or result.status != "success":
-            logging.error(f"Failed to request view image: {image_path}")
+        if result is None:
+            logging.warning(f"Failed to request view image (comm failure), will retry: {image_path}")
+            self._picture_base.setImage(QImage())
+            self._current_path = image_path
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE,
+                source="picture_view",
+                timestamp=time.time(),
+                message="Connecting...",
+                section=StatusSection.PROCESS,
+            ))
+            QTimer.singleShot(1000, lambda p=image_path: self._retry_load(p))
             return False
 
-        if result.view_image_source == "memory":
+        if result.get('view_image_source') == "memory":
             # Mem-cached on daemon — fetch raw bytes via dedicated call.
             image_bytes = self.socket_client.get_cached_view_image(image_path)
             success = self._picture_base.loadImageFromBytes(image_bytes) if image_bytes else False
-        elif result.view_image_path:
+        elif result.get('view_image_path'):
             # Disk-cached — load from path.
-            success = self._picture_base.loadImageFromPath(result.view_image_path)
+            success = self._picture_base.loadImageFromPath(result['view_image_path'])
         else:
             # Generation queued — show placeholder and wait for previews_ready notification.
             self._picture_base.setImage(QImage())  # Clear the view
@@ -169,8 +178,8 @@ class PictureView(QWidget):
         if self.socket_client:
             try:
                 resp = self.socket_client.get_metadata_batch([path])
-                if resp and path in resp.metadata:
-                    rating = resp.metadata[path].get("rating", 0) or 0
+                if resp and path in resp:
+                    rating = resp[path].get("rating", 0) or 0
             except Exception as e:  # why: socket calls can raise ConnectionError/OSError/TimeoutError; emit zero so status bar gets a value
                 logging.debug(f"Rating fetch failed for {path}: {e}")
         self._rating_ready.emit(path, int(rating))
@@ -198,6 +207,11 @@ class PictureView(QWidget):
         if view_ready and data.image_entry.path == self._current_path:
             logging.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
             self.loadImage(data.image_entry.path, force_reload=True)
+
+    def _retry_load(self, image_path: str) -> None:
+        """Retry loading an image after a transient comm failure, if still current."""
+        if self._current_path == image_path:
+            self.loadImage(image_path, force_reload=True)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         if not self._picture_base.has_image():

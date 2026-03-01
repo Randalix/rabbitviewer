@@ -11,7 +11,6 @@ from core.event_system import (
     event_system, EventType, InspectorEventData,
     StatusMessageEventData, StatusSection,
 )
-from network.socket_client import ThumbnailSocketClient
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ class VideoView(QWidget):
 
         self._current_path: str | None = None
         self._duration: float = 0.0
-        self.socket_client: ThumbnailSocketClient | None = None
+        self.socket_client = None
 
         self._player = None
         self._frame: QImage | None = None
@@ -45,8 +44,8 @@ class VideoView(QWidget):
         self._status_timer.setInterval(250)
         self._status_timer.timeout.connect(self._update_status)
 
-    def set_socket_client(self, client: ThumbnailSocketClient):
-        self.socket_client = client
+    def set_service(self, service):
+        self.socket_client = service
 
     @property
     def current_path(self) -> str | None:

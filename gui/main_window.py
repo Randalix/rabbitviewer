@@ -21,7 +21,6 @@ from .menu_registry import build_menus
 from scripts.script_manager import ScriptManager, ScriptAPI
 from core.event_system import event_system, EventType, InspectorEventData, MouseEventData, KeyEventData, ViewEventData, EventData, StatusMessageEventData, StatusSection
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
-from network.socket_client import ThumbnailSocketClient
 from network.gui_server import GuiServer
 from network.daemon_signals import DaemonSignals
 
@@ -42,11 +41,11 @@ def _is_video(path: str) -> bool:
 class MainWindow(QMainWindow):
     _hover_rating_ready = Signal(str, int)  # (path, rating)
     _hover_metadata_ready = Signal(str)  # path — emitted after cache populated
-    def __init__(self, config_manager, socket_client: ThumbnailSocketClient,
+    def __init__(self, config_manager, service,
                  daemon_signals: DaemonSignals):
         super().__init__()
         self.config_manager = config_manager
-        self.socket_client = socket_client
+        self.service = service
         self.daemon_signals = daemon_signals
 
         self.central_widget = QWidget()
@@ -65,7 +64,7 @@ class MainWindow(QMainWindow):
         self.current_hovered_image = None
         self.inspector_views: List[InspectorView] = []
         self._inspector_slot = 0
-        self.metadata_cache = MetadataCache(self.socket_client)
+        self.metadata_cache = MetadataCache(self.service)
         self.info_panels: List[InfoPanelShell] = []
         self._info_panel_slot = 0
 
@@ -118,7 +117,7 @@ class MainWindow(QMainWindow):
 
     def _setup_thumbnail_view(self):
         self.thumbnail_view = ThumbnailViewWidget(self.config_manager)
-        self.thumbnail_view.set_socket_client(self.socket_client)
+        self.thumbnail_view.set_service(self.service)
         self.thumbnail_view.set_daemon_signals(self.daemon_signals)
         self.thumbnail_view.doubleClicked.connect(self._handle_thumbnail_double_click)
         self.thumbnail_view.benchmarkComplete.connect(self._handle_benchmark_result)
@@ -191,7 +190,7 @@ class MainWindow(QMainWindow):
             ).start()
 
     def _fetch_hover_rating(self, path: str):
-        if not self.socket_client:
+        if not self.service:
             return
         try:
             result = self.metadata_cache.fetch_and_cache([path])
@@ -226,10 +225,10 @@ class MainWindow(QMainWindow):
             panel.refresh_if_showing(path)
 
     def _prefetch_view_image_async(self, path: str):
-        if not self.socket_client or not path:
+        if not self.service or not path:
             return
         threading.Thread(
-            target=self.socket_client.request_view_image,
+            target=self.service.request_view_image,
             args=(path,),
             daemon=True,
         ).start()
@@ -253,7 +252,7 @@ class MainWindow(QMainWindow):
         from .inspector_view import InspectorView
         inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot)
         self._inspector_slot += 1
-        inspector.set_socket_client(self.socket_client)
+        inspector.set_service(self.service)
         inspector.set_daemon_signals(self.daemon_signals)
         self.inspector_views.append(inspector)
         inspector.closed.connect(lambda: self._on_inspector_closed(inspector))
@@ -346,12 +345,12 @@ class MainWindow(QMainWindow):
             if self.thumbnail_view:
                 self.thumbnail_view.apply_tag_filter([])
         else:
-            if self.thumbnail_view and self.thumbnail_view.socket_client:
+            if self.thumbnail_view and self.thumbnail_view.service:
                 dir_path = self.thumbnail_view.current_directory_path or ""
-                tags_resp = self.thumbnail_view.socket_client.get_tags(dir_path)
+                tags_resp = self.thumbnail_view.service.get_tags(dir_path)
                 if tags_resp:
-                    dir_tags = [t.name for t in tags_resp.directory_tags] if tags_resp.directory_tags else []
-                    global_tags = [t.name for t in tags_resp.global_tags] if tags_resp.global_tags else []
+                    dir_tags = [t['name'] for t in tags_resp.get('directory_tags', [])]
+                    global_tags = [t['name'] for t in tags_resp.get('global_tags', [])]
                     self.tag_filter_dialog.set_available_tags(dir_tags, global_tags)
             self.tag_filter_dialog.show()
             self.tag_filter_dialog.raise_()
@@ -372,13 +371,13 @@ class MainWindow(QMainWindow):
 
     def open_tag_editor(self):
         """Open the tag assignment popup for selected images."""
-        if not self.thumbnail_view or not self.thumbnail_view.socket_client:
+        if not self.thumbnail_view or not self.thumbnail_view.service:
             return
         selected = list(self.script_api.get_selected_images())
         if not selected:
             return
 
-        sc = self.thumbnail_view.socket_client
+        sc = self.thumbnail_view.service
 
         if not self.tag_editor_dialog:
             self.tag_editor_dialog = TagEditorDialog(self)
@@ -390,26 +389,26 @@ class MainWindow(QMainWindow):
         tags_resp = sc.get_tags(dir_path)
 
         # Intersection of tags across all selected images
-        if existing_resp and existing_resp.status == "success" and existing_resp.tags:
-            tag_sets = [set(v) for v in existing_resp.tags.values()]
+        if existing_resp:
+            tag_sets = [set(v) for v in existing_resp.values()]
             common_tags = sorted(set.intersection(*tag_sets)) if tag_sets else []
         else:
             common_tags = []
 
-        dir_tags = [t.name for t in tags_resp.directory_tags] if tags_resp and tags_resp.directory_tags else []
-        global_tags = [t.name for t in tags_resp.global_tags] if tags_resp and tags_resp.global_tags else []
+        dir_tags = [t['name'] for t in tags_resp.get('directory_tags', [])] if tags_resp else []
+        global_tags = [t['name'] for t in tags_resp.get('global_tags', [])] if tags_resp else []
 
         self._tag_editor_targets = selected
         self.tag_editor_dialog.open_for_images(len(selected), common_tags, dir_tags, global_tags)
 
     def _on_tags_confirmed(self, tags_to_add: list, tags_to_remove: list):
         """Handle tag editor confirmation."""
-        if not self.thumbnail_view or not self.thumbnail_view.socket_client:
+        if not self.thumbnail_view or not self.thumbnail_view.service:
             return
         selected = self._tag_editor_targets
         if not selected:
             return
-        sc = self.thumbnail_view.socket_client
+        sc = self.thumbnail_view.service
         if tags_to_add:
             sc.set_tags(selected, tags_to_add)
         if tags_to_remove:
@@ -435,14 +434,14 @@ class MainWindow(QMainWindow):
 
     def _on_comfyui_generate(self, image_paths: list, workflow_json: str):
         def _send():
-            if not self.socket_client:
+            if not self.service:
                 return
             for path in image_paths:
-                resp = self.socket_client.comfyui_generate(path, workflow=workflow_json)
-                if resp and hasattr(resp, 'task_id'):
-                    logging.debug(f"ComfyUI generation queued: {resp.task_id}")
+                task_id = self.service.comfyui_generate(path, workflow=workflow_json)
+                if task_id:
+                    logging.debug(f"ComfyUI generation queued: {task_id}")
                 else:
-                    logging.warning(f"ComfyUI generate returned no task_id: {resp!r}")
+                    logging.warning(f"ComfyUI generate returned no task_id for {path}")
 
         threading.Thread(target=_send, daemon=True).start()
 
@@ -682,7 +681,7 @@ class MainWindow(QMainWindow):
                 from gui.video_view import VideoView
                 self.video_view = VideoView()
                 self.video_view.escapePressed.connect(self.close_video_view)
-                self.video_view.set_socket_client(self.socket_client)
+                self.video_view.set_service(self.service)
                 self.stacked_widget.addWidget(self.video_view)
             self.video_view.loadVideo(video_path)
             self._hover_clear_timer.stop()
@@ -704,7 +703,7 @@ class MainWindow(QMainWindow):
                 from .picture_view import PictureView
                 self.picture_view = PictureView()
                 self.picture_view.escapePressed.connect(self.close_picture_view)
-                self.picture_view.set_socket_client(self.socket_client)
+                self.picture_view.set_service(self.service)
                 self.picture_view.set_daemon_signals(self.daemon_signals)
                 self.stacked_widget.addWidget(self.picture_view)
             self.picture_view.loadImage(image_path)

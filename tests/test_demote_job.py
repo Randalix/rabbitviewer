@@ -45,7 +45,7 @@ class TestDemoteJob:
                 yield f"/img{i}.jpg"
 
         job = SourceJob(
-            job_id="gui_scan::sess1::/photos",
+            job_id="gui_scan::/photos",
             priority=Priority(80),
             generator=gen(),
             task_factory=lambda path, pri: [],
@@ -53,15 +53,15 @@ class TestDemoteJob:
         rm.submit_source_job(job)
 
         # Demote before the generator finishes all items.
-        rm.demote_job("gui_scan::sess1::/photos", Priority.ORPHAN_SCAN)
+        rm.demote_job("gui_scan::/photos", Priority.ORPHAN_SCAN)
 
         with rm.active_jobs_lock:
-            demoted = rm.active_jobs.get("gui_scan::sess1::/photos")
+            demoted = rm.active_jobs.get("gui_scan::/photos")
         assert demoted is not None
         assert demoted.priority == Priority.ORPHAN_SCAN
 
         # Let it finish.
-        _poll(lambda: "gui_scan::sess1::/photos" not in rm.get_all_job_ids())
+        _poll(lambda: "gui_scan::/photos" not in rm.get_all_job_ids())
 
     def test_demote_nonexistent_is_noop(self, rm: RenderManager):
         """demote_job on a missing job_id does not raise."""
@@ -74,20 +74,20 @@ class TestDemoteJob:
                 yield f"/img{i}.jpg"
 
         job = SourceJob(
-            job_id="gui_scan::sess2::/pics",
+            job_id="gui_scan::/pics",
             priority=Priority(80),
             generator=gen(),
             task_factory=lambda path, pri: [],
         )
         rm.submit_source_job(job)
-        rm.demote_job("gui_scan::sess2::/pics", Priority.ORPHAN_SCAN)
+        rm.demote_job("gui_scan::/pics", Priority.ORPHAN_SCAN)
 
         with rm.active_jobs_lock:
-            j = rm.active_jobs.get("gui_scan::sess2::/pics")
+            j = rm.active_jobs.get("gui_scan::/pics")
         assert j is not None
         assert not j.is_cancelled()
 
-        _poll(lambda: "gui_scan::sess2::/pics" not in rm.get_all_job_ids())
+        _poll(lambda: "gui_scan::/pics" not in rm.get_all_job_ids())
 
     def test_demoted_job_completes(self, rm: RenderManager):
         """A demoted job still runs to completion at the lower priority."""
@@ -102,16 +102,16 @@ class TestDemoteJob:
             return []
 
         job = SourceJob(
-            job_id="gui_scan::sess3::/dir",
+            job_id="gui_scan::/dir",
             priority=Priority(80),
             generator=gen(),
             task_factory=factory,
             create_tasks=True,
         )
         rm.submit_source_job(job)
-        rm.demote_job("gui_scan::sess3::/dir", Priority.ORPHAN_SCAN)
+        rm.demote_job("gui_scan::/dir", Priority.ORPHAN_SCAN)
 
-        assert _poll(lambda: "gui_scan::sess3::/dir" not in rm.get_all_job_ids()), \
+        assert _poll(lambda: "gui_scan::/dir" not in rm.get_all_job_ids()), \
             "Demoted job should still complete"
         assert sorted(results) == ["/a.jpg", "/b.jpg"]
 
@@ -122,75 +122,17 @@ class TestDemoteJob:
                 yield f"/img{i}.jpg"
 
         job = SourceJob(
-            job_id="gui_scan::sess4::/dir",
+            job_id="gui_scan::/dir2",
             priority=Priority(80),
             generator=gen(),
             task_factory=lambda p, pr: [],
         )
         rm.submit_source_job(job)
-        rm.demote_job("gui_scan::sess4::/dir", Priority.ORPHAN_SCAN)
+        rm.demote_job("gui_scan::/dir2", Priority.ORPHAN_SCAN)
 
-        assert "gui_scan::sess4::/dir" in rm.get_all_job_ids()
+        assert "gui_scan::/dir2" in rm.get_all_job_ids()
 
-        _poll(lambda: "gui_scan::sess4::/dir" not in rm.get_all_job_ids())
-
-
-# ---------------------------------------------------------------------------
-# Job ID prefix matching for disconnect handler
-# ---------------------------------------------------------------------------
-
-class TestDisconnectPrefixMatching:
-    def test_gui_scan_and_post_scan_matched(self):
-        """Both gui_scan and post_scan jobs are matched for demotion."""
-        session_id = "abc12345-session-uuid"
-        all_jobs = [
-            f"gui_scan::{session_id}::/photos",
-            f"post_scan::{session_id}::/photos",
-            "daemon_idx::/home/user/Photos",
-            "watchdog::/photos/new.jpg",
-        ]
-
-        _GUI_JOB_PREFIXES = ("gui_scan", "post_scan")
-        to_demote = [
-            jid for jid in all_jobs
-            if jid.startswith(_GUI_JOB_PREFIXES) and session_id in jid
-        ]
-        assert set(to_demote) == {
-            f"gui_scan::{session_id}::/photos",
-            f"post_scan::{session_id}::/photos",
-        }
-
-    def test_daemon_and_watchdog_not_matched(self):
-        """daemon_idx and watchdog jobs survive disconnect."""
-        session_id = "sess42"
-        all_jobs = [
-            "daemon_idx::/photos",
-            "watchdog::/photos/x.jpg",
-            f"gui_scan::{session_id}::/photos",
-        ]
-
-        _GUI_JOB_PREFIXES = ("gui_scan", "post_scan")
-        to_demote = [
-            jid for jid in all_jobs
-            if jid.startswith(_GUI_JOB_PREFIXES) and session_id in jid
-        ]
-        assert "daemon_idx::/photos" not in to_demote
-        assert "watchdog::/photos/x.jpg" not in to_demote
-
-    def test_wrong_session_not_matched(self):
-        """Jobs from a different session are not demoted."""
-        all_jobs = [
-            "gui_scan::sessA::/photos",
-            "post_scan::sessA::/photos",
-            "gui_scan::sessB::/other",
-        ]
-        _GUI_JOB_PREFIXES = ("gui_scan", "post_scan")
-        to_demote = [
-            jid for jid in all_jobs
-            if jid.startswith(_GUI_JOB_PREFIXES) and "sessA" in jid
-        ]
-        assert "gui_scan::sessB::/other" not in to_demote
-        assert len(to_demote) == 2
+        _poll(lambda: "gui_scan::/dir2" not in rm.get_all_job_ids())
 
 
 # ---------------------------------------------------------------------------

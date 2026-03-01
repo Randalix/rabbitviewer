@@ -16,7 +16,7 @@ import time
 
 from .workflow_form import WorkflowFormWidget
 from network.daemon_signals import DaemonSignals
-from network.protocol import ComfyUICompleteData
+from core.notifications import ComfyUICompleteData
 
 _BUILTIN_LABEL = "(built-in: Flux Kontext)"
 

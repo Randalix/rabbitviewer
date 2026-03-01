@@ -2,13 +2,14 @@
 
 DaemonSignals(QObject) exposes one Qt Signal per notification type.
 Thread bridging is handled automatically by Qt's QueuedConnection: dispatch()
-is called from the NotificationListener background thread, and connected slots
-run on the receiver's thread (the main thread for all GUI subscribers).
+is called from a background thread, and connected slots run on the receiver's
+thread (the main thread for all GUI subscribers).
 """
 import logging
 from PySide6.QtCore import QObject, Signal
 
-from .protocol import (
+from core.notifications import (
+    Notification,
     PreviewsReadyData,
     ScanProgressData,
     ScanCompleteData,
@@ -23,7 +24,7 @@ class DaemonSignals(QObject):
     """One typed Signal per daemon notification type.
 
     Create one instance after QApplication exists and pass it to both
-    NotificationListener (producer) and each GUI subscriber (consumer).
+    the RenderManager notification callback and each GUI subscriber.
     """
 
     previews_ready   = Signal(object)  # PreviewsReadyData
@@ -32,11 +33,20 @@ class DaemonSignals(QObject):
     files_removed    = Signal(object)  # FilesRemovedData
     comfyui_complete = Signal(object)  # ComfyUICompleteData
 
+    def dispatch_notification(self, notification: Notification) -> None:
+        """Accept a Notification object and emit the matching signal.
+
+        Called from RenderManager worker threads via the notification callback.
+        The notification.data dict is validated into the appropriate typed
+        dataclass before emission.
+        """
+        self.dispatch(notification.type, notification.data)
+
     def dispatch(self, notification_type: str, data: dict) -> None:
         """Validate *data* and emit the matching signal.
 
-        Called from the NotificationListener thread. Qt delivers connected
-        slots on their owner thread via AutoConnection.
+        Called from a background thread. Qt delivers connected slots on their
+        owner thread via AutoConnection.
         """
         try:
             match notification_type:
