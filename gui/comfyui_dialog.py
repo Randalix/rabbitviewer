@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 import json
 import os
+import time
 
 from .workflow_form import WorkflowFormWidget
 from network.daemon_signals import DaemonSignals
@@ -120,7 +121,7 @@ class ComfyUIDialog(QDialog):
         self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
         self.resize(440, 480)
 
-        self._image_path = ""
+        self._image_paths: list = []
         self._workflow_path = None  # None = built-in
         self._current_workflow: dict = {}  # raw workflow dict for patching
         self._daemon_signals: DaemonSignals | None = None
@@ -223,9 +224,13 @@ class ComfyUIDialog(QDialog):
 
     # ── Actions ───────────────────────────────────────────────────
 
-    def open_for_image(self, image_path: str):
-        self._image_path = image_path
-        self._image_label.setText(f"Image: {os.path.basename(image_path)}")
+    def open_for_images(self, image_paths: list):
+        self._image_paths = list(image_paths)
+        n = len(self._image_paths)
+        if n == 1:
+            self._image_label.setText(f"Image: {os.path.basename(self._image_paths[0])}")
+        else:
+            self._image_label.setText(f"Images: {n} selected")
         self._status_label.setText("")
         self._generate_btn.setEnabled(True)
         self._populate_workflow_combo()
@@ -234,19 +239,14 @@ class ComfyUIDialog(QDialog):
         self.raise_()
         self.activateWindow()
 
-    def set_status(self, text: str):
-        self._status_label.setText(text)
-        self._generate_btn.setEnabled(True)
-
     def _on_generate(self):
-        if not self._image_path or not self._current_workflow:
+        if not self._image_paths or not self._current_workflow:
             return
         patched = self._form.patch_workflow(self._current_workflow)
         workflow_json = json.dumps(patched)
-        self._generate_btn.setEnabled(False)
-        self._status_label.setText("Status: Generating...")
-        # prompt and denoise are vestigial — the full workflow carries values.
-        self.generate_requested.emit(self._image_path, "", 0.0, workflow_json)
+        for path in self._image_paths:
+            self.generate_requested.emit(path, "", 0.0, workflow_json)
+        self.close()
 
     # ── Notification handling ────────────────────────────────────
 
@@ -265,12 +265,17 @@ class ComfyUIDialog(QDialog):
 
     @Slot(object)
     def _on_comfyui_complete(self, data: ComfyUICompleteData) -> None:
-        if data.source_path != self._image_path:
+        if data.source_path not in self._image_paths:
             return
-        if data.status == "success" and data.result_path:
-            self.set_status(f"Complete: {os.path.basename(data.result_path)}")
-        else:
-            self.set_status(f"Error: {data.error or 'Generation failed'}")
+        if data.status != "success":
+            from core.event_system import event_system, EventType, StatusMessageEventData
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE,
+                source="comfyui",
+                timestamp=time.time(),
+                message=f"ComfyUI error: {data.error or 'failed'} — {os.path.basename(data.source_path)}",
+                timeout=8000,
+            ))
 
     def closeEvent(self, event):
         if self._daemon_signals:

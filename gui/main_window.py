@@ -424,7 +424,6 @@ class MainWindow(QMainWindow):
         selected = self.get_effective_selection()
         if not selected:
             return
-        image_path = selected[0]
 
         if not self.comfyui_dialog:
             from .comfyui_dialog import ComfyUIDialog
@@ -432,7 +431,7 @@ class MainWindow(QMainWindow):
             self.comfyui_dialog.generate_requested.connect(self._on_comfyui_generate)
             self.comfyui_dialog.set_daemon_signals(self.daemon_signals)
 
-        self.comfyui_dialog.open_for_image(image_path)
+        self.comfyui_dialog.open_for_images(selected)
 
     def _on_comfyui_generate(self, image_path: str, prompt: str, denoise: float,
                              workflow_json: str = ""):
