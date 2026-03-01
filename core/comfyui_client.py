@@ -3,15 +3,17 @@
 Pure stdlib — no Qt dependency.  Runs on RenderManager worker threads.
 """
 
+import io
 import json
 import logging
-import mimetypes
 import time
 import uuid
 import urllib.request
 import urllib.error
 from pathlib import Path
 from typing import Optional
+
+from PIL import Image, ImageCms
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +80,20 @@ class ComfyUIClient:
     # ── Internals ────────────────────────────────────────────────
 
     def _upload_image(self, image_path: str) -> str:
-        """Multipart POST to /upload/image. Returns server-side filename."""
-        path = Path(image_path)
+        """Multipart POST to /upload/image. Returns server-side filename.
+
+        Converts to sRGB before uploading so ComfyUI always receives
+        standard color-space data regardless of the source profile.
+        """
+        image_bytes, filename = self._prepare_srgb(image_path)
         boundary = uuid.uuid4().hex
-        filename = path.name
-        mime = mimetypes.guess_type(str(path))[0] or "image/png"
+        mime = "image/png"
 
         body = (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
             f"Content-Type: {mime}\r\n\r\n"
-        ).encode() + path.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+        ).encode() + image_bytes + f"\r\n--{boundary}--\r\n".encode()
 
         req = urllib.request.Request(
             f"{self.base_url}/upload/image",
@@ -100,6 +105,38 @@ class ComfyUIClient:
             result = json.loads(resp.read())
         logger.debug("ComfyUI upload result: %s", result)
         return result["name"]
+
+    @staticmethod
+    def _prepare_srgb(image_path: str) -> tuple:
+        """Open *image_path*, convert to sRGB, return ``(png_bytes, filename)``.
+
+        Falls back to the raw file bytes for formats PIL cannot open (RAW, etc.).
+        """
+        try:
+            img = Image.open(image_path)
+        except (OSError, Image.UnidentifiedImageError):
+            # RAW or unsupported format — upload as-is.
+            logger.debug("PIL cannot open %s, uploading raw bytes", image_path)
+            p = Path(image_path)
+            return p.read_bytes(), p.name
+
+        srgb_profile = ImageCms.createProfile("sRGB")
+        try:
+            icc = img.info.get("icc_profile")
+            if icc:
+                src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+                dst = ImageCms.ImageCmsProfile(srgb_profile)
+                img = ImageCms.profileToProfile(img, src, dst, outputMode="RGB")
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+        except (ImageCms.PyCMSError, OSError) as e:
+            logger.warning("ICC conversion failed for %s, falling back to mode convert: %s", image_path, e)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        filename = Path(image_path).stem + ".png"
+        return buf.getvalue(), filename
 
     @staticmethod
     def _normalize_workflow(raw: dict) -> dict:
