@@ -82,7 +82,7 @@ class NotificationListener(threading.Thread):
                                 notification.get("data", {}),
                             )
                         except json.JSONDecodeError:
-                            logging.error(f"Failed to decode notification JSON. Raw data: {message_data!r}")
+                            logging.error(f"Failed to decode notification JSON ({len(message_data)} bytes)")
 
             except (ConnectionRefusedError, FileNotFoundError):
                 logging.debug(f"Could not connect to notification server. Retrying in {retry_delay:.0f}s.")

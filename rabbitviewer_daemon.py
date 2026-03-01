@@ -50,14 +50,20 @@ def setup_logging(log_level):
     log_dir = os.path.expanduser("~/.rabbitviewer")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "daemon.log")
+
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=50 * 1024 * 1024, backupCount=3,  # 50 MB, keep 3 old files
+    )
+
     logging.basicConfig(
         level=numeric_level,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_path, mode="a"),
-            logging.StreamHandler(sys.stderr)
-        ]
+        handlers=[file_handler, logging.StreamHandler(sys.stderr)],
     )
+
+    # PIL dumps every TIFF/EXIF tag at DEBUG, including raw binary values.
+    logging.getLogger("PIL").setLevel(logging.INFO)
 
 
 def main():
