@@ -1,23 +1,112 @@
 """Non-modal ComfyUI generation dialog.
 
-Triggered by the G hotkey.  Exposes prompt and denoise controls,
-sends a generate request to the daemon, and displays status updates.
+Triggered by the G hotkey.  Dynamically generates form controls from the
+selected ComfyUI API workflow JSON — every editable parameter gets an
+appropriate widget (spinbox, checkbox, text field, etc.).
 """
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QTextEdit, QSlider, QPushButton, QComboBox,
+    QDialog, QVBoxLayout, QLabel, QPushButton, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 import json
-import logging
 import os
 
+from .workflow_form import WorkflowFormWidget
 from network.daemon_signals import DaemonSignals
 from network.protocol import ComfyUICompleteData
 
 _BUILTIN_LABEL = "(built-in: Flux Kontext)"
+
+# Built-in Flux Kontext workflow exposed as a dict so the dialog can
+# build a dynamic form without instantiating ComfyUIClient.
+_BUILTIN_WORKFLOW: dict = {
+    "1": {
+        "class_type": "UNETLoader",
+        "inputs": {
+            "unet_name": "flux1-dev-kontext_fp8_scaled.safetensors",
+            "weight_dtype": "default",
+        },
+        "_meta": {"title": "Load Diffusion Model"},
+    },
+    "2": {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": "clip_l.safetensors",
+            "clip_name2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+            "type": "flux",
+            "device": "default",
+        },
+        "_meta": {"title": "DualCLIPLoader"},
+    },
+    "3": {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": "ae.safetensors"},
+        "_meta": {"title": "Load VAE"},
+    },
+    "4": {
+        "class_type": "LoadImage",
+        "inputs": {"image": "placeholder.jpg"},
+        "_meta": {"title": "Load Image"},
+    },
+    "5": {
+        "class_type": "FluxKontextImageScale",
+        "inputs": {"image": ["4", 0]},
+        "_meta": {"title": "FluxKontextImageScale"},
+    },
+    "6": {
+        "class_type": "VAEEncode",
+        "inputs": {"pixels": ["5", 0], "vae": ["3", 0]},
+        "_meta": {"title": "VAE Encode"},
+    },
+    "7": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["2", 0]},
+        "_meta": {"title": "Prompt"},
+    },
+    "8": {
+        "class_type": "ReferenceLatent",
+        "inputs": {"conditioning": ["7", 0], "latent": ["6", 0]},
+        "_meta": {"title": "ReferenceLatent"},
+    },
+    "9": {
+        "class_type": "FluxGuidance",
+        "inputs": {"guidance": 2.5, "conditioning": ["8", 0]},
+        "_meta": {"title": "FluxGuidance"},
+    },
+    "10": {
+        "class_type": "ConditioningZeroOut",
+        "inputs": {"conditioning": ["7", 0]},
+        "_meta": {"title": "ConditioningZeroOut"},
+    },
+    "11": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 0,
+            "steps": 8,
+            "cfg": 1.0,
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "denoise": 0.30,
+            "model": ["1", 0],
+            "positive": ["9", 0],
+            "negative": ["10", 0],
+            "latent_image": ["6", 0],
+        },
+        "_meta": {"title": "KSampler"},
+    },
+    "12": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["11", 0], "vae": ["3", 0]},
+        "_meta": {"title": "VAE Decode"},
+    },
+    "13": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "RabbitViewer", "images": ["12", 0]},
+        "_meta": {"title": "Save Image"},
+    },
+}
 
 
 class ComfyUIDialog(QDialog):
@@ -29,10 +118,11 @@ class ComfyUIDialog(QDialog):
         self.setWindowTitle("ComfyUI Generate")
         self.setModal(False)
         self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
-        self.resize(420, 290)
+        self.resize(440, 480)
 
         self._image_path = ""
         self._workflow_path = None  # None = built-in
+        self._current_workflow: dict = {}  # raw workflow dict for patching
         self._daemon_signals: DaemonSignals | None = None
 
         layout = QVBoxLayout(self)
@@ -45,23 +135,8 @@ class ComfyUIDialog(QDialog):
         self._image_label = QLabel("Image: (none)")
         layout.addWidget(self._image_label)
 
-        layout.addWidget(QLabel("Prompt:"))
-        self._prompt_input = QTextEdit()
-        self._prompt_input.setPlaceholderText("Describe the edit to apply...")
-        self._prompt_input.setMaximumHeight(80)
-        layout.addWidget(self._prompt_input)
-
-        denoise_row = QHBoxLayout()
-        denoise_row.addWidget(QLabel("Denoise:"))
-        self._denoise_slider = QSlider(Qt.Horizontal)
-        self._denoise_slider.setRange(0, 100)
-        self._denoise_slider.setValue(30)
-        self._denoise_slider.valueChanged.connect(self._update_denoise_label)
-        denoise_row.addWidget(self._denoise_slider)
-        self._denoise_label = QLabel("0.30")
-        self._denoise_label.setFixedWidth(36)
-        denoise_row.addWidget(self._denoise_label)
-        layout.addLayout(denoise_row)
+        self._form = WorkflowFormWidget()
+        layout.addWidget(self._form, stretch=1)
 
         self._generate_btn = QPushButton("Generate")
         self._generate_btn.clicked.connect(self._on_generate)
@@ -72,6 +147,8 @@ class ComfyUIDialog(QDialog):
 
         escape = QShortcut(QKeySequence("Esc"), self)
         escape.activated.connect(self.close)
+
+    # ── Workflow selection ────────────────────────────────────────
 
     def _resolve_workflows_dir(self) -> str:
         """Return the workflows directory, creating it if needed."""
@@ -104,17 +181,20 @@ class ComfyUIDialog(QDialog):
             full_path = os.path.join(workflows_dir, f)
             self._workflow_combo.addItem(name, userData=full_path)
 
-        self._workflow_combo.blockSignals(False)
-
-        # Restore last-used workflow
+        # Restore last-used workflow (keep signals blocked to avoid double load)
         last = self.parent().config_manager.get("comfyui.last_workflow", "")
         if last:
             idx = self._workflow_combo.findText(last)
             if idx >= 0:
                 self._workflow_combo.setCurrentIndex(idx)
                 self._workflow_path = self._workflow_combo.itemData(idx)
-                return
-        self._workflow_path = None
+            else:
+                self._workflow_path = None
+        else:
+            self._workflow_path = None
+
+        self._workflow_combo.blockSignals(False)
+        self._load_workflow()
 
     def _on_workflow_changed(self, index: int):
         if index <= 0:
@@ -123,6 +203,25 @@ class ComfyUIDialog(QDialog):
             self._workflow_path = self._workflow_combo.itemData(index)
         label = self._workflow_combo.itemText(index) if index > 0 else ""
         self.parent().config_manager.set("comfyui.last_workflow", label)
+        self._load_workflow()
+
+    def _load_workflow(self):
+        """Load the selected workflow and rebuild the dynamic form."""
+        if self._workflow_path:
+            try:
+                with open(self._workflow_path, "r") as f:
+                    self._current_workflow = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                self._status_label.setText(f"Error loading workflow: {e}")
+                self._current_workflow = {}
+                self._form.set_workflow({})
+                return
+        else:
+            self._current_workflow = _BUILTIN_WORKFLOW
+
+        self._form.set_workflow(self._current_workflow)
+
+    # ── Actions ───────────────────────────────────────────────────
 
     def open_for_image(self, image_path: str):
         self._image_path = image_path
@@ -134,33 +233,20 @@ class ComfyUIDialog(QDialog):
         self.show()
         self.raise_()
         self.activateWindow()
-        self._prompt_input.setFocus()
 
     def set_status(self, text: str):
         self._status_label.setText(text)
         self._generate_btn.setEnabled(True)
 
-    def _update_denoise_label(self, value: int):
-        self._denoise_label.setText(f"{value / 100:.2f}")
-
     def _on_generate(self):
-        prompt = self._prompt_input.toPlainText().strip()
-        if not prompt or not self._image_path:
+        if not self._image_path or not self._current_workflow:
             return
-        denoise = self._denoise_slider.value() / 100.0
-        workflow_json = ""
-        if self._workflow_path:
-            try:
-                with open(self._workflow_path, "r") as f:
-                    workflow_json = f.read()
-                # Validate JSON before sending
-                json.loads(workflow_json)
-            except (OSError, json.JSONDecodeError) as e:
-                self._status_label.setText(f"Error loading workflow: {e}")
-                return
+        patched = self._form.patch_workflow(self._current_workflow)
+        workflow_json = json.dumps(patched)
         self._generate_btn.setEnabled(False)
         self._status_label.setText("Status: Generating...")
-        self.generate_requested.emit(self._image_path, prompt, denoise, workflow_json)
+        # prompt and denoise are vestigial — the full workflow carries values.
+        self.generate_requested.emit(self._image_path, "", 0.0, workflow_json)
 
     # ── Notification handling ────────────────────────────────────
 

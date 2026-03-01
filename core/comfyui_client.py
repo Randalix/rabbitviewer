@@ -28,8 +28,8 @@ class ComfyUIClient:
     def generate(
         self,
         image_path: str,
-        prompt: str,
-        denoise: float,
+        prompt: str = "",
+        denoise: float = 0.0,
         cancel_event=None,
         timeout: int = 300,
         workflow_json: str = "",
@@ -38,9 +38,10 @@ class ComfyUIClient:
 
         Returns the output file path on success, None on failure.
         ``cancel_event`` is a ``threading.Event`` checked between polls.
-        ``workflow_json`` is an optional JSON string of a ComfyUI API workflow;
-        if non-empty, it is patched with the current parameters instead of
-        using the built-in Flux Kontext workflow.
+        ``workflow_json`` is a JSON string of a ComfyUI API workflow with all
+        user parameters baked in by the dialog.  The client only patches
+        ``LoadImage.image`` (server filename) and randomises ``seed`` inputs
+        that the dialog left as 0.
         """
         try:
             server_name = self._upload_image(image_path)
@@ -48,9 +49,9 @@ class ComfyUIClient:
             if workflow_json:
                 raw = json.loads(workflow_json)
                 workflow = self._normalize_workflow(raw)
-                self._patch_workflow(workflow, server_name, prompt, denoise, seed)
             else:
                 workflow = self._build_workflow(server_name, prompt, denoise, seed)
+            self._patch_runtime(workflow, server_name, seed)
             prompt_id = self._queue_prompt(workflow)
             logger.info("ComfyUI queued prompt %s for %s", prompt_id, image_path)
 
@@ -126,18 +127,18 @@ class ComfyUIClient:
         return workflow
 
     @staticmethod
-    def _patch_workflow(workflow: dict, server_image: str, prompt: str,
-                        denoise: float, seed: int) -> None:
-        """Patch a user-supplied workflow dict in-place with runtime parameters."""
+    def _patch_runtime(workflow: dict, server_image: str, seed: int) -> None:
+        """Patch only runtime values that the GUI cannot know.
+
+        - ``LoadImage.image`` → server-side uploaded filename
+        - ``seed`` → randomised when the form left it as 0
+        """
         for node in workflow.values():
             ct = node.get("class_type", "")
             inputs = node.get("inputs", {})
             if ct == "LoadImage":
                 inputs["image"] = server_image
-            elif ct == "CLIPTextEncode":
-                inputs["text"] = prompt
-            elif ct == "KSampler":
-                inputs["denoise"] = denoise
+            if "seed" in inputs and inputs["seed"] == 0:
                 inputs["seed"] = seed
 
     def _build_workflow(self, server_image: str, prompt: str, denoise: float, seed: int) -> dict:
