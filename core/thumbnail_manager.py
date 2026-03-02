@@ -1080,6 +1080,7 @@ class ThumbnailManager:
         logger.info("ThumbnailManager: Shutting down.")
         self.render_manager.shutdown()
         _shutdown_exiftool_processes()
+        self.metadata_db.close()
         logger.info("ThumbnailManager: Shutdown complete.")
 
     def queue_exif_rating_write(self, file_path: str, rating: int):

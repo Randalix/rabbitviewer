@@ -529,6 +529,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handles the window close event."""
         logging.info("GUI close requested.")
+        if self.service:
+            self.service.rm.prepare_for_shutdown()
         self._hover_clear_timer.stop()
         self._hover_prefetch_timer.stop()
 

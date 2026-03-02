@@ -63,6 +63,8 @@ class GuiServer(QObject):
                 self._server_socket.close()
             except OSError:
                 pass
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
         try:
             os.remove(GUI_SOCKET_PATH)
         except FileNotFoundError:
