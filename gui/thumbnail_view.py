@@ -191,6 +191,8 @@ class ThumbnailViewWidget(QFrame):
         # State for selection UI logic
         self.selection_anchor_index: Optional[int] = None
         self.hotkey_range_selection_active = False
+        self._range_source: Optional[str] = None  # "hotkey" or "shift_drag"
+        self._drag_shift_pending = False
 
         # State for refined click-and-drag selection
         self._selection_mode: Optional[str] = None
@@ -272,6 +274,10 @@ class ThumbnailViewWidget(QFrame):
         event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
         event_system.subscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
         event_system.subscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
+        self._on_shift_pressed = lambda _: self._handle_shift_pressed()
+        self._on_shift_released = lambda _: self._handle_shift_released()
+        event_system.subscribe(EventType.SHIFT_PRESSED, self._on_shift_pressed)
+        event_system.subscribe(EventType.SHIFT_RELEASED, self._on_shift_released)
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
 
         self.overlay_manager = OverlayManager(request_update=self._request_label_update)
@@ -468,6 +474,7 @@ class ThumbnailViewWidget(QFrame):
                 return
 
             self.hotkey_range_selection_active = True
+            self._range_source = "hotkey"
             self.selection_anchor_index = start_idx
             self.setCursor(Qt.CrossCursor)
             # Lock in "add" mode for hotkey selection
@@ -488,6 +495,19 @@ class ThumbnailViewWidget(QFrame):
             self._commit_selection(self.selection_anchor_index, end_idx)
             self.selection_anchor_index = None
             self._selection_mode = None
+            self._range_source = None
+
+    def _handle_shift_pressed(self):
+        # If a mouse drag is active, flag for range-mode transition on mouse release
+        if self._drag_start_index != -1 and not self.hotkey_range_selection_active:
+            self._drag_shift_pending = True
+
+    def _handle_shift_released(self):
+        # Only commit if range mode was activated by shift-drag, not the S-key
+        if self.hotkey_range_selection_active and self._range_source == "shift_drag":
+            self.end_range_selection()
+        # Clear pending flag if mouse hasn't been released yet
+        self._drag_shift_pending = False
 
     def _on_selection_changed(self, event_data: SelectionChangedEventData):
         """
@@ -1035,6 +1055,8 @@ class ThumbnailViewWidget(QFrame):
         event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
         event_system.unsubscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
         event_system.unsubscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
+        event_system.unsubscribe(EventType.SHIFT_PRESSED, self._on_shift_pressed)
+        event_system.unsubscribe(EventType.SHIFT_RELEASED, self._on_shift_released)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
         if self._daemon_signals:
             self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
@@ -1201,11 +1223,22 @@ class ThumbnailViewWidget(QFrame):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self._drag_start_index != -1:
-            self._commit_selection(self._drag_start_index, self._drag_last_index)
-            self._drag_start_index = -1
-            self._drag_last_index = -1
-            self._selection_mode = None
-            self._last_preview_selected = set()
+            if self._drag_shift_pending:
+                # Transition to range mode: anchor at drag start, mouse now free
+                self.hotkey_range_selection_active = True
+                self._range_source = "shift_drag"
+                self.selection_anchor_index = self._drag_start_index
+                self._selection_mode = "add"
+                self.setCursor(Qt.CrossCursor)
+                self._drag_start_index = -1
+                self._drag_last_index = -1
+                self._drag_shift_pending = False
+            else:
+                self._commit_selection(self._drag_start_index, self._drag_last_index)
+                self._drag_start_index = -1
+                self._drag_last_index = -1
+                self._selection_mode = None
+                self._last_preview_selected = set()
 
         super().mouseReleaseEvent(event)
 

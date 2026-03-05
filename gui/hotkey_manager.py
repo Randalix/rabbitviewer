@@ -102,7 +102,15 @@ class HotkeyManager(QObject):
 				if not event.isAutoRepeat():
 					self.handle_range_selection_end()
 				return True
-					
+
+		# Shift press/release for drag-to-range-selection transition
+		if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
+			if event.type() == QKeyEvent.Type.KeyPress:
+				event_system.publish(EventData(event_type=EventType.SHIFT_PRESSED, source="hotkey_manager", timestamp=time.time()))
+			elif event.type() == QKeyEvent.Type.KeyRelease:
+				event_system.publish(EventData(event_type=EventType.SHIFT_RELEASED, source="hotkey_manager", timestamp=time.time()))
+			# Don't consume — let Shift propagate for other modifier uses
+
 		return super().eventFilter(obj, event)
 						
 	def load_config(self, config: dict):
