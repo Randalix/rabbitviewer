@@ -182,19 +182,13 @@ class MainWindow(QMainWindow):
             self.status_bar.clearRating()
 
     def _fetch_metadata_for_path(self, path: str):
-        """Populate metadata cache for path in background, then notify info panels."""
+        # why: picture view doesn't trigger the hover-prefetch flow, so we
+        # reuse _fetch_hover_rating to populate the cache and notify panels.
         if not path or not self.service:
             return
         threading.Thread(
-            target=self._bg_fetch_metadata, args=(path,), daemon=True
+            target=self._fetch_hover_rating, args=(path,), daemon=True
         ).start()
-
-    def _bg_fetch_metadata(self, path: str):
-        try:
-            self.metadata_cache.fetch_and_cache([path])
-            self._hover_metadata_ready.emit(path)
-        except Exception as e:
-            logging.debug(f"Metadata fetch failed for {path}: {e}")
 
     def _do_hover_prefetch(self):
         path = self._hover_prefetch_path
@@ -214,7 +208,7 @@ class MainWindow(QMainWindow):
                 rating = result[path].get("rating", 0) or 0
             self._hover_rating_ready.emit(path, int(rating))
             self._hover_metadata_ready.emit(path)
-        except Exception as e:
+        except Exception as e:  # why: background thread; IPC/socket failure must not crash the worker
             logging.debug(f"Hover rating fetch failed for {path}: {e}")
 
     def notify_rating_set(self):
@@ -302,7 +296,7 @@ class MainWindow(QMainWindow):
     def _open_info_panel(self):
         """Create and show a new metadata info panel."""
         provider = MetadataProvider(self.metadata_cache)
-        panel = InfoPanelShell(provider, self.metadata_cache,
+        panel = InfoPanelShell(provider,
                                panel_index=self._info_panel_slot,
                                config_manager=self.config_manager,
                                parent=self)

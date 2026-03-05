@@ -105,24 +105,22 @@ class CollapsibleSection(QWidget):
         return row_widget, key_label, val_label
 
     def set_rows(self, rows: list):
-        """Update body content with [(key, value), ...] pairs, reusing widgets."""
+        # why: reuse existing QLabel widgets (setText is ~free) instead of
+        # destroying/recreating the full widget tree on every image change.
         needed = len(rows)
         current = len(self._row_widgets)
 
-        # Remove excess rows
         while current > needed:
             current -= 1
             rw, _, _ = self._row_widgets.pop()
             self._body_layout.removeWidget(rw)
             rw.deleteLater()
 
-        # Update existing rows
         for i, (key, value) in enumerate(rows[:current]):
             _, kl, vl = self._row_widgets[i]
             kl.setText(key if key else "")
             vl.setText(str(value))
 
-        # Add new rows
         for i in range(current, needed):
             key, value = rows[i]
             rw, kl, vl = self._make_row(key if key else "", str(value))

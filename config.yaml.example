@@ -11,6 +11,7 @@ gui:
   select_border_color: orange
   spacing: 1
   statusbar_font: monospace
+  info_panel_opacity: 0.92
   statusbar_font_size: 10
 hotkeys:
   close_or_quit:
