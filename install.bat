@@ -208,14 +208,6 @@ echo.
 echo Checking optional dependencies ...
 set "MISSING_OPTIONAL="
 
-REM CR3/RAW support: rawpy, numpy, imageio
-"%VENV_PYTHON%" -c "import rawpy" >nul 2>nul
-if errorlevel 1 (
-    echo   [optional] Canon RAW (CR3) support not installed.
-    echo             Install with: %VENV_PIP% install rawpy numpy imageio
-    set "MISSING_OPTIONAL=1"
-)
-
 REM Video support: python-mpv
 "%VENV_PYTHON%" -c "import mpv" >nul 2>nul
 if errorlevel 1 (

@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cr3 = ["rawpy", "numpy", "imageio"]
+cr3 = []
 video = ["python-mpv"]
 dev = ["pytest==7.2.1", "pytest-qt==4.0.2"]
 
