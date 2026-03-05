@@ -127,6 +127,34 @@ def _auto_launch_daemon():
 # GUI mode  (default)
 # ---------------------------------------------------------------------------
 
+def _set_macos_app_name(name):
+    """Set the macOS menu bar name via the main bundle's Info.plist."""
+    import ctypes
+    import ctypes.util
+
+    lib = ctypes.util.find_library('objc')
+    if not lib:
+        return
+    objc = ctypes.cdll.LoadLibrary(lib)
+    objc.objc_getClass.restype = ctypes.c_void_p
+    objc.sel_registerName.restype = ctypes.c_void_p
+    objc.objc_msgSend.restype = ctypes.c_void_p
+    objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+    NSBundle = objc.objc_getClass(b'NSBundle')
+    bundle = objc.objc_msgSend(NSBundle, objc.sel_registerName(b'mainBundle'))
+    info = objc.objc_msgSend(bundle, objc.sel_registerName(b'infoDictionary'))
+
+    objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p]
+    NSString = objc.objc_getClass(b'NSString')
+    sel_str = objc.sel_registerName(b'stringWithUTF8String:')
+    key = objc.objc_msgSend(NSString, sel_str, b'CFBundleName')
+    value = objc.objc_msgSend(NSString, sel_str, name.encode('utf-8'))
+
+    objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    objc.objc_msgSend(info, objc.sel_registerName(b'setObject:forKey:'), value, key)
+
+
 def _run_gui(args, config_manager):
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
@@ -174,6 +202,8 @@ def _run_gui(args, config_manager):
     _auto_launch_daemon()
 
     # --- Qt Application ---
+    if sys.platform == 'darwin':
+        _set_macos_app_name("Rabbit Viewer")
     app = QApplication(sys.argv)
     app.setApplicationName("Rabbit Viewer")
 
