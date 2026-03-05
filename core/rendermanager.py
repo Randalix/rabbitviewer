@@ -662,21 +662,13 @@ class RenderManager:
             ))
         
         # Wait for all workers to finish processing and exit
-        all_exited = True
         for i, worker in enumerate(self.worker_threads):
             worker.join(timeout)
             if worker.is_alive():
                 logger.warning(f"RenderManager: Worker {i} did not stop gracefully within timeout.")
-                all_exited = False
 
         self.worker_threads.clear()
-        # why: task_queue.join() blocks until every dequeued item has a matching
-        # task_done().  If a worker timed out above it will never call task_done()
-        # for its in-flight item, so join() would hang forever.  Only safe when
-        # every worker has exited.
-        if all_exited:
-            self.task_queue.join()
-        
+
         # Clear any remaining tasks in graph (e.g., dependencies that never got added to queue)
         with self.graph_lock:
             self.task_graph.clear()
