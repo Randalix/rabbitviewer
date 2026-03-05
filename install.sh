@@ -226,16 +226,18 @@ else
     "$PYTHON" -m venv "$VENV_DIR"
 fi
 
-# 3. Check for exiftool.
+# 3. Check for exiftool (required).
 if command -v exiftool &>/dev/null; then
     green "exiftool found: $(exiftool -ver)"
 else
-    yellow "exiftool not found — RAW support and rating write-back will not work."
+    red "[WARNING] exiftool not found in PATH."
+    yellow "  exiftool is required for metadata extraction, RAW support, and rating write-back."
     if [[ "$(uname)" == "Darwin" ]]; then
         yellow "  Install with: brew install exiftool"
     else
         yellow "  Install with: sudo apt install libimage-exiftool-perl"
     fi
+    echo
 fi
 
 # 4. Editable install.
@@ -243,6 +245,35 @@ yellow "Installing RabbitViewer (editable) …"
 "$VENV_PIP" install --upgrade pip
 "$VENV_PIP" install -e "$REPO_DIR"
 green "Package installed."
+
+# 4b. Check optional dependencies.
+echo
+yellow "Checking optional dependencies …"
+MISSING_OPTIONAL=0
+
+# CR3/RAW support: rawpy, numpy, imageio
+if ! "$VENV_PYTHON" -c "import rawpy" &>/dev/null; then
+    yellow "  [optional] Canon RAW (CR3) support not installed."
+    yellow "             Install with: $VENV_PIP install rawpy numpy imageio"
+    MISSING_OPTIONAL=1
+fi
+
+# Video support: python-mpv
+if ! "$VENV_PYTHON" -c "import mpv" &>/dev/null; then
+    yellow "  [optional] Video playback support not installed."
+    yellow "             Install with: $VENV_PIP install python-mpv"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        yellow "             Also requires mpv: brew install mpv"
+    else
+        yellow "             Also requires libmpv: sudo apt install libmpv-dev"
+    fi
+    MISSING_OPTIONAL=1
+fi
+
+if [[ "$MISSING_OPTIONAL" -eq 0 ]]; then
+    green "  All optional dependencies are installed."
+fi
+echo
 
 # 5. Write `rabbit` wrapper into ~/.local/bin.
 #    The wrapper prepends the repo to PYTHONPATH so project modules win,
