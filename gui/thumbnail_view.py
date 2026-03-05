@@ -461,9 +461,8 @@ class ThumbnailViewWidget(QFrame):
         super().mousePressEvent(event)
 
     def start_range_selection(self):
-        # This logic is now a toggle, which is more intuitive for a key press
         if not self.hotkey_range_selection_active:
-            # Start selection from the currently hovered label, which is more reliable
+            # why: cursor pos at keypress time unreliable; hovered label is exact
             if self._hovered_label is None:
                 logging.warning("Cannot start range selection with hotkey; no thumbnail is hovered.")
                 return
@@ -477,11 +476,10 @@ class ThumbnailViewWidget(QFrame):
             self._range_source = "hotkey"
             self.selection_anchor_index = start_idx
             self.setCursor(Qt.CrossCursor)
-            # Lock in "add" mode for hotkey selection
+            # why: hotkey range always additive — no modifier state available mid-hover
             self._selection_mode = "add"
             self._update_selection_preview(start_idx, start_idx)
         else:
-            # On second press, commit the selection
             self.end_range_selection()
 
     def end_range_selection(self):
@@ -498,15 +496,13 @@ class ThumbnailViewWidget(QFrame):
             self._range_source = None
 
     def _handle_shift_pressed(self):
-        # If a mouse drag is active, flag for range-mode transition on mouse release
+        # why: defer mode switch to mouseReleaseEvent so drag preview isn't disrupted
         if self._drag_start_index != -1 and not self.hotkey_range_selection_active:
             self._drag_shift_pending = True
 
     def _handle_shift_released(self):
-        # Only commit if range mode was activated by shift-drag, not the S-key
         if self.hotkey_range_selection_active and self._range_source == "shift_drag":
             self.end_range_selection()
-        # Clear pending flag if mouse hasn't been released yet
         self._drag_shift_pending = False
 
     def _on_selection_changed(self, event_data: SelectionChangedEventData):
@@ -1224,7 +1220,6 @@ class ThumbnailViewWidget(QFrame):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self._drag_start_index != -1:
             if self._drag_shift_pending:
-                # Transition to range mode: anchor at drag start, mouse now free
                 self.hotkey_range_selection_active = True
                 self._range_source = "shift_drag"
                 self.selection_anchor_index = self._drag_start_index
