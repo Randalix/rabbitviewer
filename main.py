@@ -130,16 +130,26 @@ def _auto_launch_daemon():
 def _run_gui(args, config_manager):
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QTimer, QEvent
     from core.thumbnail_service import ThumbnailService
     from network.daemon_signals import DaemonSignals
     from gui.main_window import MainWindow
 
     target_dir = args.directory
+    target_file = None
     recursive_scan = args.recursive
 
     setup_logging(config_manager.get("logging_level", "INFO"))
     logging.info("Starting RabbitViewer")
+
+    # If the user (or macOS) passed a file instead of a directory,
+    # open the parent directory and navigate to that file.
+    if target_dir:
+        target_dir = os.path.abspath(target_dir)
+        if os.path.isfile(target_dir):
+            target_file = target_dir
+            target_dir = os.path.dirname(target_file)
+            recursive_scan = False
 
     if args.cold_cache and target_dir:
         from benchmarks.bench_utils import cold_cache
@@ -175,21 +185,39 @@ def _run_gui(args, config_manager):
     icon_path = os.path.join(os.path.dirname(__file__), "logo", "rabbitViewerLogo.png")
     app.setWindowIcon(QIcon(icon_path))
 
-    if target_dir:
-        target_dir = os.path.abspath(target_dir)
-        if not os.path.isdir(target_dir):
-            logging.error(f"Invalid directory provided: {target_dir}")
-            release_gui_lock(gui_lock_fd)
-            return 1
+    if target_dir and not os.path.isdir(target_dir):
+        logging.error(f"Invalid directory provided: {target_dir}")
+        release_gui_lock(gui_lock_fd)
+        return 1
 
     window = MainWindow(config_manager, service, daemon_signals)
+
+    # macOS "Open With" sends files via QFileOpenEvent (Apple Events),
+    # not as CLI arguments.  Install a handler so the window receives them.
+    def _file_open_handler(obj, event):
+        if event.type() == QEvent.Type.FileOpen:
+            path = event.file()
+            if path and os.path.isfile(path):
+                logging.info("QFileOpenEvent: %s", path)
+                parent = os.path.dirname(path)
+                window.load_directory(parent, recursive=False)
+                window._open_media_view(path)
+                return True
+        return False
+
+    app.eventFilter = _file_open_handler
+    app.installEventFilter(app)
 
     window.show()
     app.processEvents()
     logging.info("[startup] window shown, services ready")
 
     if target_dir:
-        QTimer.singleShot(0, lambda: window.load_directory(target_dir, recursive_scan))
+        def _load():
+            window.load_directory(target_dir, recursive_scan)
+            if target_file:
+                window._open_media_view(target_file)
+        QTimer.singleShot(0, _load)
 
     exit_code = app.exec()
 
