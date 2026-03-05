@@ -5,7 +5,7 @@ A fast image viewer for photographers and power users — built with Python and 
 RabbitViewer doesn’t just display images.
 It orchestrates them.
 
-Rendering, metadata extraction, hashing, and file watching run on background worker threads. The interface stays fluid — even when you point it at a massive RAW archive.
+Rendering, metadata extraction, hashing, and file watching run in-process on background worker threads — no IPC overhead. A companion daemon continues indexing when the GUI is closed. The interface stays fluid — even when you point it at a massive RAW archive.
 
 [![RabbitViewer Demo](https://img.youtube.com/vi/1OTcSATjnmw/maxresdefault.jpg)](https://youtu.be/1OTcSATjnmw)
 
@@ -15,9 +15,9 @@ Rendering, metadata extraction, hashing, and file watching run on background wor
 
 RabbitViewer keeps heavy work off the UI thread:
 
-* **Worker threads** handle thumbnail generation, EXIF extraction, database writes, hashing, and file watching.
+* **Worker threads** handle thumbnail generation, EXIF extraction, database writes, hashing, and file watching — all in-process.
 * The **GUI** is dedicated purely to interaction and presentation.
-* A headless **indexer mode** (`rabbit --daemon`) can pre-populate the cache independently, yielding resources when the GUI is active.
+* A background **daemon** (`rabbit --daemon`) auto-launches when the GUI exits to keep indexing. When the GUI starts, the daemon detects it via `flock` and pauses, yielding resources.
 
 The result is predictable latency, smooth scrolling, and immediate feedback — even during large recursive scans or RAW-heavy workloads.
 
@@ -295,9 +295,9 @@ They are auto-discovered at startup.
 
 ## Architecture
 
-RabbitViewer runs as a single process. The GUI drives worker threads directly through an in-process `ThumbnailService` facade — no sockets or serialization overhead.
+The GUI runs all heavy work in-process via worker threads and a `ThumbnailService` facade — no sockets or serialization overhead.
 
-A headless indexer mode (`main.py --daemon`) can run independently to pre-populate the cache. When the GUI starts, it acquires an `flock`; the daemon detects this and pauses, yielding resources until the GUI exits.
+A background daemon (`main.py --daemon`) is auto-launched when the GUI exits to continue indexing. When the GUI starts again, it acquires an `flock`; the daemon detects this and pauses, yielding resources until the GUI exits. The daemon can also be run standalone to pre-populate the cache.
 
 ### Scheduling
 
