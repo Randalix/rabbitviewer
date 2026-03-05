@@ -12,6 +12,10 @@ _SEPARATOR = "#2a2a2a"
 _FONT = "monospace"
 _FONT_SIZE = 12
 
+_KEY_SS = f"color:{_KEY_FG};font-family:{_FONT};font-size:{_FONT_SIZE}px;min-width:90px;max-width:90px;"
+_VAL_SS = f"color:{_VAL_FG};font-family:{_FONT};font-size:{_FONT_SIZE}px;"
+_ROW_SS = f"background:{_BG};"
+
 
 class CollapsibleSection(QWidget):
     """A section with a clickable header that toggles body visibility."""
@@ -21,6 +25,7 @@ class CollapsibleSection(QWidget):
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self._collapsed = False
+        self._row_widgets: list[tuple[QWidget, QLabel, QLabel]] = []
         self.setStyleSheet(f"background: {_BG};")
 
         layout = QVBoxLayout(self)
@@ -79,42 +84,50 @@ class CollapsibleSection(QWidget):
         self._arrow.setText("\u25b6" if collapsed else "\u25bc")
         self.toggled.emit(collapsed)
 
+    def _make_row(self, key: str, value: str) -> tuple[QWidget, QLabel, QLabel]:
+        row_widget = QWidget()
+        row_widget.setStyleSheet(_ROW_SS)
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 1, 0, 1)
+        row_layout.setSpacing(8)
+
+        key_label = QLabel(key)
+        key_label.setStyleSheet(_KEY_SS)
+        key_label.setAlignment(Qt.AlignTop | Qt.AlignRight)
+
+        val_label = QLabel(value)
+        val_label.setStyleSheet(_VAL_SS)
+        val_label.setWordWrap(True)
+        val_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        row_layout.addWidget(key_label)
+        row_layout.addWidget(val_label, 1)
+        return row_widget, key_label, val_label
+
     def set_rows(self, rows: list):
-        """Replace body content with [(key, value), ...] pairs."""
-        while self._body_layout.count():
-            item = self._body_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        """Update body content with [(key, value), ...] pairs, reusing widgets."""
+        needed = len(rows)
+        current = len(self._row_widgets)
 
-        for key, value in rows:
-            row_widget = QWidget()
-            row_widget.setStyleSheet(f"background: {_BG};")
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 1, 0, 1)
-            row_layout.setSpacing(8)
+        # Remove excess rows
+        while current > needed:
+            current -= 1
+            rw, _, _ = self._row_widgets.pop()
+            self._body_layout.removeWidget(rw)
+            rw.deleteLater()
 
-            key_label = QLabel(f"{key}" if key else "")
-            key_label.setStyleSheet(f"""
-                color: {_KEY_FG};
-                font-family: {_FONT};
-                font-size: {_FONT_SIZE}px;
-                min-width: 90px;
-                max-width: 90px;
-            """)
-            key_label.setAlignment(Qt.AlignTop | Qt.AlignRight)
+        # Update existing rows
+        for i, (key, value) in enumerate(rows[:current]):
+            _, kl, vl = self._row_widgets[i]
+            kl.setText(key if key else "")
+            vl.setText(str(value))
 
-            val_label = QLabel(str(value))
-            val_label.setStyleSheet(f"""
-                color: {_VAL_FG};
-                font-family: {_FONT};
-                font-size: {_FONT_SIZE}px;
-            """)
-            val_label.setWordWrap(True)
-            val_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-
-            row_layout.addWidget(key_label)
-            row_layout.addWidget(val_label, 1)
-            self._body_layout.addWidget(row_widget)
+        # Add new rows
+        for i in range(current, needed):
+            key, value = rows[i]
+            rw, kl, vl = self._make_row(key if key else "", str(value))
+            self._row_widgets.append((rw, kl, vl))
+            self._body_layout.addWidget(rw)
 
     @property
     def is_collapsed(self) -> bool:

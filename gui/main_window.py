@@ -181,6 +181,21 @@ class MainWindow(QMainWindow):
             self.status_bar.setFilepath("")
             self.status_bar.clearRating()
 
+    def _fetch_metadata_for_path(self, path: str):
+        """Populate metadata cache for path in background, then notify info panels."""
+        if not path or not self.service:
+            return
+        threading.Thread(
+            target=self._bg_fetch_metadata, args=(path,), daemon=True
+        ).start()
+
+    def _bg_fetch_metadata(self, path: str):
+        try:
+            self.metadata_cache.fetch_and_cache([path])
+            self._hover_metadata_ready.emit(path)
+        except Exception as e:
+            logging.debug(f"Metadata fetch failed for {path}: {e}")
+
     def _do_hover_prefetch(self):
         path = self._hover_prefetch_path
         if path:
@@ -259,6 +274,16 @@ class MainWindow(QMainWindow):
         inspector.show()
         if self.picture_view and self.stacked_widget.currentWidget() == self.picture_view:
             self._force_inspector_update_from_picture_view()
+        elif self.current_hovered_image:
+            # Prime the new inspector with the currently hovered thumbnail.
+            event_data = InspectorEventData(
+                event_type=EventType.INSPECTOR_UPDATE,
+                source="main_window",
+                timestamp=time.time(),
+                image_path=self.current_hovered_image,
+                normalized_position=QPointF(0.5, 0.5),
+            )
+            event_system.publish(event_data)
         logging.info("Opened new Inspector window.")
 
     def _on_inspector_closed(self, inspector):
@@ -480,15 +505,18 @@ class MainWindow(QMainWindow):
         if (self.picture_view and self.picture_view.current_path and
                 self.picture_view._picture_base.has_image()):
             try:
-                # Use center of the view as initial position
-                center_pos = QPointF(0.5, 0.5)
-                
+                local_pos = self.picture_view.mapFromGlobal(self.picture_view.cursor().pos())
+                norm_pos = self.picture_view._picture_base.screenToNormalized(QPointF(local_pos))
+                norm_pos = QPointF(
+                    max(0.0, min(1.0, norm_pos.x())),
+                    max(0.0, min(1.0, norm_pos.y())),
+                )
                 event_data = InspectorEventData(
                     event_type=EventType.INSPECTOR_UPDATE,
                     source="main_window",
                     timestamp=time.time(),
                     image_path=self.picture_view.current_path,
-                    normalized_position=center_pos
+                    normalized_position=norm_pos,
                 )
                 event_system.publish(event_data)
             except Exception as e:  # why: publish invokes arbitrary subscriber callbacks
@@ -713,6 +741,7 @@ class MainWindow(QMainWindow):
             self._hover_clear_timer.stop()
             self.stacked_widget.setCurrentWidget(self.picture_view)
             self.picture_view.setFocus()
+            self._fetch_metadata_for_path(image_path)
         except Exception as e:  # why: loadImage delegates to format plugins which may raise arbitrarily
             logging.error(f"Exception when opening Picture View: {e}", exc_info=True)
             

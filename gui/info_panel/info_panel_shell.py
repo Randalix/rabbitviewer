@@ -1,11 +1,12 @@
 from typing import Optional
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QPushButton, QHBoxLayout, QLabel
-from PySide6.QtCore import Qt, Signal, QSettings
+from PySide6.QtCore import Qt, Signal, QSettings, QTimer
 from PySide6.QtGui import QFont
 
 from .content_provider import ContentProvider
 from ..components.collapsible_section import CollapsibleSection
+from core.event_system import event_system, EventType, InspectorEventData
 
 # Palette — mirrors HotkeyHelpOverlay
 _BG = "#1e1e1e"
@@ -36,8 +37,14 @@ class InfoPanelShell(QWidget):
         self._pinned = False
         self._pinned_path: Optional[str] = None
         self._current_path: Optional[str] = None
+        self._pending_path: Optional[str] = None
         self._sections: dict[str, CollapsibleSection] = {}
         self._collapsed_state: dict[str, bool] = {}
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(150)
+        self._refresh_timer.timeout.connect(self._flush_pending_path)
 
         self.setWindowTitle(f"Info: {provider.provider_name}")
         self.setMinimumSize(280, 200)
@@ -51,6 +58,23 @@ class InfoPanelShell(QWidget):
             self.resize(320, 500)
 
         self._build_ui()
+        event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
+
+    def _handle_inspector_update(self, event_data: InspectorEventData):
+        if not self.isVisible() or self._pinned:
+            return
+        path = event_data.image_path
+        if path == self._current_path:
+            return
+        self._pending_path = path
+        self._path_label.setText(path.rsplit("/", 1)[-1])
+        self._refresh_timer.start()
+
+    def _flush_pending_path(self):
+        path = self._pending_path
+        if path and path != self._current_path:
+            self._current_path = path
+            self._refresh_sections()
 
     def _build_ui(self):
         self.setStyleSheet(f"""
@@ -154,7 +178,7 @@ class InfoPanelShell(QWidget):
     def on_thumbnail_hovered(self, path: str):
         if self._pinned:
             return
-        self._update_for_path(path)
+        self._schedule_update(path)
 
     def on_thumbnail_left(self):
         if self._pinned:
@@ -163,17 +187,20 @@ class InfoPanelShell(QWidget):
 
     def refresh_if_showing(self, path: str):
         """Re-render sections if currently displaying this path."""
-        if path == self._current_path:
+        if path == self._current_path or path == self._pending_path:
+            self._current_path = path
+            self._pending_path = None
+            self._refresh_timer.stop()
             self._refresh_sections()
 
     # -- Internal --
 
-    def _update_for_path(self, path: str):
+    def _schedule_update(self, path: str):
         if not path or path == self._current_path:
             return
-        self._current_path = path
+        self._pending_path = path
         self._path_label.setText(path.rsplit("/", 1)[-1])
-        self._refresh_sections()
+        self._refresh_timer.start()
 
     def _refresh_sections(self):
         if not self._current_path:
@@ -225,6 +252,7 @@ class InfoPanelShell(QWidget):
             self.setWindowTitle(base)
 
     def closeEvent(self, event):
+        event_system.unsubscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
         settings = QSettings("RabbitViewer", "InfoPanel")
         settings.setValue(f"geometry_{self._panel_index}", self.saveGeometry())
         settings.sync()

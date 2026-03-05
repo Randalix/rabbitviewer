@@ -77,6 +77,12 @@ class PictureView(QWidget):
         if not self.socket_client:
             logging.error("Socket client not initialized in PictureView.")
             return False
+
+        # Capture current view state before loading so we can restore it
+        _prev_fit = self._picture_base.isFitMode()
+        _prev_center = QPointF(self._picture_base.viewState().center)
+        _prev_fit_zoom = self._picture_base.calculateFitZoom()
+        _prev_zoom = self._picture_base.viewState().zoom
         
         # Request the view image at FULLRES_REQUEST priority. Always returns JSON.
         # view_image_source="memory" → bytes available via get_cached_view_image.
@@ -142,26 +148,37 @@ class PictureView(QWidget):
                 target=self._fetch_rating, args=(image_path,), daemon=True
             ).start()
             
-            # Always start in fit mode for new images
-            self._picture_base.setFitMode(True)
-            
-            # Reset drag zoom state when a new image is loaded
+            if _prev_fit or _prev_fit_zoom <= 0:
+                self._picture_base.setFitMode(True)
+            else:
+                new_fit_zoom = self._picture_base.calculateFitZoom()
+                relative_zoom = _prev_zoom / _prev_fit_zoom
+                clamped_center = QPointF(
+                    max(0.0, min(1.0, _prev_center.x())),
+                    max(0.0, min(1.0, _prev_center.y())),
+                )
+                self._picture_base.setZoom(relative_zoom * new_fit_zoom, clamped_center)
+
             self._picture_base.resetDragZoom()
             
             self.update()
 
-            # Publish inspector event when the image changes
-            # We simulate a mouse position in the center of the image (0.5, 0.5)
-            # as there is no actual mouse movement during loading.
+            # Publish inspector event using the current mouse position so the
+            # inspector tracks correctly after image navigation (not just center).
+            local_pos = self.mapFromGlobal(self.cursor().pos())
+            norm_pos = self._picture_base.screenToNormalized(QPointF(local_pos))
+            norm_pos = QPointF(
+                max(0.0, min(1.0, norm_pos.x())),
+                max(0.0, min(1.0, norm_pos.y())),
+            )
             event_data = InspectorEventData(
                 event_type=EventType.INSPECTOR_UPDATE,
                 source="picture_view",
                 timestamp=time.time(),
-                image_path=self._current_path, 
-                normalized_position=QPointF(0.5, 0.5)
+                image_path=self._current_path,
+                normalized_position=norm_pos,
             )
             event_system.publish(event_data)
-            logging.debug(f"Published inspector event from picture view on image load: {self._current_path} at 0.50, 0.50")
 
             return True
         else:

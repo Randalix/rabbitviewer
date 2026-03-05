@@ -10,6 +10,12 @@ def _has(meta: dict, key: str) -> bool:
     return meta.get(key) is not None
 
 
+# Keys from exif_data that are redundant with the curated File section.
+_EXIF_SKIP_KEYS = frozenset({
+    "SourceFile", "FileName", "Directory", "FilePermissions",
+})
+
+
 class MetadataProvider(ContentProvider):
     """Formats cached EXIF/file metadata into collapsible sections."""
 
@@ -70,5 +76,16 @@ class MetadataProvider(ContentProvider):
             exp_rows.append(("Date", dt_str))
         if exp_rows:
             sections.append(Section("Exposure", exp_rows))
+
+        # All EXIF tags from exiftool
+        exif_data = meta.get("exif_data")
+        if isinstance(exif_data, dict) and exif_data:
+            exif_rows = []
+            for key, value in exif_data.items():
+                if key in _EXIF_SKIP_KEYS:
+                    continue
+                exif_rows.append((key, str(value)))
+            if exif_rows:
+                sections.append(Section("EXIF", exif_rows))
 
         return sections
