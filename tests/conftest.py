@@ -38,6 +38,8 @@ if 'PySide6' not in sys.modules:
         Key_Escape = 0x01000000
         Key_Up = 0x01000013
         Key_Down = 0x01000015
+        Window = 0x00000001
+        Tool = 0x0000000c
 
     _qtcore = types.ModuleType('PySide6.QtCore')
     _qtcore.QObject = _QObject        # type: ignore[attr-defined]

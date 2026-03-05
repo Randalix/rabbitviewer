@@ -265,7 +265,7 @@ class MainWindow(QMainWindow):
     def _open_inspector_window(self):
         """Create and show a new inspector window."""
         from .inspector_view import InspectorView
-        inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot)
+        inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot, parent=self)
         self._inspector_slot += 1
         inspector.set_service(self.service)
         inspector.set_daemon_signals(self.daemon_signals)
@@ -304,7 +304,8 @@ class MainWindow(QMainWindow):
         provider = MetadataProvider(self.metadata_cache)
         panel = InfoPanelShell(provider, self.metadata_cache,
                                panel_index=self._info_panel_slot,
-                               config_manager=self.config_manager)
+                               config_manager=self.config_manager,
+                               parent=self)
         self._info_panel_slot += 1
         self.info_panels.append(panel)
         panel.closed.connect(lambda: self._on_info_panel_closed(panel))

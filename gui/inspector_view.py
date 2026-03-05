@@ -37,8 +37,8 @@ class InspectorView(QWidget):
     # Delivers a video frame grabbed on a background thread to the GUI thread.
     _video_frame_ready = Signal(QImage)
 
-    def __init__(self, config_manager=None, inspector_index: int = 0):
-        super().__init__(None, Qt.Window)
+    def __init__(self, config_manager=None, inspector_index: int = 0, parent=None):
+        super().__init__(parent, Qt.Tool)
         self.config_manager = config_manager
         self._inspector_index = inspector_index
         self._picture_base = PictureBase()

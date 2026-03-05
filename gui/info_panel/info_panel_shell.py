@@ -27,8 +27,8 @@ class InfoPanelShell(QWidget):
     closed = Signal()
 
     def __init__(self, provider: ContentProvider, metadata_cache,
-                 panel_index: int = 0, config_manager=None):
-        super().__init__(None, Qt.Window)
+                 panel_index: int = 0, config_manager=None, parent=None):
+        super().__init__(parent, Qt.Tool)
         self._provider = provider
         self._metadata_cache = metadata_cache
         self._panel_index = panel_index
