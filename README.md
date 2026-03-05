@@ -1,11 +1,11 @@
 # RabbitViewer
 
-A fast, daemon-backed image viewer for photographers and power users — built with Python and Qt6.
+A fast image viewer for photographers and power users — built with Python and Qt6.
 
 RabbitViewer doesn’t just display images.
 It orchestrates them.
 
-Rendering, metadata extraction, hashing, and file watching run in a persistent background daemon. The interface stays fluid — even when you point it at a massive RAW archive.
+Rendering, metadata extraction, hashing, and file watching run on background worker threads. The interface stays fluid — even when you point it at a massive RAW archive.
 
 [![RabbitViewer Demo](https://img.youtube.com/vi/1OTcSATjnmw/maxresdefault.jpg)](https://youtu.be/1OTcSATjnmw)
 
@@ -13,14 +13,15 @@ Rendering, metadata extraction, hashing, and file watching run in a persistent b
 
 ## Overview
 
-RabbitViewer is built on a strict separation of concerns:
+RabbitViewer keeps heavy work off the UI thread:
 
-* The **daemon** handles thumbnail generation, EXIF extraction, database writes, hashing, and file watching.
+* **Worker threads** handle thumbnail generation, EXIF extraction, database writes, hashing, and file watching.
 * The **GUI** is dedicated purely to interaction and presentation.
+* A headless **indexer mode** (`rabbit --daemon`) can pre-populate the cache independently, yielding resources when the GUI is active.
 
 The result is predictable latency, smooth scrolling, and immediate feedback — even during large recursive scans or RAW-heavy workloads.
 
-You can scroll aggressively through thousands of files and the interface never stalls. The heavy lifting happens elsewhere.
+You can scroll aggressively through thousands of files and the interface never stalls.
 
 ---
 
@@ -43,11 +44,11 @@ The viewer anticipates you.
 
 Ratings are:
 
-* Written back to file EXIF via ExifTool
+* Written to XMP sidecar files (non-destructive — originals are never modified)
 * Stored locally in SQLite
 * Filterable instantly
 
-No proprietary lock-in. Your metadata stays with your files.
+No proprietary lock-in. Your metadata stays with your files in an open format.
 
 ### EXIF Metadata Display
 
@@ -78,6 +79,18 @@ Integrated mpv playback supports modern video formats.
 Scrub the timeline directly from the inspector using mouse position.
 
 Switch seamlessly between stills and motion.
+
+### Tagging
+
+Assign free-form tags to any selection via the tag editor (`T`). Tags are written to XMP sidecars alongside ratings. Filter the grid by tag to narrow large sets instantly.
+
+### Info Panel
+
+A floating info panel (`I`) shows structured metadata for the hovered or pinned image — EXIF, ratings, tags, and file details — in collapsible sections with configurable opacity.
+
+### ComfyUI Integration
+
+Generate AI-edited variants of selected images using a local ComfyUI server (`G`). RabbitViewer dynamically builds form controls from any ComfyUI API workflow JSON. Ships with a built-in Flux Kontext workflow. Multi-image batches run in a background thread with cooperative cancellation.
 
 ### Full Image Viewer
 
@@ -249,13 +262,12 @@ From any directory:
 rabbit /path/to/photos
 ```
 
-The daemon starts automatically if needed. Thumbnails appear progressively as files are processed.
+Thumbnails appear progressively as files are processed.
 
 Options:
 
 ```
 rabbit /path/to/photos --no-recursive
-rabbit /path/to/photos --restart-daemon
 ```
 
 Logs:
@@ -283,15 +295,9 @@ They are auto-discovered at startup.
 
 ## Architecture
 
-RabbitViewer runs as two cooperating processes:
+RabbitViewer runs as a single process. The GUI drives worker threads directly through an in-process `ThumbnailService` facade — no sockets or serialization overhead.
 
-* `rabbitviewer_daemon.py`
-* `main.py`
-
-### IPC
-
-* Unix domain socket
-* Length-prefixed JSON protocol
+A headless indexer mode (`main.py --daemon`) can run independently to pre-populate the cache. When the GUI starts, it acquires an `flock`; the daemon detects this and pauses, yielding resources until the GUI exits.
 
 ### Scheduling
 
@@ -301,7 +307,7 @@ The `RenderManager` uses a heatmap-driven priority queue:
 * Priorities from 90 (under cursor) to 40 (outer ring)
 * 4-ring speculative full-resolution pre-cache zone
 * Cooperative cancellation
-* Delta-only IPC updates
+* Delta-only viewport updates
 * Generation counters drop stale updates during fast scroll
 
 ### Work Model
@@ -336,6 +342,7 @@ Startup delay avoids race conditions during large initial scans.
 * Pillow
 * ExifTool
 * ffmpeg / mpv
+* ComfyUI (optional, for AI image generation)
 
 ---
 
