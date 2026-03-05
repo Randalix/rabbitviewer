@@ -2,7 +2,7 @@
 
 import sys
 
-__completions__ = ["--recursive", "--no-recursive", "--restart-daemon", "--cold-cache"]
+__completions__ = ["--recursive", "--no-recursive", "--cold-cache"]
 
 def main():
     from main import main as _viewer_main

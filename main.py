@@ -62,11 +62,49 @@ def _init_core(config_manager):
 # Daemon mode  (main.py --daemon)
 # ---------------------------------------------------------------------------
 
+def _daemon_pid_path(config_manager):
+    """Return the path to the daemon PID file."""
+    cache_dir = os.path.expanduser(
+        config_manager.get("files.cache.dir", "~/.rabbitviewer/cache")
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "daemon.pid")
+
+
+def _acquire_daemon_lock(pid_path):
+    """Write PID and hold an flock so cli/stop.py can find us.
+
+    Returns the open fd (must stay alive), or None if another daemon
+    already holds the lock.
+    """
+    import fcntl, errno
+    fd = open(pid_path, "a+")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fd.seek(0)
+        fd.truncate()
+        fd.write(str(os.getpid()))
+        fd.flush()
+        return fd
+    except OSError as e:
+        if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+            fd.close()
+            return None
+        raise
+
+
 def _run_daemon(config_manager):
     """Headless background indexer.  Pauses when the GUI holds the flock."""
     from core.background_indexer import BackgroundIndexer
 
     setup_logging(config_manager.get("logging_level", "INFO"), log_filename="daemon.log")
+
+    pid_path = _daemon_pid_path(config_manager)
+    pid_fd = _acquire_daemon_lock(pid_path)
+    if pid_fd is None:
+        logging.info("Another daemon is already running; exiting.")
+        return
+
     logging.info("Starting RabbitViewer daemon (headless indexer)")
 
     thumbnail_manager, watcher, watch_paths = _init_core(config_manager)
@@ -84,6 +122,7 @@ def _run_daemon(config_manager):
         logging.info("Daemon shutting down...")
         watcher.stop()
         thumbnail_manager.shutdown()
+        pid_fd.close()
         logging.info("Daemon shutdown complete.")
         sys.exit(0)
 

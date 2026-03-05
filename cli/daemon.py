@@ -14,8 +14,11 @@ def main():
             sys.exit(1)
         logging.info("Restarting daemon...")
 
-    from rabbitviewer_daemon import main as _daemon_main
-    _daemon_main()
+    # Inject --daemon so main.main() enters daemon mode.
+    if "--daemon" not in sys.argv:
+        sys.argv.append("--daemon")
+    from main import main as _main
+    _main()
 
 
 if __name__ == "__main__":
