@@ -19,7 +19,7 @@ _CATEGORIES: List[Tuple[str, List[str]]] = [
         "toggle_inspector", "pin_inspector", "open_filter", "zoom_in", "zoom_out",
     ]),
     ("Selection", [
-        "start_range_selection", "undo_selection", "redo_selection",
+        "undo_selection", "redo_selection",
         "script:select_all", "script:invert_selection",
     ]),
     ("Ratings", []),  # filled dynamically from script:set_rating_*

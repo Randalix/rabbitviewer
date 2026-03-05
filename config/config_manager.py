@@ -51,10 +51,6 @@ DEFAULT_CONFIG = {
             "sequence": "P",
             "description": "Pin/unpin inspector to current image"
         },
-        "start_range_selection": {
-            "sequence": "S",
-            "description": "Toggle range selection mode"
-        },
         "script:set_rating_0": {
             "sequence": "0",
             "description": "Rate selected images 0 stars"

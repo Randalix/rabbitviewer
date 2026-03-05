@@ -190,8 +190,7 @@ class ThumbnailViewWidget(QFrame):
 
         # State for selection UI logic
         self.selection_anchor_index: Optional[int] = None
-        self.hotkey_range_selection_active = False
-        self._range_source: Optional[str] = None  # "hotkey" or "shift_drag"
+        self._range_selection_active = False
         self._drag_shift_pending = False
 
         # State for refined click-and-drag selection
@@ -269,11 +268,7 @@ class ThumbnailViewWidget(QFrame):
 
         self._viewport_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewport")
 
-        self._on_range_start = lambda _: self.start_range_selection()
-        self._on_range_end = lambda _: self.end_range_selection()
         event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
-        event_system.subscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
-        event_system.subscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
         self._on_shift_pressed = lambda _: self._handle_shift_pressed()
         self._on_shift_released = lambda _: self._handle_shift_released()
         event_system.subscribe(EventType.SHIFT_PRESSED, self._on_shift_pressed)
@@ -336,7 +331,7 @@ class ThumbnailViewWidget(QFrame):
 
             self.middle_mouse_press_pos = event.pos()
 
-        if self.hotkey_range_selection_active and self.selection_anchor_index is not None:
+        if self._range_selection_active and self.selection_anchor_index is not None:
             current_idx = self._get_thumbnail_at_pos(event.pos())
             self._update_selection_preview(self.selection_anchor_index, current_idx)
         elif self._drag_start_index != -1 and event.buttons() & Qt.LeftButton:
@@ -460,49 +455,24 @@ class ThumbnailViewWidget(QFrame):
 
         super().mousePressEvent(event)
 
-    def start_range_selection(self):
-        if not self.hotkey_range_selection_active:
-            # why: cursor pos at keypress time unreliable; hovered label is exact
-            if self._hovered_label is None:
-                logging.warning("Cannot start range selection with hotkey; no thumbnail is hovered.")
-                return
-
-            start_idx = self._label_to_original_idx(self._hovered_label)
-            if start_idx is None:
-                logging.warning("Could not determine index of hovered label.")
-                return
-
-            self.hotkey_range_selection_active = True
-            self._range_source = "hotkey"
-            self.selection_anchor_index = start_idx
-            self.setCursor(Qt.CrossCursor)
-            # why: hotkey range always additive — no modifier state available mid-hover
-            self._selection_mode = "add"
-            self._update_selection_preview(start_idx, start_idx)
-        else:
-            self.end_range_selection()
-
-    def end_range_selection(self):
-        logging.debug("Ending range selection")
-        if self.hotkey_range_selection_active:
-            self.hotkey_range_selection_active = False
+    def _end_range_selection(self):
+        if self._range_selection_active:
+            self._range_selection_active = False
             self.setCursor(Qt.ArrowCursor)
-            # Commit the selection
             current_pos = self.mapFromGlobal(QCursor.pos())
             end_idx = self._get_thumbnail_at_pos(current_pos)
             self._commit_selection(self.selection_anchor_index, end_idx)
             self.selection_anchor_index = None
             self._selection_mode = None
-            self._range_source = None
 
     def _handle_shift_pressed(self):
         # why: defer mode switch to mouseReleaseEvent so drag preview isn't disrupted
-        if self._drag_start_index != -1 and not self.hotkey_range_selection_active:
+        if self._drag_start_index != -1 and not self._range_selection_active:
             self._drag_shift_pending = True
 
     def _handle_shift_released(self):
-        if self.hotkey_range_selection_active and self._range_source == "shift_drag":
-            self.end_range_selection()
+        if self._range_selection_active:
+            self._end_range_selection()
         self._drag_shift_pending = False
 
     def _on_selection_changed(self, event_data: SelectionChangedEventData):
@@ -1049,8 +1019,6 @@ class ThumbnailViewWidget(QFrame):
 
     def closeEvent(self, event):
         event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
-        event_system.unsubscribe(EventType.RANGE_SELECTION_START, self._on_range_start)
-        event_system.unsubscribe(EventType.RANGE_SELECTION_END, self._on_range_end)
         event_system.unsubscribe(EventType.SHIFT_PRESSED, self._on_shift_pressed)
         event_system.unsubscribe(EventType.SHIFT_RELEASED, self._on_shift_released)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
@@ -1220,8 +1188,7 @@ class ThumbnailViewWidget(QFrame):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self._drag_start_index != -1:
             if self._drag_shift_pending:
-                self.hotkey_range_selection_active = True
-                self._range_source = "shift_drag"
+                self._range_selection_active = True
                 self.selection_anchor_index = self._drag_start_index
                 self._selection_mode = "add"
                 self.setCursor(Qt.CrossCursor)

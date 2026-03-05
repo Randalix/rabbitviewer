@@ -2,7 +2,7 @@ from PySide6.QtGui import QKeySequence, QShortcut, QKeyEvent
 import logging
 import time
 from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox
-from PySide6.QtCore import Qt, QObject, QKeyCombination
+from PySide6.QtCore import Qt, QObject
 from config.hotkeys import HotkeyDefinition
 from typing import Dict, List, Callable
 from core.event_system import event_system, EventType, EventData, ZoomEventData
@@ -39,7 +39,6 @@ class HotkeyManager(QObject):
 		self.add_action("toggle_inspector", lambda: event_system.publish(EventData(event_type=EventType.TOGGLE_INSPECTOR, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("open_filter", lambda: event_system.publish(EventData(event_type=EventType.OPEN_FILTER, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("open_tag_editor", lambda: event_system.publish(EventData(event_type=EventType.OPEN_TAG_EDITOR, source="hotkey_manager", timestamp=time.time())))
-		self.add_action("start_range_selection", self.handle_range_selection_start)
 		self.add_action("pin_inspector", lambda: None)  # placeholder; main_window overrides
 		self.add_action("show_hotkey_help", lambda: None)  # placeholder; main_window overrides
 		self.add_action("toggle_info_panel", lambda: None)  # placeholder; main_window overrides
@@ -73,12 +72,6 @@ class HotkeyManager(QObject):
 				shortcut.setEnabled(not should_suppress)
 		logging.debug(f"HotkeyManager: shortcuts {'suppressed' if should_suppress else 'restored'} (focus → {type(new).__name__})")
 
-	def handle_range_selection_start(self):
-		event_system.publish(EventData(event_type=EventType.RANGE_SELECTION_START, source="hotkey_manager", timestamp=time.time()))
-
-	def handle_range_selection_end(self):
-		event_system.publish(EventData(event_type=EventType.RANGE_SELECTION_END, source="hotkey_manager", timestamp=time.time()))
-
 	def eventFilter(self, obj, event):
 		if not isinstance(event, QKeyEvent):
 			return super().eventFilter(obj, event)
@@ -86,30 +79,12 @@ class HotkeyManager(QObject):
 		if self._shortcuts_suppressed:
 			return super().eventFilter(obj, event)
 
-		range_select_def = self.definitions.get("start_range_selection")
-		if not (range_select_def and range_select_def.sequences):
-			return super().eventFilter(obj, event)
-
-		key_seq = QKeySequence(range_select_def.sequences[0])
-		target_combination = key_seq[0]
-		event_combination = QKeyCombination(event.modifiers(), Qt.Key(event.key()))
-		if event_combination == target_combination:
-			if event.type() == QKeyEvent.Type.KeyPress:
-				if not event.isAutoRepeat():
-					self.handle_range_selection_start()
-				return True
-			elif event.type() == QKeyEvent.Type.KeyRelease:
-				if not event.isAutoRepeat():
-					self.handle_range_selection_end()
-				return True
-
 		# Shift press/release for drag-to-range-selection transition
 		if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
 			if event.type() == QKeyEvent.Type.KeyPress:
 				event_system.publish(EventData(event_type=EventType.SHIFT_PRESSED, source="hotkey_manager", timestamp=time.time()))
 			elif event.type() == QKeyEvent.Type.KeyRelease:
 				event_system.publish(EventData(event_type=EventType.SHIFT_RELEASED, source="hotkey_manager", timestamp=time.time()))
-			# Don't consume — let Shift propagate for other modifier uses
 
 		return super().eventFilter(obj, event)
 						
@@ -135,12 +110,6 @@ class HotkeyManager(QObject):
 
 	def add_hotkey_shortcut(self, definition: HotkeyDefinition):
 		if not definition.sequences:
-			return
-			
-		# This action is handled exclusively by the eventFilter for press/release logic
-		if definition.action_name == "start_range_selection":
-			logging.debug("Skipping QShortcut for 'start_range_selection', handled by eventFilter.")
-			self.definitions[definition.action_name] = definition
 			return
 
 		logging.debug(f"Setting up hotkey: {definition.action_name} ({definition.sequences})")

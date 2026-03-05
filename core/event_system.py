@@ -54,8 +54,6 @@ class EventType(Enum):
     OPEN_FILTER = "open_filter"
     OPEN_TAG_EDITOR = "open_tag_editor"
     OPEN_TAG_FILTER = "open_tag_filter"
-    RANGE_SELECTION_START = "range_selection_start"
-    RANGE_SELECTION_END = "range_selection_end"
     SHIFT_PRESSED = "shift_pressed"
     SHIFT_RELEASED = "shift_released"
     TOGGLE_INSPECTOR = "toggle_inspector"

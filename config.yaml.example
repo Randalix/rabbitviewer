@@ -72,9 +72,6 @@ hotkeys:
   show_hotkey_help:
     description: Show keyboard shortcuts
     sequence: '?'
-  start_range_selection:
-    description: Toggle range selection mode
-    sequence: S
   zoom_in:
     description: Zoom in
     sequence: Ctrl++
