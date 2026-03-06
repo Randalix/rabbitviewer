@@ -1,0 +1,130 @@
+# RabbitViewer — full configuration reference
+# Copy this file to ~/.config/rabbitviewer/config.yaml and customize as needed.
+# All values shown are defaults unless noted otherwise.
+
+watch_paths:
+  - ~/Pictures
+  - ~/Downloads
+
+thumbnail_size: 128
+
+cache_dir: ~/.rabbitviewer
+
+logging_level: DEBUG
+
+min_file_size: 8192  # bytes; 8 KB floor
+
+ignore_patterns:
+  - "._*"
+
+max_cache_size_mb: 10240  # 10 GB; 0 = unlimited
+
+fullres_cache_threshold_ms: 500  # Below this -> RAM only; above -> disk
+fullres_mem_cache_mb: 512        # Max daemon-side memory for fast fullres images
+
+system:
+  socket_path: /tmp/rabbitviewer_${USER}.sock
+
+files:
+  cache:
+    dir: ~/.rabbitviewer/cache
+
+metadata:
+  default_write_mode: sidecar   # "sidecar" or "embedded"
+  format_write_mode:
+    .cr3: embedded
+    .jpg: embedded
+
+inspector:
+  zoom_factor: 3.0
+
+gui:
+  background_color: '#000000'
+  spacing: 1
+  border_width: 1
+  hover_border_color: '#2d59b6'
+  select_border_color: orange
+  placeholder_color: black
+  info_panel_opacity: 0.8
+  statusbar_font: Arial
+  statusbar_font_size: 10
+
+hotkeys:
+  escape_picture_view:
+    sequence: Esc
+    description: Return to thumbnail view
+  close_or_quit:
+    sequence: q
+    description: Close picture view, then inspector views, then quit
+  next_image:
+    sequence: D
+    description: Navigate to next image
+    extra_sequences:
+      - Right
+  previous_image:
+    sequence: A
+    description: Navigate to previous image
+    extra_sequences:
+      - Left
+  toggle_inspector:
+    sequence: I
+    description: Toggle inspector window
+  pin_inspector:
+    sequence: P
+    description: Pin/unpin inspector to current image
+  "script:set_rating_0":
+    sequence: "0"
+    description: Rate selected images 0 stars
+  "script:set_rating_1":
+    sequence: "1"
+    description: Rate selected images 1 star
+  "script:set_rating_2":
+    sequence: "2"
+    description: Rate selected images 2 stars
+  "script:set_rating_3":
+    sequence: "3"
+    description: Rate selected images 3 stars
+  "script:set_rating_4":
+    sequence: "4"
+    description: Rate selected images 4 stars
+  "script:set_rating_5":
+    sequence: "5"
+    description: Rate selected images 5 stars
+  "menu:sort":
+    sequence: S
+    description: Open sort menu
+  compare_view:
+    sequence: C
+    description: Compare selected images side by side
+  show_hotkey_help:
+    sequence: "?"
+    description: Show keyboard shortcuts
+  toggle_info_panel:
+    sequence: M
+    description: Open metadata info panel
+  "menu:tags":
+    sequence: T
+    description: Open tags menu
+  open_comfyui:
+    sequence: G
+    description: Open ComfyUI generation dialog
+  zoom_in:
+    sequence: "+"
+    description: Zoom in
+  zoom_out:
+    sequence: "-"
+    description: Zoom out
+  open_filter:
+    sequence: Ctrl+F
+    description: Open filter dialog
+  undo_selection:
+    sequence: Ctrl+Z
+    description: Undo selection
+  redo_selection:
+    sequence: Ctrl+Shift+Z
+    description: Redo selection
+
+comfyui:
+  host: 192.168.50.4
+  port: 8188
+  workflows_dir: ""

@@ -1,0 +1,31 @@
+watch_paths:
+  - ~/Pictures
+  - ~/Downloads
+
+thumbnail_size: 128
+
+cache_dir: ~/.rabbitviewer
+
+logging_level: error
+
+min_file_size: 8192
+
+max_cache_size_mb: 10240
+
+files:
+  cache:
+    dir: ~/.rabbitviewer/cache
+
+metadata:
+  default_write_mode: sidecar
+
+gui:
+  background_color: '#000000'
+  border_width: 2
+  hover_border_color: '#2d59b6'
+  info_panel_opacity: 0.75
+  placeholder_color: black
+  select_border_color: orange
+  spacing: 1
+  statusbar_font: Hermit
+  statusbar_font_size: 10
