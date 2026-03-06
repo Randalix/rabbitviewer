@@ -51,7 +51,9 @@ def _call(socket_path: str, payload: dict, timeout: float = 5.0) -> dict:
 
 def get_selection() -> list[str]:
     resp = _call(GUI_SOCKET_PATH, {"command": "get_selection"})
-    return resp.get("paths", [])
+    raw = resp.get("paths", [])
+    # Protocol now returns ImageEntryModel dicts; extract bare path strings.
+    return [p["path"] if isinstance(p, dict) else p for p in raw]
 
 
 # ---------------------------------------------------------------------------
