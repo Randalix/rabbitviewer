@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Optional, Set, List, TYPE_CHECKING
 import threading
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QApplication, QFileDialog, QMessageBox
-from PySide6.QtCore import Qt, Slot, QPointF, QPoint, QTimer, Signal, QSettings
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QApplication
+from PySide6.QtCore import Slot, QPointF, QTimer, Signal, QSettings
 import logging
 import os
 import time
@@ -19,7 +19,7 @@ from .modal_menu import ModalMenu
 from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
 from scripts.script_manager import ScriptManager, ScriptAPI
-from core.event_system import event_system, EventType, InspectorEventData, MouseEventData, KeyEventData, ViewEventData, EventData, StatusMessageEventData, StatusSection
+from core.event_system import event_system, EventType, InspectorEventData, StatusMessageEventData, StatusSection
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
 from network.gui_server import GuiServer
 from network.daemon_signals import DaemonSignals
@@ -41,6 +41,8 @@ def _is_video(path: str) -> bool:
 class MainWindow(QMainWindow):
     _hover_rating_ready = Signal(str, int)  # (path, rating)
     _hover_metadata_ready = Signal(str)  # path — emitted after cache populated
+    _tag_filter_ready = Signal(list, list)  # (dir_tags, global_tags)
+    _tag_editor_ready = Signal(int, list, list, list)  # (count, common_tags, dir_tags, global_tags)
     def __init__(self, config_manager, service,
                  daemon_signals: DaemonSignals):
         super().__init__()
@@ -369,6 +371,7 @@ class MainWindow(QMainWindow):
         if not self.tag_filter_dialog:
             self.tag_filter_dialog = TagFilterDialog(self)
             self.tag_filter_dialog.tags_changed.connect(self._handle_tags_filter_changed)
+            self._tag_filter_ready.connect(self._on_tag_filter_ready)
 
         if self.tag_filter_dialog.isVisible():
             self.tag_filter_dialog.hide()
@@ -376,16 +379,32 @@ class MainWindow(QMainWindow):
             if self.thumbnail_view:
                 self.thumbnail_view.apply_tag_filter([])
         else:
-            if self.thumbnail_view and self.thumbnail_view.service:
-                dir_path = self.thumbnail_view.current_directory_path or ""
-                tags_resp = self.thumbnail_view.service.get_tags(dir_path)
-                if tags_resp:
-                    dir_tags = [t['name'] for t in tags_resp.get('directory_tags', [])]
-                    global_tags = [t['name'] for t in tags_resp.get('global_tags', [])]
-                    self.tag_filter_dialog.set_available_tags(dir_tags, global_tags)
             self.tag_filter_dialog.show()
             self.tag_filter_dialog.raise_()
             self.tag_filter_dialog.activateWindow()
+            if self.thumbnail_view and self.thumbnail_view.service:
+                threading.Thread(
+                    target=self._fetch_tag_filter_data, daemon=True
+                ).start()
+
+    def _fetch_tag_filter_data(self):
+        sc = self.thumbnail_view.service
+        if not sc:
+            return
+        try:
+            dir_path = self.thumbnail_view.current_directory_path or ""
+            tags_resp = sc.get_tags(dir_path)
+            if tags_resp:
+                dir_tags = [t['name'] for t in tags_resp.get('directory_tags', [])]
+                global_tags = [t['name'] for t in tags_resp.get('global_tags', [])]
+                self._tag_filter_ready.emit(dir_tags, global_tags)
+        except Exception as e:  # why: background IPC; socket failure must not crash the worker
+            logging.debug(f"Tag filter fetch failed: {e}")
+
+    @Slot(list, list)
+    def _on_tag_filter_ready(self, dir_tags: list, global_tags: list):
+        if self.tag_filter_dialog and self.tag_filter_dialog.isVisible():
+            self.tag_filter_dialog.set_available_tags(dir_tags, global_tags)
 
     def get_effective_selection(self) -> list:
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
@@ -406,29 +425,44 @@ class MainWindow(QMainWindow):
         if not selected:
             return
 
-        sc = self.thumbnail_view.service
-
         if not self.tag_editor_dialog:
             self.tag_editor_dialog = TagEditorDialog(self)
             self.tag_editor_dialog.tags_confirmed.connect(self._on_tags_confirmed)
-
-        # Fetch existing tags for the selection and autocomplete lists
-        dir_path = self.thumbnail_view.current_directory_path or ""
-        existing_resp = sc.get_image_tags(selected)
-        tags_resp = sc.get_tags(dir_path)
-
-        # Intersection of tags across all selected images
-        if existing_resp:
-            tag_sets = [set(v) for v in existing_resp.values()]
-            common_tags = sorted(set.intersection(*tag_sets)) if tag_sets else []
-        else:
-            common_tags = []
-
-        dir_tags = [t['name'] for t in tags_resp.get('directory_tags', [])] if tags_resp else []
-        global_tags = [t['name'] for t in tags_resp.get('global_tags', [])] if tags_resp else []
+            self._tag_editor_ready.connect(self._on_tag_editor_ready)
 
         self._tag_editor_targets = selected
-        self.tag_editor_dialog.open_for_images(len(selected), common_tags, dir_tags, global_tags)
+        threading.Thread(
+            target=self._fetch_tag_editor_data,
+            args=(selected,),
+            daemon=True,
+        ).start()
+
+    def _fetch_tag_editor_data(self, selected: list):
+        sc = self.thumbnail_view.service
+        if not sc:
+            return
+        try:
+            dir_path = self.thumbnail_view.current_directory_path or ""
+            existing_resp = sc.get_image_tags(selected)
+            tags_resp = sc.get_tags(dir_path)
+
+            if existing_resp:
+                tag_sets = [set(v) for v in existing_resp.values()]
+                common_tags = sorted(set.intersection(*tag_sets)) if tag_sets else []
+            else:
+                common_tags = []
+
+            dir_tags = [t['name'] for t in tags_resp.get('directory_tags', [])] if tags_resp else []
+            global_tags = [t['name'] for t in tags_resp.get('global_tags', [])] if tags_resp else []
+
+            self._tag_editor_ready.emit(len(selected), common_tags, dir_tags, global_tags)
+        except Exception as e:  # why: background IPC; socket failure must not crash the worker
+            logging.debug(f"Tag editor fetch failed: {e}")
+
+    @Slot(int, list, list, list)
+    def _on_tag_editor_ready(self, count: int, common_tags: list, dir_tags: list, global_tags: list):
+        if self.tag_editor_dialog:
+            self.tag_editor_dialog.open_for_images(count, common_tags, dir_tags, global_tags)
 
     def _on_tags_confirmed(self, tags_to_add: list, tags_to_remove: list):
         if not self.thumbnail_view or not self.thumbnail_view.service:
@@ -785,21 +819,18 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            try:
-                current_idx = self.thumbnail_view.current_files.index(current_path)
-            except ValueError:
-                logging.warning(f"Current media {current_path} not found in visible files")
-                return
-            num_visible = len(self.thumbnail_view.current_files)
-            if num_visible == 0:
-                return
-            if direction == "next":
-                new_idx = (current_idx + 1) % num_visible
-            elif direction == "previous":
-                new_idx = (current_idx - 1 + num_visible) % num_visible
-            else:
-                return
-            new_path = self.thumbnail_view.current_files[new_idx]
-            self._open_media_view(new_path)
-        except Exception as e:  # why: loadImage delegates to format plugins which may raise arbitrarily
-            logging.error(f"Error navigating to {direction} media: {e}", exc_info=True)
+            current_idx = self.thumbnail_view.current_files.index(current_path)
+        except ValueError:
+            logging.warning(f"Current media {current_path} not found in visible files")
+            return
+        num_visible = len(self.thumbnail_view.current_files)
+        if num_visible == 0:
+            return
+        if direction == "next":
+            new_idx = (current_idx + 1) % num_visible
+        elif direction == "previous":
+            new_idx = (current_idx - 1 + num_visible) % num_visible
+        else:
+            return
+        new_path = self.thumbnail_view.current_files[new_idx]
+        self._open_media_view(new_path)
