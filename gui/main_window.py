@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Set, List, TYPE_CHECKING
 import threading
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QApplication, QFileDialog, QMessageBox
-from PySide6.QtCore import Qt, Slot, QPointF, QSize, QPoint, QTimer, QEvent, QObject, Signal, QSettings
+from PySide6.QtCore import Qt, Slot, QPointF, QPoint, QTimer, Signal, QSettings
 import logging
 import os
 import time
@@ -91,7 +91,6 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._deferred_init)
 
     def _deferred_init(self):
-        """Heavy initialisation deferred until after the first frame is painted."""
         from .status_bar import CustomStatusBar
         self.status_bar = CustomStatusBar(self.config_manager, self)
         self.setStatusBar(self.status_bar)
@@ -143,7 +142,6 @@ class MainWindow(QMainWindow):
         logging.info(f"Benchmark - {operation}: {time:.3f} seconds")
 
     def _is_detail_view_active(self) -> bool:
-        """Return True if either picture view or video view is the active widget."""
         current = self.stacked_widget.currentWidget()
         return current is self.picture_view or current is self.video_view
 
@@ -212,7 +210,6 @@ class MainWindow(QMainWindow):
             logging.debug(f"Hover rating fetch failed for {path}: {e}")
 
     def notify_rating_set(self):
-        """Record that a rating was just set, suppressing stale hover results."""
         self._last_rating_set_time = time.time()
 
     def _on_hover_rating_ready(self, path: str, rating: int):
@@ -229,7 +226,6 @@ class MainWindow(QMainWindow):
             ))
 
     def _on_hover_metadata_ready(self, path: str):
-        """Refresh info panels after the background fetch populated the cache."""
         for panel in self.info_panels:
             panel.refresh_if_showing(path)
 
@@ -257,7 +253,6 @@ class MainWindow(QMainWindow):
                 self._prefetch_view_image_async(neighbor)
 
     def _open_inspector_window(self):
-        """Create and show a new inspector window."""
         from .inspector_view import InspectorView
         inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot, parent=self)
         self._inspector_slot += 1
@@ -277,7 +272,7 @@ class MainWindow(QMainWindow):
                 image_path=self.current_hovered_image,
                 normalized_position=QPointF(0.5, 0.5),
             )
-            inspector._handle_inspector_update(event_data)
+            inspector.prime(event_data)
         logging.info("Opened new Inspector window.")
 
     def _on_inspector_closed(self, inspector):
@@ -289,15 +284,10 @@ class MainWindow(QMainWindow):
             self._inspector_slot = 0
 
     def _pin_last_inspector(self):
-        """Toggle pin on the most recently created inspector view."""
         if self.inspector_views:
             self.inspector_views[-1].toggle_pin()
 
     def _handle_hotkey_zoom(self, direction: int):
-        """Route +/- zoom to the appropriate view.
-
-        direction: +1 for zoom in, -1 for zoom out.
-        """
         factor = 1.25 if direction > 0 else 1 / 1.25
 
         # 1. Focused inspector gets priority
@@ -310,11 +300,10 @@ class MainWindow(QMainWindow):
 
         # 2. Picture view active → zoom via its PictureBase
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
-            # zoomIn/zoomOut both expect a positive factor (they multiply/divide internally)
             if direction > 0:
-                self.picture_view._picture_base.zoomIn(1.25)
+                self.picture_view.zoom_in(1.25)
             else:
-                self.picture_view._picture_base.zoomOut(1.25)
+                self.picture_view.zoom_out(1.25)
             return
 
         # 3. Thumbnail mode → zoom the latest inspector (if any)
@@ -322,7 +311,6 @@ class MainWindow(QMainWindow):
             self.inspector_views[-1].zoom_by_factor(factor)
 
     def _open_info_panel(self):
-        """Create and show a new metadata info panel."""
         provider = MetadataProvider(self.metadata_cache)
         panel = InfoPanelShell(provider, self.metadata_cache,
                                panel_index=self._info_panel_slot,
@@ -343,7 +331,6 @@ class MainWindow(QMainWindow):
             self._info_panel_slot = 0
 
     def open_filter_dialog(self):
-        """Create and show the filter dialog."""
         if not self.filter_dialog:
             self.filter_dialog = FilterDialog(self)
             self.filter_dialog.filter_changed.connect(self._handle_filter_changed)
@@ -360,7 +347,6 @@ class MainWindow(QMainWindow):
             self.filter_dialog.activateWindow()
 
     def _handle_filter_changed(self, filter_text: str):
-        """Handle filter text changes from the filter dialog."""
         logging.debug(f"Filter changed: {filter_text}")
         if self.thumbnail_view:
             self.thumbnail_view.apply_filter(filter_text)
@@ -368,7 +354,6 @@ class MainWindow(QMainWindow):
             logging.warning("Filter changed but no thumbnail_view available")
             
     def _handle_stars_changed(self, star_states: list):
-        """Handle star filter changes from the filter dialog."""
         logging.debug(f"Stars changed: {star_states}")
         if self.thumbnail_view:
             self.thumbnail_view.apply_star_filter(star_states)
@@ -376,13 +361,11 @@ class MainWindow(QMainWindow):
             logging.warning("Stars changed but no thumbnail_view available")
 
     def _handle_tags_filter_changed(self, tag_names: list):
-        """Handle tag filter changes from the tag filter dialog."""
         logging.debug(f"Tag filter changed: {tag_names}")
         if self.thumbnail_view:
             self.thumbnail_view.apply_tag_filter(tag_names)
 
     def open_tag_filter(self):
-        """Open or toggle the standalone tag filter dialog."""
         if not self.tag_filter_dialog:
             self.tag_filter_dialog = TagFilterDialog(self)
             self.tag_filter_dialog.tags_changed.connect(self._handle_tags_filter_changed)
@@ -405,7 +388,6 @@ class MainWindow(QMainWindow):
             self.tag_filter_dialog.activateWindow()
 
     def get_effective_selection(self) -> list:
-        """Return selected image paths, falling back to the hovered image."""
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             path = self.picture_view.current_path
             return [path] if path else []
@@ -418,7 +400,6 @@ class MainWindow(QMainWindow):
         return selected
 
     def open_tag_editor(self):
-        """Open the tag assignment popup for selected images."""
         if not self.thumbnail_view or not self.thumbnail_view.service:
             return
         selected = list(self.script_api.get_selected_images())
@@ -450,7 +431,6 @@ class MainWindow(QMainWindow):
         self.tag_editor_dialog.open_for_images(len(selected), common_tags, dir_tags, global_tags)
 
     def _on_tags_confirmed(self, tags_to_add: list, tags_to_remove: list):
-        """Handle tag editor confirmation."""
         if not self.thumbnail_view or not self.thumbnail_view.service:
             return
         selected = self._tag_editor_targets
@@ -494,7 +474,6 @@ class MainWindow(QMainWindow):
         threading.Thread(target=_send, daemon=True).start()
 
     def _on_filters_applied(self):
-        """After filter re-applies, refresh UI state for the currently active media."""
         # Case 1: detail view is open — navigate away if current media is now filtered out
         current_path = None
         active_view = None
@@ -524,12 +503,11 @@ class MainWindow(QMainWindow):
             self.thumbnail_view.thumbnailHovered.emit(hovered_path)
             
     def _prime_inspector_from_picture_view(self, inspector):
-        """Prime a single inspector from the current picture view state."""
         if (self.picture_view and self.picture_view.current_path and
-                self.picture_view._picture_base.has_image()):
+                self.picture_view.has_image()):
             try:
                 local_pos = self.picture_view.mapFromGlobal(self.picture_view.cursor().pos())
-                norm_pos = self.picture_view._picture_base.screenToNormalized(QPointF(local_pos))
+                norm_pos = self.picture_view.screen_to_normalized(QPointF(local_pos))
                 norm_pos = QPointF(
                     max(0.0, min(1.0, norm_pos.x())),
                     max(0.0, min(1.0, norm_pos.y())),
@@ -541,8 +519,8 @@ class MainWindow(QMainWindow):
                     image_path=self.picture_view.current_path,
                     normalized_position=norm_pos,
                 )
-                inspector._handle_inspector_update(event_data)
-            except Exception as e:
+                inspector.prime(event_data)
+            except Exception as e:  # why: screenToNormalized may raise before first paint; priming is best-effort
                 logging.error(f"Error priming inspector: {e}", exc_info=True)
 
             
@@ -555,7 +533,6 @@ class MainWindow(QMainWindow):
         if not urls:
             return
 
-        # Collect all valid local file/directory paths
         paths = []
         for url in urls:
             p = url.toLocalFile()
@@ -564,7 +541,6 @@ class MainWindow(QMainWindow):
         if not paths:
             return
 
-        # Single drop: directory or file
         if len(paths) == 1:
             path = paths[0]
             if os.path.isdir(path):
@@ -573,16 +549,14 @@ class MainWindow(QMainWindow):
                 self.load_directory(os.path.dirname(path), recursive=False)
                 self._open_media_view(path)
         else:
-            # Multiple drops: add only the dropped files to the current view
             file_paths = [p for p in paths if os.path.isfile(p)]
             if file_paths:
                 self.thumbnail_view.add_images(file_paths)
 
     def closeEvent(self, event):
-        """Handles the window close event."""
         logging.info("GUI close requested.")
         if self.service:
-            self.service.rm.prepare_for_shutdown()
+            self.service.prepare_for_shutdown()
         self._hover_clear_timer.stop()
         self._hover_prefetch_timer.stop()
 
@@ -610,7 +584,6 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def _setup_event_subscriptions(self):
-        """Subscribe to inspector events to track hovered image."""
         event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_event)
         # Subscribe to undo/redo events, which might be triggered by menus/etc.
         event_system.subscribe(EventType.UNDO_SELECTION, lambda data: self.selection_history.undo())
@@ -621,7 +594,6 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
 
     def _handle_status_message(self, event_data: StatusMessageEventData):
-        """Route a status message to the appropriate section."""
         if not self.status_bar:
             return
         if event_data.section == StatusSection.FILEPATH:
@@ -633,12 +605,10 @@ class MainWindow(QMainWindow):
             self.status_bar.setProcessMessage(event_data.message, event_data.timeout)
 
     def _handle_inspector_event(self, event_data):
-        """Handle inspector events to track the currently hovered image."""
         self.current_hovered_image = event_data.image_path
         logging.debug(f"Hovered image updated: {self.current_hovered_image}")
 
     def _setup_hotkeys(self):
-        """Initialize hotkey manager with unified configuration"""
         hotkeys_config = self.config_manager.get("hotkeys", {})
         self.hotkey_manager = HotkeyManager(self, hotkeys_config)
         
@@ -657,7 +627,6 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
 
     def _toggle_hotkey_help(self):
-        """Toggle the keyboard shortcuts overlay."""
         if not hasattr(self, '_hotkey_help_overlay') or self._hotkey_help_overlay is None:
             defn = self.hotkey_manager.definitions.get("show_hotkey_help")
             trigger_key = defn.sequences[0] if defn and defn.sequences else "?"
@@ -666,7 +635,6 @@ class MainWindow(QMainWindow):
         self._hotkey_help_overlay.toggle()
 
     def load_directory(self, directory_path: str, recursive: bool = True):
-        """Load a directory of images into the thumbnail view."""
         logging.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")
         self.last_known_directory = directory_path
         logging.info("MainWindow: Calling thumbnail_view.load_directory...")
@@ -679,7 +647,6 @@ class MainWindow(QMainWindow):
         return set(self._removed_images)
 
     def remove_images(self, image_paths: List[str]):
-        """Remove images from the thumbnail view and update active media view."""
         if not self.thumbnail_view:
             return
         removed_set = set(image_paths)
@@ -710,25 +677,18 @@ class MainWindow(QMainWindow):
         
     @Slot()
     def _handle_thumbnail_double_click(self):
-        """Handle double-click on thumbnail by opening the currently hovered media."""
         target_image = self.current_hovered_image
         if not target_image:
             return
         self._open_media_view(target_image)
 
     def _open_media_view(self, file_path: str):
-        """Route to PictureView or VideoView based on file type."""
-        if not os.path.exists(file_path):
-            logging.error(f"File does not exist: {file_path}")
-            return
         if _is_video(file_path):
             self._open_video_view(file_path)
         else:
             self._open_picture_view(file_path)
 
     def _open_video_view(self, video_path: str):
-        """Open a video in the embedded mpv player."""
-        # Close picture view if it's open (switching media types).
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             self.picture_view.close()
             self.picture_view = None
@@ -743,14 +703,10 @@ class MainWindow(QMainWindow):
             self._hover_clear_timer.stop()
             self.stacked_widget.setCurrentWidget(self.video_view)
             self.video_view.setFocus()
-        except Exception as e:
+        except Exception as e:  # why: python-mpv init may raise on missing libmpv or unsupported format
             logging.error(f"Failed to open video view: {e}", exc_info=True)
 
     def _open_picture_view(self, image_path: str):
-        if not os.path.exists(image_path):
-            logging.error(f"Original file does not exist: {image_path}")
-            return
-        # Close video view if switching from video to image.
         if self.video_view and self.stacked_widget.currentWidget() is self.video_view:
             self.video_view.close()
             self.video_view = None
@@ -772,7 +728,6 @@ class MainWindow(QMainWindow):
             logging.error(f"Exception when opening Picture View: {e}", exc_info=True)
             
     def _handle_close_or_quit(self):
-        """Cascade: close media view → close last inspector → close last info panel → quit."""
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             self.close_picture_view()
         elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
@@ -785,14 +740,12 @@ class MainWindow(QMainWindow):
             self.close()
 
     def _close_active_media_view(self):
-        """Close whichever media view is active."""
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             self.close_picture_view()
         elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
             self.close_video_view()
 
     def close_picture_view(self):
-        """Close picture view and return to thumbnail view."""
         logging.debug("Closing picture view")
         try:
             if self.picture_view:
@@ -809,7 +762,6 @@ class MainWindow(QMainWindow):
             logging.error(f"Error closing picture view: {e}", exc_info=True)
 
     def close_video_view(self):
-        """Close video view and return to thumbnail view."""
         logging.debug("Closing video view")
         try:
             if self.video_view:
@@ -823,8 +775,6 @@ class MainWindow(QMainWindow):
             logging.error(f"Error closing video view: {e}", exc_info=True)
 
     def navigate_to_image(self, direction: str):
-        """Navigate to next/previous media in the current view."""
-        # Get current path from whichever view is active.
         current_path = None
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             current_path = self.picture_view.current_path

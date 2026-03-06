@@ -141,6 +141,9 @@ class InspectorView(QWidget):
                 ).start()
         self._update_window_title()
 
+    def prime(self, event_data: InspectorEventData):
+        self._handle_inspector_update(event_data)
+
     def _handle_inspector_update(self, event_data: InspectorEventData):
         if not self.isVisible():
             return

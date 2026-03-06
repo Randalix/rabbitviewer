@@ -322,6 +322,18 @@ class PictureView(QWidget):
 
         self.zoomChanged.emit(self._picture_base.viewState().zoom)
 
+    def has_image(self) -> bool:
+        return self._picture_base.has_image()
+
+    def screen_to_normalized(self, pos: QPointF) -> QPointF:
+        return self._picture_base.screenToNormalized(pos)
+
+    def zoom_in(self, factor: float = 1.25):
+        self._picture_base.zoomIn(factor)
+
+    def zoom_out(self, factor: float = 1.25):
+        self._picture_base.zoomOut(factor)
+
     def closeEvent(self, event):
         if self._daemon_signals:
             self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)

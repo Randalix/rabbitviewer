@@ -27,6 +27,9 @@ class ThumbnailService:
         self._compound_task_counter = 0
         self._counter_lock = threading.Lock()
 
+    def prepare_for_shutdown(self):
+        self.rm.prepare_for_shutdown()
+
     # ------------------------------------------------------------------
     #  Directory / File Discovery
     # ------------------------------------------------------------------
