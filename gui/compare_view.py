@@ -1,11 +1,13 @@
 import math
 import logging
 import threading
+import time
 
 from PySide6.QtWidgets import QWidget, QGridLayout
 from PySide6.QtCore import Qt, Signal, QPointF, QSizeF, QPoint
 from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QWheelEvent, QKeyEvent
 
+from core.event_system import EventType, StatusMessageEventData, StatusSection, event_system
 from .picture_base import PictureBase, ViewState
 
 
@@ -158,6 +160,25 @@ class _CompareSplit(QWidget):
             else:
                 self._picture_base.setFitMode(True)
             self._user_navigating = False
+
+    def enterEvent(self, event) -> None:
+        if self._current_path:
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE,
+                source="compare_view",
+                timestamp=time.time(),
+                message=self._current_path,
+                section=StatusSection.FILEPATH,
+            ))
+
+    def leaveEvent(self, event) -> None:
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE,
+            source="compare_view",
+            timestamp=time.time(),
+            message="",
+            section=StatusSection.FILEPATH,
+        ))
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
