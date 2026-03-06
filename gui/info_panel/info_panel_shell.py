@@ -77,12 +77,10 @@ class InfoPanelShell(QWidget):
             self._refresh_sections()
 
     def _build_ui(self):
-        self.setStyleSheet(f"""
-            InfoPanelShell {{
-                background: {_BG};
-                border: 1px solid {_BORDER};
-            }}
-        """)
+        opacity = 0.8
+        if self._config_manager:
+            opacity = self._config_manager.get("gui.info_panel_opacity", 0.8)
+        self.setWindowOpacity(opacity)
 
         font = QFont(_FONT, _FONT_SIZE)
         font.setStyleHint(QFont.Monospace)
