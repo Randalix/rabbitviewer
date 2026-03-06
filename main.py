@@ -327,9 +327,35 @@ def main():
         default=False,
         help='Run as headless background indexer (no GUI).',
     )
+    parser.add_argument(
+        '--stop-daemon',
+        action='store_true',
+        default=False,
+        help='Stop the running daemon and exit.',
+    )
+    parser.add_argument(
+        '--restart-daemon',
+        action='store_true',
+        default=False,
+        help='Stop the running daemon, then start a new one.',
+    )
     args = parser.parse_args()
 
     config_manager = ConfigManager()
+
+    if args.stop_daemon:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+        from cli.stop import stop_daemon
+        sys.exit(0 if stop_daemon() else 1)
+
+    if args.restart_daemon:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+        from cli.stop import stop_daemon
+        if not stop_daemon():
+            logging.error("Could not stop existing daemon; aborting restart.")
+            sys.exit(1)
+        logging.info("Restarting daemon...")
+        args.daemon = True
 
     if args.daemon:
         _run_daemon(config_manager)
