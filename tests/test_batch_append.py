@@ -157,7 +157,7 @@ def _make_view(all_files=None, is_loading=False):
     view._thumb_path_cache = {}
     view._pixmap_cache = {}
     view.labels = {}
-    view.socket_client = MagicMock()
+    view.service = MagicMock()
     view.filtersApplied = MagicMock()
     view._filtered_paths_ready = MagicMock()
     view._viewport_executor = MagicMock()

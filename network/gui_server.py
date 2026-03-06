@@ -144,6 +144,9 @@ class GuiServer(QObject):
                 return self._cmd_remove_images([e.path for e in req.paths])
             elif command == "clear_selection":
                 return self._cmd_clear_selection()
+            elif command == "move_records":
+                req = protocol.MoveRecordsRequest.model_validate(request_data)
+                return self._cmd_move_records(req)
             else:
                 return protocol.GuiErrorResponse(message=f"Unknown command: {command}").model_dump_json()
         except Exception as e:  # why: dispatch errors from unknown commands or buggy handlers
@@ -174,3 +177,8 @@ class GuiServer(QObject):
 
         self._run_on_main_sync(_do)
         return protocol.GuiSuccessResponse().model_dump_json()
+
+    def _cmd_move_records(self, req: protocol.MoveRecordsRequest) -> str:
+        moves = [{"old_path": m.old_entry.path, "new_path": m.new_entry.path} for m in req.moves]
+        count = self._main_window.service.move_records(moves)
+        return protocol.MoveRecordsResponse(moved_count=count).model_dump_json()

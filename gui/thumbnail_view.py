@@ -1403,8 +1403,8 @@ class ThumbnailViewWidget(QFrame):
                 logging.error("Failed to get filtered paths from daemon.")
                 self._filtered_paths_ready.emit(None)
         except Exception as e:
-            # why: socket_client can raise ConnectionError/OSError/ValidationError;
-            # broad guard ensures _filtered_paths_ready always fires to unlock _filter_in_flight.
+            # why: service calls can raise; broad guard ensures
+            # _filtered_paths_ready always fires to unlock _filter_in_flight.
             logging.error("Error fetching filtered paths: %s", e, exc_info=True)
             self._filtered_paths_ready.emit(None)
 

@@ -6,7 +6,6 @@ import os
 import queue
 import time
 
-# NEU: Import des zentralen ThumbnailManager
 from core.thumbnail_manager import ThumbnailManager as CoreThumbnailManager
 
 
@@ -48,13 +47,12 @@ class ThumbnailManager(QObject):
     
     thumbnailReady = Signal(str, str, QPixmap)  # original_path, thumb_path, pixmap
     
-    # NEU: Akzeptiert den zentralen ThumbnailManager anstelle des socket_client
     def __init__(self, core_thumbnail_manager: CoreThumbnailManager, cache_size=5000):
         super().__init__()
         self.core_thumbnail_manager = core_thumbnail_manager
         self.cache = ThumbnailCache(cache_size)
         self.pending_thumbnails = {}  # path -> priority
-        self.loader_thread = None # Dieser LoaderThread wird vom ThumbnailViewWidget verwaltet
+        self.loader_thread = None
         
     def request_thumbnail(self, path: str, priority: int = 0):
         """Request a thumbnail for the given path"""
@@ -72,9 +70,7 @@ class ThumbnailManager(QObject):
             if path not in self.cache:
                 self.pending_thumbnails[path] = priority
                 
-        # NEU: Anstatt an den Socket-Client zu senden, direkt den zentralen ThumbnailManager anfragen
         for path, prio in paths_with_priorities:
-            # Hier wird die Priorität auf GUI_REQUEST gesetzt, da es eine explizite Anforderung der GUI ist
             self.core_thumbnail_manager.request_thumbnail(path, priority=True)
         
     def on_thumbnail_ready(self, original_path: str, thumb_path: str, pixmap: QPixmap):

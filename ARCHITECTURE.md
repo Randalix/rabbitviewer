@@ -2,47 +2,57 @@
 
 ## Overview
 
-RabbitViewer is a daemon + GUI image viewer. The GUI is a thin Qt6 client; all heavy work runs in the daemon process.
+RabbitViewer is a single-binary image viewer with two modes: GUI mode and daemon mode (headless). Both modes share the same entry point (`main.py`). The GUI runs all core services **in-process** via `ThumbnailService`; there is no socket IPC between GUI and daemon. The daemon is a standalone headless indexer that continues background work when the GUI is closed, coordinated via flock-based resource locking.
 
 ```
-┌─────────────────────────────┐     Unix socket      ┌──────────────────────────────────┐
-│           GUI               │◄────────────────────►│           Daemon                 │
-│   (main.py → gui/)          │  JSON + 4-byte frame  │  (rabbitviewer_daemon.py)        │
-│                             │                       │                                  │
-│  renders state              │   request/response    │  ThumbnailManager                │
-│  sends requests             │   notifications ──►   │  RenderManager                   │
-│  reports viewport           │                       │  MetadataDatabase                │
-└─────────────────────────────┘                       │  DirectoryScanner                │
-                                                       │  WatchdogHandler                 │
-                                                       │  SocketServer                    │
-                                                       └──────────────────────────────────┘
+┌──────────────────────────────────┐          ┌──────────────────────────────────┐
+│         GUI mode                 │          │       Daemon mode                │
+│    (main.py → gui/)              │          │  (main.py --daemon)              │
+│                                  │          │                                  │
+│  ThumbnailService (in-process)   │  flock   │  ThumbnailManager                │
+│    ├─ ThumbnailManager           │◄────────►│  RenderManager                   │
+│    ├─ RenderManager              │ gui.lock │  MetadataDatabase                │
+│    ├─ MetadataDatabase           │          │  BackgroundIndexer               │
+│    └─ DirectoryScanner           │          │  WatchdogHandler                 │
+│  DaemonSignals (Qt thread bridge)│          │                                  │
+│  WatchdogHandler                 │          │  Pauses when GUI holds flock     │
+│  GuiServer (CLI control socket)  │          │  Resumes when GUI releases flock │
+└──────────────────────────────────┘          └──────────────────────────────────┘
 ```
 
 ## Process Startup
 
 ```
-main.py --restart-daemon [directory]
-  1. Kill any existing daemon (if --restart-daemon)
-  2. Spawn rabbitviewer_daemon.py via subprocess (start_new_session=True)
-  3. Wait for socket file to appear (up to 10s)
-  4. Start NotificationListener thread
-  5. Open MainWindow
-```
+main.py [directory]              # GUI mode — runs core services in-process
+main.py --daemon                 # Daemon mode — headless background indexer
 
-The daemon creates its socket file as the first act after startup, signaling readiness.
+GUI startup:
+  1. Acquire GUI flock (~/.rabbitviewer/gui.lock)
+  2. Init core: ThumbnailManager, WatchdogHandler, DirectoryScanner
+  3. Create ThumbnailService (in-process facade)
+  4. Auto-launch daemon subprocess (for post-GUI indexing)
+  5. Create QApplication, DaemonSignals, MainWindow
+  6. Start GuiServer (CLI control socket)
+
+Daemon startup:
+  1. Acquire daemon PID lock (~/.rabbitviewer/cache/daemon.pid)
+  2. Init core: ThumbnailManager, WatchdogHandler, DirectoryScanner
+  3. Start BackgroundIndexer (SourceJobs for each watch_path)
+  4. Poll GUI flock every 2s — pause workers when GUI active, resume when gone
+```
 
 ---
 
 ## Daemon
 
-### Entry Point — `rabbitviewer_daemon.py`
+### Entry Point — `main.py --daemon`
 
 Wires together:
-- `ThumbnailSocketServer` on the Unix socket
 - `ThumbnailManager` (owns `RenderManager`)
+- `BackgroundIndexer` (submits indexing jobs for each `watch_path`)
 - `WatchdogHandler` (filesystem monitor)
 
-Signal handlers (`SIGTERM`, `SIGINT`) trigger graceful shutdown.
+Coordinated with the GUI via flock: the daemon polls `is_gui_active()` every 2 s and pauses/resumes its `RenderManager` workers accordingly, so both processes never compete for resources. Signal handlers (`SIGTERM`, `SIGINT`) trigger graceful shutdown.
 
 ---
 
@@ -208,7 +218,7 @@ Format handlers registered in a global `PluginRegistry` singleton (`plugins/base
 
 Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate_thumbnail()`, `generate_view_image()`, `extract_metadata()`, `write_rating()`, `write_rating_embedded()`, `write_tags()`, `write_tags_embedded()`, `is_available()`.
 
-**XMP sidecar files:** Metadata writes (ratings, tags) go to an XMP sidecar file (`FILENAME.xmp`, e.g. `photo.cr3` → `photo.xmp`) — the original image is never modified. Utility functions `sidecar_path_for()` and `find_image_for_sidecar()` live in `plugins/base_plugin.py`. On read, `extract_metadata()` and `_extract_metadata_from_file()` check for a sidecar and let its values override embedded metadata. The watchdog monitors `.xmp` file events and maps them back to the parent image for DB re-extraction.
+**XMP sidecar files:** Metadata writes (ratings, tags) go to an XMP sidecar file (`FILENAME.EXT.xmp`, e.g. `photo.cr3` → `photo.cr3.xmp`) — the original image is never modified. Utility functions `sidecar_path_for()` and `find_image_for_sidecar()` live in `plugins/base_plugin.py`. On read, `extract_metadata()` and `_extract_metadata_from_file()` check for a sidecar and let its values override embedded metadata. The watchdog monitors `.xmp` file events and maps them back to the parent image for DB re-extraction.
 
 ---
 
@@ -271,13 +281,31 @@ Watchdog-based filesystem monitor. Initial scan is delayed 30 s after startup to
 
 ---
 
-## IPC
+## In-Process Service Layer
 
-### Socket Protocol — `network/protocol.py`
+### ThumbnailService — `core/thumbnail_service.py`
 
-Unix socket at `/tmp/rabbitviewer_{username}.sock` (configurable). Messages are length-prefixed JSON: 4-byte big-endian `uint32` followed by the UTF-8 JSON body. Schemas are `dataclass`-based `Message` subclasses in `network/protocol.py`.
+In-process facade that the GUI calls directly instead of socket IPC. Exposes the same method signatures the old socket client would have used (`get_directory_files`, `request_previews`, `update_viewport_heatmap`, `set_rating`, `get_metadata_batch`, etc.) but delegates to `ThumbnailManager` / `MetadataDatabase` / `RenderManager` in the same process. No serialization overhead.
 
-**`ImageEntryModel`** — wire representation of an image: `{"path": "/a.cr3", "sidecars": ["/a.xmp"], "variant": null}`. All request/response fields that carry image references use `List[ImageEntryModel]` instead of bare `List[str]`. `Message.model_validate()` auto-coerces bare strings in `List[ImageEntryModel]` fields to `ImageEntryModel(path=str)` for backward compatibility with CLI tools. Dict-keyed fields (`statuses`, `metadata`, `tags`, `thumbnail_paths`) remain `Dict[str, ...]` because JSON dict keys must be strings.
+### DaemonSignals — `network/daemon_signals.py`
+
+Qt `QObject` that bridges worker-thread notifications to the main thread. One `Signal(object)` per notification type (`previews_ready`, `scan_progress`, `scan_complete`, `files_removed`, `comfyui_complete`). Connected via `RenderManager.add_notification_callback(daemon_signals.dispatch_notification)`. Workers call `dispatch_notification()` from background threads; Qt's `AutoConnection` delivers the signal to the main thread.
+
+### Notification Types — `core/notifications.py`
+
+Dataclasses shared between core and GUI (no network dependency): `Notification`, `PreviewsReadyData`, `ScanProgressData`, `ScanCompleteData`, `FilesRemovedData`, `ComfyUICompleteData`, `ImageEntryModel`.
+
+### Flock-Based Resource Coordination — `core/resource_lock.py`
+
+GUI and daemon never run workers simultaneously. The GUI acquires an exclusive flock on `~/.rabbitviewer/gui.lock` at startup. The daemon polls `is_gui_active()` every 2 s and pauses/resumes its `RenderManager` workers. When the GUI exits and releases the flock, the daemon resumes indexing.
+
+---
+
+## Protocol Types — `network/protocol.py`
+
+Dataclass-based `Message` subclasses defining request/response schemas. Originally designed for socket IPC; now used by `ThumbnailService` (in-process), `GuiServer`/`GuiClient` (CLI control socket), and benchmarks (`bench_first_image.py`).
+
+**`ImageEntryModel`** — wire representation of an image: `{"path": "/a.cr3", "sidecars": ["/a.xmp"], "variant": null}`. `Message.model_validate()` auto-coerces bare strings in `List[ImageEntryModel]` fields to `ImageEntryModel(path=str)` for backward compatibility with CLI tools. Dict-keyed fields (`statuses`, `metadata`, `tags`, `thumbnail_paths`) remain `Dict[str, ...]` because JSON dict keys must be strings.
 
 **Boundary conventions:**
 - **DB primary key** — `file_path TEXT` (str)
@@ -286,23 +314,11 @@ Unix socket at `/tmp/rabbitviewer_{username}.sock` (configurable). Messages are 
 - **Protocol wire** — `ImageEntryModel` (JSON object with `path`, `sidecars`, `variant`)
 - **ScriptAPI** — `List[str]` / `Set[str]` (string boundary for user scripts)
 
-Two channels:
-- **Request/response** — `ThumbnailSocketClient` ↔ `ThumbnailSocketServer`
-- **Notifications** — `NotificationListener` maintains a persistent connection; daemon pushes `previews_ready`, `scan_progress`, `scan_complete`, `files_removed` events
-
-**Key request types:**
-- `update_viewport` — carries per-path `PathPriority` pairs (with `entry: ImageEntryModel`) for thumb upgrades, downgrade paths, fullres requests, and fullres cancels. See `PROTOCOL.md` for full schema.
-- `set_tags` / `remove_tags` — bulk tag assignment/removal for image entries. DB update is synchronous; XMP write-back is queued asynchronously.
-- `get_tags` — returns two-tier tag lists (directory-scoped + global) for autocomplete.
-- `get_image_tags` — returns per-path tag lists for a set of images.
-- `get_filtered_file_paths` — extended with optional `tag_names` for combined text + star + tag filtering.
-- `move_records` — carries `List[MoveRecord]` with `old_entry`/`new_entry: ImageEntryModel`.
-
-See `PROTOCOL.md` for full message schema reference.
+**Framing** (`network/_framing.py`) — 4-byte big-endian length prefix + payload. Response frames add a 1-byte type discriminator: `FRAME_JSON (0x00)` for JSON, `FRAME_BINARY (0x01)` for raw image bytes. Used by the GUI control socket and benchmarks. See `PROTOCOL.md` for the full wire format reference.
 
 ### GUI Control Socket — `network/gui_server.py` / `network/gui_client.py`
 
-A second socket (`/tmp/rabbitviewer_gui.sock`) lets CLI tools (e.g. `cli/move_selected.py`) send commands to a running GUI instance. Carries `execute_selection_command` messages.
+The only active socket: `/tmp/rabbitviewer_gui.sock`. Lets CLI tools (e.g. `cli/move_selected.py`) send commands to a running GUI instance. Commands: `get_selection`, `remove_images`, `clear_selection`. Same 4-byte length-prefixed JSON framing as the protocol spec.
 
 ---
 

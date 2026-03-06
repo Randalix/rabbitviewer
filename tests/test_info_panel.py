@@ -34,8 +34,8 @@ class TestSection:
 # ---------------------------------------------------------------------------
 
 class TestMetadataCache:
-    def _make_cache(self, socket_client=None):
-        return MetadataCache(socket_client or MagicMock())
+    def _make_cache(self, service=None):
+        return MetadataCache(service or MagicMock())
 
     def test_get_miss(self):
         cache = self._make_cache()

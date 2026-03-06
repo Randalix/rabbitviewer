@@ -10,7 +10,7 @@ Steps performed:
   2. Purge cached thumbnails for the target directory (DB + disk)
      so the daemon must regenerate everything from scratch
   3. Start a fresh daemon subprocess
-  4. Register as a notification listener (mirrors NotificationListener)
+  4. Register as a notification listener (raw socket, no Qt)
   5. Send get_directory_files to start the three SourceJobs
   6. Collect every previews_ready notification and record its wall time
   7. Stop after --timeout seconds; report milestone times
@@ -66,7 +66,7 @@ PYTHON = _find_python()
 MILESTONES = [1, 5, 10, 25, 50, 100]
 
 # ---------------------------------------------------------------------------
-# Raw IPC helpers  (4-byte length-prefix + JSON, matching socket_client.py)
+# Raw IPC helpers  (4-byte length-prefix + JSON, matching network/_framing.py)
 # ---------------------------------------------------------------------------
 
 def _recv_exactly(sock: socket.socket, n: int) -> bytes:
@@ -171,7 +171,7 @@ def start_daemon() -> subprocess.Popen:
     )
 
 # ---------------------------------------------------------------------------
-# Notification collector  (mirrors NotificationListener, no Qt)
+# Notification collector  (raw socket listener, no Qt)
 # ---------------------------------------------------------------------------
 
 class NotificationCollector(threading.Thread):

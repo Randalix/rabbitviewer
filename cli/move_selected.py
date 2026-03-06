@@ -14,14 +14,12 @@ Self-contained: only stdlib + rsync. No project imports, no pydantic.
 """
 
 import json
-import os
 import socket
 import subprocess
 import sys
 from pathlib import Path
 
-GUI_SOCKET_PATH    = "/tmp/rabbitviewer_gui.sock"
-DAEMON_SOCKET_PATH = f"/tmp/rabbitviewer_{os.getenv('USER', 'user')}.sock"
+GUI_SOCKET_PATH = "/tmp/rabbitviewer_gui.sock"
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +62,7 @@ def remove_images(paths: list[str]) -> None:
 
 
 def move_records(moves: list[dict]) -> int:
-    resp = _call(DAEMON_SOCKET_PATH, {"command": "move_records", "moves": moves})
+    resp = _call(GUI_SOCKET_PATH, {"command": "move_records", "moves": moves})
     return resp.get("moved_count", 0)
 
 

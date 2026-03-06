@@ -28,7 +28,7 @@ class VideoView(QWidget):
 
         self._current_path: str | None = None
         self._duration: float = 0.0
-        self.socket_client = None
+        self.service = None
 
         self._player = None
         self._frame: QImage | None = None
@@ -45,7 +45,7 @@ class VideoView(QWidget):
         self._status_timer.timeout.connect(self._update_status)
 
     def set_service(self, service):
-        self.socket_client = service
+        self.service = service
 
     @property
     def current_path(self) -> str | None:

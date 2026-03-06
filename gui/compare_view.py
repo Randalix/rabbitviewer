@@ -29,17 +29,17 @@ class _CompareSplit(QWidget):
         self.center_offset = QPointF(0.0, 0.0)
         self.zoom_ratio = 1.0  # client_zoom = master_zoom * zoom_ratio
 
-    def fetch_image(self, image_path: str, socket_client):
-        if not socket_client:
+    def fetch_image(self, image_path: str, service):
+        if not service:
             return
-        result = socket_client.request_view_image(image_path)
+        result = service.request_view_image(image_path)
         if result is None:
             return
         # why: QImage construction + load is thread-safe (no GUI dependency);
         # _image_ready signal marshals to GUI thread before any widget mutation.
         image = QImage()
         if result.get('view_image_source') == "memory":
-            image_bytes = socket_client.get_cached_view_image(image_path)
+            image_bytes = service.get_cached_view_image(image_path)
             if image_bytes:
                 image.loadFromData(image_bytes)
         elif result.get('view_image_path'):
@@ -185,10 +185,10 @@ class CompareView(QWidget):
         self._grid_layout.setSpacing(2)
         self._splits: list[_CompareSplit] = []
         self._syncing = False
-        self.socket_client = None
+        self.service = None
 
     def set_service(self, service):
-        self.socket_client = service
+        self.service = service
 
     def load_images(self, image_paths: list[str]):
         for split in self._splits:
@@ -219,8 +219,8 @@ class CompareView(QWidget):
 
     def _load_split_image(self, split: _CompareSplit, path: str):
         try:
-            split.fetch_image(path, self.socket_client)
-        except Exception as e:  # why: socket/plugin errors must not crash the worker thread
+            split.fetch_image(path, self.service)
+        except Exception as e:  # why: service/plugin errors must not crash the worker thread
             logging.error(f"CompareView: failed to load {path}: {e}", exc_info=True)
 
     @property

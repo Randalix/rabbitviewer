@@ -4,148 +4,144 @@
 
 ## 1. The Startup Chain
 
-### 1.1 Daemon side
+### 1.1 Daemon side (headless background indexer)
+
+The daemon (`main.py --daemon`) runs independently from the GUI. It indexes
+`watch_paths` from config and pauses when a GUI is active.
 
 ```
-rabbitviewer_daemon.py
+main.py --daemon → _run_daemon()
   │
   ├─ 1. Load config (config.yaml) + logging setup
   │
-  ├─ 2. Remove stale socket file if present
+  ├─ 2. Acquire daemon PID lock (~/.rabbitviewer/cache/daemon.pid)
+  │     flock(LOCK_EX|LOCK_NB) — exits if another daemon holds it
   │
-  ├─ 3. MetadataDatabase init
-  │     SQLite WAL at ~/.rabbitviewer/cache/metadata.db
+  ├─ 3. _init_core():
+  │     ├─ MetadataDatabase init (SQLite WAL at ~/.rabbitviewer/cache/metadata.db)
+  │     ├─ ThumbnailManager + RenderManager (8 worker threads, priority queue)
+  │     └─ load_plugins()
+  │          • CR3Plugin.is_available() → subprocess("exiftool -ver")   ~100–400 ms
+  │          • PILPlugin.is_available() → import PIL                    ~1 ms
   │
-  ├─ 4. ThumbnailManager init
-  │     • Creates ~/.rabbitviewer/thumbnails/ and ~/.rabbitviewer/images/
-  │     • Starts RenderManager (8 worker threads, priority queue)
+  ├─ 4. WatchdogHandler.start()
+  │     Initial filesystem scan deliberately delayed 30 s
   │
-  ├─ 5. ThumbnailSocketServer.__init__
-  │     • bind() + listen() on the socket
-  │     • Socket file now exists → GUI can start connecting ← KEY SIGNAL
-  │     • Starts _rm_notification_listener_loop thread
+  ├─ 5. BackgroundIndexer.start_indexing()
+  │     Submits one SourceJob per watch_path at BACKGROUND_SCAN(10) priority
   │
-  ├─ 6. load_plugins()     ← happens AFTER bind, so GUI can connect during this
-  │     • CR3Plugin.is_available() → subprocess("exiftool -ver")   ~100–400 ms
-  │     • PILPlugin.is_available() → import PIL                    ~1 ms
-  │
-  ├─ 7. server.run_forever() thread
-  │     Accept loop begins — daemon is now fully operational
-  │
-  └─ 8. WatchdogHandler.start()
-        Initial filesystem scan deliberately delayed 30 s to avoid
-        racing with the GUI's own scan on startup
+  └─ 6. GUI flock poll loop (every 2 s)
+        ├─ GUI active  → rm.pause()   (workers idle)
+        └─ GUI gone    → rm.resume()  (workers resume indexing)
 ```
-
-**Key timing (local SSD, typical values):**
-
-| Step | Duration |
-|---|---|
-| Config + logging | ~5 ms |
-| MetadataDatabase open | ~10 ms |
-| ThumbnailManager + RenderManager | ~15 ms |
-| Socket bind | ~1 ms |
-| `exiftool -ver` (is_available check) | 100–400 ms |
-| Total to accept-ready | ~200–500 ms |
 
 ---
 
-### 1.2 GUI side
+### 1.2 GUI side (in-process, no socket IPC)
+
+The GUI runs all core services in-process. `ThumbnailService` is the facade
+that replaces the old socket client. `DaemonSignals` bridges worker-thread
+notifications to the Qt main thread via direct callback.
 
 ```
-main.py
+main.py [directory] → _run_gui()
   │
   ├─ 1. Load config
   │
-  ├─ 2. Poll socket until daemon creates it (0.2 s interval, 10 s max)
+  ├─ 2. Acquire GUI flock (~/.rabbitviewer/gui.lock)
+  │     Tells daemon to pause workers
   │
-  ├─ 3. NotificationListener thread started
-  │     Establishes persistent socket, sends register_notifier
-  │     Receives scan_progress / previews_ready / scan_complete
+  ├─ 3. _init_core():
+  │     ├─ MetadataDatabase init
+  │     ├─ ThumbnailManager + RenderManager
+  │     └─ load_plugins()
   │
-  ├─ 4. QApplication created
+  ├─ 4. ThumbnailService(thumbnail_manager, directory_scanner)
+  │     In-process facade — same API as old socket client
   │
-  ├─ 5. MainWindow.__init__ (minimal — first paint focus)
+  ├─ 5. WatchdogHandler.start()
+  │
+  ├─ 6. _auto_launch_daemon()
+  │     Spawns detached daemon subprocess for post-GUI background indexing
+  │
+  ├─ 7. QApplication created
+  │
+  ├─ 8. DaemonSignals (QObject)
+  │     Connected to RenderManager.add_notification_callback()
+  │     Bridges worker-thread notifications → Qt signals on main thread
+  │
+  ├─ 9. MainWindow.__init__ (minimal — first paint focus)
   │     • _setup_thumbnail_view() → ThumbnailViewWidget created
   │     • Window title + resize(800, 600)
   │     • QTimer.singleShot(0, _deferred_init)
   │
-  ├─ 6. window.show()
-  ├─ 7. app.processEvents()   ← window paints first frame here
-  │                             _deferred_init fires during this call
+  ├─ 10. window.show()
+  ├─ 11. app.processEvents()   ← window paints first frame here
+  │                              _deferred_init fires during this call
   │
-  ├─ 8. QTimer.singleShot(0, load_directory)
+  ├─ 12. QTimer.singleShot(0, load_directory)
   │
-  └─ 9. app.exec()   ← event loop running, load_directory fires on first tick
+  └─ 13. app.exec()   ← event loop running, load_directory fires on first tick
 ```
 
 **`_deferred_init` (fires during processEvents, before app.exec):**
 - SelectionState + SelectionProcessor + SelectionHistory
-- GuiServer (CLI interop socket)
+- GuiServer (CLI interop socket at /tmp/rabbitviewer_gui.sock)
 - ScriptManager (loads `scripts/` directory)
 - Hotkey setup
 - Event subscriptions
 
-**`load_directory` → daemon request chain:**
+**`load_directory` → in-process request chain:**
 
 ```
 ThumbnailViewWidget.load_directory(path, recursive)
   │
   ├─ _load_directory_deferred() in background thread
   │   │
-  │   └─ socket_client.get_directory_files(path, session_id)
-  │         ── one socket round-trip ──►  daemon
-  │                                        │
-  │                                        ├─ DB lookup: return cached files immediately
-  │                                        │
-  │                                        ├─ Cancel any previous gui_scan_tasks job
-  │                                        │
-  │                                        ├─ Start FastScan thread (dedicated OS thread)
-  │                                        │   Streams scan_progress batches (50 files each)
-  │                                        │   directly to notification_queue, bypassing workers
-  │                                        │
-  │                                        ├─ Submit slow_scan_job (GUI_REQUEST_LOW)
-  │                                        │   create_tasks_for_file per path:
-  │                                        │     cached → emit previews_ready immediately
-  │                                        │     uncached → submit thumbnail + metadata tasks
-  │                                        │
-  │                                        └─ Submit view_image_job (BACKGROUND_SCAN)
-  │                                            Generates full-res view images after thumbnails done
+  │   └─ service.get_directory_files(path)
+  │         ── in-process call ──►  ThumbnailService
+  │                                   │
+  │                                   ├─ DB lookup: return cached files + thumbnail_paths immediately
+  │                                   │
+  │                                   ├─ Submit reconcile_job (Priority(80), create_tasks=False)
+  │                                   │   scan_incremental_reconcile discovers new/deleted files
+  │                                   │   Emits scan_progress so placeholders appear in the GUI
+  │                                   │
+  │                                   └─ on_complete → post_scan job (Priority.LOW)
+  │                                       create_gui_tasks_for_file per discovered path:
+  │                                         cached → no tasks (heatmap handles display)
+  │                                         uncached → submit meta + thumbnail tasks at LOW(30)
   │
-  └─ GUI receives get_directory_files response
-      • If DB has files: _add_image_batch() immediately for cached list (pre-populates grid)
-      • Waits for scan_progress to add more
+  └─ GUI receives get_directory_files response (synchronous return)
+      • Cached files: _add_image_batch() immediately with thumbnail_paths (pre-populates grid)
+      • New files arrive via scan_progress notifications
 ```
 
 **GUI notification handling after load_directory:**
 
 ```
-notification arrives (NotificationListener thread)
-  └─ event_system.publish(DAEMON_NOTIFICATION)
-       └─ _handle_daemon_notification_from_thread()
-            └─ emit _daemon_notification_received (Qt QueuedConnection)
-                 └─ _process_daemon_notification() [main thread]
-                      │
-                      ├─ scan_progress  → _add_image_batch() → placeholder labels
-                      │                   _filter_update_timer.start(200ms)
-                      │                       └─ _update_filtered_layout()
-                      │                             └─ _priority_update_timer.start(100ms)
-                      │                                   └─ _prioritize_visible_thumbnails()
-                      │
-                      ├─ previews_ready → QImage(thumbnail_path)
-                      │                   emit _thumbnail_generated_signal
-                      │                       └─ _on_thumbnail_ready()
-                      │                             └─ label.updateThumbnail(pixmap)
-                      │
-                      └─ scan_complete  → reapply_filters() → final layout
+DaemonSignals (worker thread → Qt main thread)
+  │
+  ├─ scan_progress   → _add_image_batch() → placeholder labels
+  │                    _filter_update_timer.start(200ms)
+  │                        └─ _update_filtered_layout()
+  │                              └─ _priority_update_timer.start(100ms)
+  │                                    └─ _prioritize_visible_thumbnails()
+  │
+  ├─ previews_ready  → QImage(thumbnail_path)
+  │                    emit _thumbnail_generated_signal
+  │                        └─ _on_thumbnail_ready()
+  │                              └─ label.updateThumbnail(pixmap)
+  │
+  └─ scan_complete   → reapply_filters() → final layout
 ```
 
 **Viewport prioritisation (`_prioritize_visible_thumbnails`):**
 Fires 100 ms after each layout update, and again on scroll/resize (debounced ~150 ms).
 
 ```
-Visible paths → socket_client.update_viewport(paths_to_upgrade, paths_to_downgrade)
-                    daemon: request_thumbnail(path, GUI_REQUEST)
+Visible paths → service.update_viewport_heatmap(upgrades, downgrades, fullres, cancels)
+                    in-process: request_thumbnail(path, Priority(priority))
                               ├─ FAST PATH: is_thumbnail_valid? → put previews_ready directly (< 1 ms)
                               └─ SLOW PATH: update_task_priorities → worker upgrades to GUI_REQUEST
 ```
@@ -178,9 +174,9 @@ On cold cache, `scan_complete` arrives before the first `previews_ready` because
 
 ## 2. Bottlenecks
 
-### 2.1 Plugin `is_available()` on daemon start
+### 2.1 Plugin `is_available()` on startup
 
-`CR3Plugin.is_available()` runs `subprocess.run(["exiftool", "-ver"])` — a cold subprocess spawn that costs 100–400 ms. This is now deliberately sequenced *after* the socket bind (step 6), so the GUI can connect and begin scanning while this check is in progress. But if exiftool is on a slow PATH or NFS-mounted, this can add 1–2 seconds of awkward semi-availability.
+`CR3Plugin.is_available()` runs `subprocess.run(["exiftool", "-ver"])` — a cold subprocess spawn that costs 100–400 ms. This runs during `_init_core()` in both GUI and daemon modes. If exiftool is on a slow PATH or NFS-mounted, this can add 1–2 seconds before the window appears.
 
 ### 2.2 Cold-cache thumbnail generation
 
@@ -201,13 +197,13 @@ With 8 workers, throughput approaches `8 / mean_cost`. Buffer hit rate determine
 
 The fast scan emits files in filesystem order, not viewport order. Placeholder labels appear left-to-right, top-to-bottom in FS order. On warm cache, `previews_ready` also arrives in FS order, so files at the *bottom* of the visible grid may appear before files at the *top* of the next page. Viewport prioritisation corrects this for unloaded visible tiles, but there is an inherent tension between scan order and visual order.
 
-### 2.4 Notification queue as backpressure point
+### 2.4 Notification delivery from worker threads
 
-The RenderManager's `notification_queue` is bounded at 500 entries. The warm-cache slow scan sends one `previews_ready` per file via `notification_queue.put()` (blocking), which means the slow scan generator can stall waiting for the GUI to drain the queue. At ~10 ms/notification on the GUI side, 500 entries represents ~5 seconds of backed-up work. In practice this only triggers for very large libraries or when the GUI is under load.
+`RenderManager` delivers notifications via registered callbacks (including `DaemonSignals.dispatch_notification`). Callbacks are invoked directly from worker threads; Qt's `AutoConnection` marshals the signal emission to the main thread. If the main thread is under heavy load (e.g., creating many placeholder labels), notification processing can back up.
 
-### 2.5 `_deferred_init` and `load_directory` timing race
+### 2.5 `_deferred_init` and `load_directory` timing
 
-Both `_deferred_init` and `load_directory` are scheduled via `QTimer.singleShot(0, ...)`. They fire in order (init first, then load), but both fire on the *same* event loop tick — the first `app.exec()` iteration. If `_deferred_init` is slow (e.g., ScriptManager loads many scripts), it delays `load_directory`. The window is visible but unresponsive until `_deferred_init` completes.
+Both `_deferred_init` and `load_directory` are scheduled via `QTimer.singleShot(0, ...)`. They fire in order (init first, then load), but both fire on the *same* event loop tick — the first `app.exec()` iteration. If `_deferred_init` is slow (e.g., ScriptManager loads many scripts), it delays `load_directory`. The window is visible but unresponsive until `_deferred_init` completes. Since `_init_core()` now runs before `QApplication` is created, plugin availability checks add to the pre-window delay.
 
 ### 2.6 NAS read amplification
 
@@ -243,9 +239,9 @@ CR3 files with unusually large metadata blocks occasionally have the embedded th
 
 The directory scanner yields batches of 50 files. Each batch causes one `scan_progress` notification and one layout update (after 200 ms debounce). For a 2,225-file library this is ~44 batches. Larger batches (e.g., 200) would reduce layout churn; smaller batches would update the grid more incrementally. The current value is a reasonable default but has not been tuned empirically.
 
-### 3.6 Non-blocking notification send for warm-cache path
+### 3.6 Notification coalescing
 
-`create_tasks_for_file` calls `notification_queue.put(notification)` (blocking) for every cache-hit file. If the queue is full, the slow scan stalls. Switching to `put_nowait()` with a drop-and-log fallback would prevent the generator from blocking, at the cost of occasional missed notifications. The GUI already handles missing thumbnails gracefully (viewport prioritisation will re-request them).
+Worker threads invoke notification callbacks directly for every cache-hit file. With large warm-cache libraries, this can flood the Qt signal queue. Coalescing multiple `previews_ready` notifications into batched signals would reduce main-thread wakeups.
 
 ### 3.7 Parallel exiftool processes
 
@@ -267,7 +263,7 @@ python3 bench_first_image.py ~/Pictures [--timeout 120] [--no-recursive]
 1. Kills any running daemon
 2. Purges DB entries and thumbnail/view files for the target directory
 3. Spawns a fresh daemon; records t=0
-4. Registers as a notification listener (mirrors `NotificationListener`)
+4. Registers as a notification listener (raw socket, no Qt)
 5. Sends `get_directory_files` to start the three SourceJobs
 6. Collects every `previews_ready` with a non-null `thumbnail_path`
 7. Reports timeline milestones and throughput statistics

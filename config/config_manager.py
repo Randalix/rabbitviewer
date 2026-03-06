@@ -2,9 +2,7 @@ import os
 import yaml
 
 DEFAULT_CONFIG = {
-    "system": {
-        "socket_path": f"/tmp/rabbitviewer_{os.getenv('USER', 'user')}.sock",
-    },
+    "system": {},
     "files": {
         "cache": {
             "dir": "~/.rabbitviewer/cache",
@@ -76,7 +74,7 @@ DEFAULT_CONFIG = {
             "description": "Rate selected images 5 stars"
         },
         "menu:sort": {
-            "sequence": "F",
+            "sequence": "S",
             "description": "Open sort menu"
         },
         "compare_view": {

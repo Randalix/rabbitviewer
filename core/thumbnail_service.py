@@ -1,7 +1,6 @@
-"""In-process facade that replaces ThumbnailSocketClient.
+"""In-process facade for the GUI.
 
-Exposes the same method signatures the GUI previously called over the socket,
-but delegates directly to ThumbnailManager / MetadataDatabase / RenderManager.
+Delegates to ThumbnailManager / MetadataDatabase / RenderManager directly.
 """
 import logging
 import os
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class ThumbnailService:
-    """Drop-in replacement for ThumbnailSocketClient that works in-process."""
+    """In-process service facade used by the GUI."""
 
     def __init__(self, thumbnail_manager, directory_scanner: DirectoryScanner):
         self.tm = thumbnail_manager
@@ -240,30 +239,25 @@ class ThumbnailService:
     def set_tags(self, image_paths: List[str], tags: List[str]) -> bool:
         success = self.db.batch_set_tags(image_paths, tags)
         if success:
-            for path in image_paths:
-                all_tags = self.db.get_image_tags(path)
-                self.rm.submit_task(
-                    f"write_tags::{path}",
-                    Priority.NORMAL,
-                    self.tm.write_tags_to_file,
-                    path, all_tags,
-                    task_type=TaskType.SIMPLE,
-                )
+            self._queue_tag_write_tasks(image_paths)
         return success
 
     def remove_tags(self, image_paths: List[str], tags: List[str]) -> bool:
         success = self.db.batch_remove_tags(image_paths, tags)
         if success:
-            for path in image_paths:
-                all_tags = self.db.get_image_tags(path)
-                self.rm.submit_task(
-                    f"write_tags::{path}",
-                    Priority.NORMAL,
-                    self.tm.write_tags_to_file,
-                    path, all_tags,
-                    task_type=TaskType.SIMPLE,
-                )
+            self._queue_tag_write_tasks(image_paths)
         return success
+
+    def _queue_tag_write_tasks(self, image_paths: List[str]) -> None:
+        all_tags_map = self.db.batch_get_image_tags(image_paths)
+        for path, path_tags in all_tags_map.items():
+            self.rm.submit_task(
+                f"write_tags::{path}",
+                Priority.NORMAL,
+                self.tm.write_tags_to_file,
+                path, path_tags,
+                task_type=TaskType.SIMPLE,
+            )
 
     def get_tags(self, directory_path: str = "") -> Dict[str, List[Dict]]:
         all_tags = self.db.get_all_tags()

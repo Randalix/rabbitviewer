@@ -36,10 +36,10 @@ class PictureView(QWidget):
         self._is_panning = False
         self._last_mouse_pos = QPoint()
 
-        self.socket_client = None # Will be set by main window
+        self.service = None
 
     def set_service(self, service):
-        self.socket_client = service
+        self.service = service
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:
@@ -74,8 +74,8 @@ class PictureView(QWidget):
         if image_path == self._current_path and not force_reload:
             return True  # Already loaded, and not forced to reload
         
-        if not self.socket_client:
-            logging.error("Socket client not initialized in PictureView.")
+        if not self.service:
+            logging.error("Service not initialized in PictureView.")
             return False
 
         # Capture current view state before loading so we can restore it
@@ -87,7 +87,7 @@ class PictureView(QWidget):
         # Request the view image at FULLRES_REQUEST priority. Always returns JSON.
         # view_image_source="memory" → bytes available via get_cached_view_image.
         # view_image_path set → disk-cached. Neither → generation queued.
-        result = self.socket_client.request_view_image(image_path)
+        result = self.service.request_view_image(image_path)
 
         if result is None:
             logging.warning(f"Failed to request view image (comm failure), will retry: {image_path}")
@@ -105,7 +105,7 @@ class PictureView(QWidget):
 
         if result.get('view_image_source') == "memory":
             # Mem-cached on daemon — fetch raw bytes via dedicated call.
-            image_bytes = self.socket_client.get_cached_view_image(image_path)
+            image_bytes = self.service.get_cached_view_image(image_path)
             success = self._picture_base.loadImageFromBytes(image_bytes) if image_bytes else False
         elif result.get('view_image_path'):
             # Disk-cached — load from path.
@@ -192,12 +192,12 @@ class PictureView(QWidget):
     def _fetch_rating(self, path: str):
         """Fetch rating from daemon in a background thread and marshal result to main thread."""
         rating = 0
-        if self.socket_client:
+        if self.service:
             try:
-                resp = self.socket_client.get_metadata_batch([path])
+                resp = self.service.get_metadata_batch([path])
                 if resp and path in resp:
                     rating = resp[path].get("rating", 0) or 0
-            except Exception as e:  # why: socket calls can raise ConnectionError/OSError/TimeoutError; emit zero so status bar gets a value
+            except Exception as e:  # why: service calls can raise errors; emit zero so status bar gets a value
                 logging.debug(f"Rating fetch failed for {path}: {e}")
         self._rating_ready.emit(path, int(rating))
 

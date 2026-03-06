@@ -245,7 +245,7 @@ _ensure_qt_stubs()
 # Lightweight stand-in for ThumbnailViewWidget filter state.
 # ---------------------------------------------------------------------------
 
-def _make_filter_view(all_files=None, is_loading=False, socket_client=None):
+def _make_filter_view(all_files=None, is_loading=False, service=None):
     """Build a minimal stand-in with filter state and methods from ThumbnailViewWidget."""
     from gui.thumbnail_view import ThumbnailViewWidget
 
@@ -272,7 +272,7 @@ def _make_filter_view(all_files=None, is_loading=False, socket_client=None):
     view._filter_update_timer = MagicMock()
     view._virtual_grid = None
     view.labels = {}
-    view.service = socket_client
+    view.service = service
 
     view.filtersApplied = MagicMock()
     view._filtered_paths_ready = MagicMock()
@@ -347,7 +347,7 @@ class TestIsLoadingCachedFolder:
 
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
-        view = _make_filter_view(all_files=files, is_loading=False, socket_client=mock_client)
+        view = _make_filter_view(all_files=files, is_loading=False, service=mock_client)
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget.reapply_filters(view)
@@ -361,7 +361,7 @@ class TestIsLoadingCachedFolder:
 
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
-        view = _make_filter_view(all_files=files, is_loading=True, socket_client=mock_client)
+        view = _make_filter_view(all_files=files, is_loading=True, service=mock_client)
         view._current_star_filter = [False, False, True, False, False, False]
 
         with patch("gui.thumbnail_view.event_system"):
@@ -417,7 +417,7 @@ class TestFilterQueuing:
         from gui.thumbnail_view import ThumbnailViewWidget
         mock_client = MagicMock()
         files = ["/img/a.jpg"]
-        view = _make_filter_view(all_files=files, socket_client=mock_client)
+        view = _make_filter_view(all_files=files, service=mock_client)
         view._filter_in_flight = True
 
         with patch("gui.thumbnail_view.event_system"):
@@ -430,7 +430,7 @@ class TestFilterQueuing:
         from gui.thumbnail_view import ThumbnailViewWidget
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
-        view = _make_filter_view(all_files=files, socket_client=mock_client)
+        view = _make_filter_view(all_files=files, service=mock_client)
         view._filter_in_flight = True
         view._filter_pending = True
 

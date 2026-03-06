@@ -100,7 +100,7 @@ class InspectorView(QWidget):
 
         event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
 
-        self.socket_client = None
+        self.service = None
         self._daemon_signals: DaemonSignals | None = None
 
     def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
@@ -130,7 +130,7 @@ class InspectorView(QWidget):
             # Unpin: catch up to the current hover target if it differs.
             if (self._desired_image_path
                     and self._desired_image_path != self._current_image_path
-                    and self.socket_client):
+                    and self.service):
                 self._view_image_ready = False
                 self._fetch_in_flight = self._desired_image_path
                 threading.Thread(
@@ -196,7 +196,7 @@ class InspectorView(QWidget):
                 self.set_center(norm_pos)
             return
 
-        if not self.socket_client:
+        if not self.service:
             return
 
         # If a fetch is already in flight for this exact path, skip — the result
@@ -218,7 +218,7 @@ class InspectorView(QWidget):
 
     def _fetch_preview_status(self, image_path: str, norm_pos: QPointF):
         try:
-            response = self.socket_client.get_previews_status([image_path])
+            response = self.service.get_previews_status([image_path])
             view_image_path = ""
             if response:
                 status = response.get(image_path, {})
@@ -227,7 +227,7 @@ class InspectorView(QWidget):
 
             if not view_image_path:
                 # Request generation; result will arrive via previews_ready daemon notification.
-                result = self.socket_client.request_view_image(image_path)
+                result = self.service.request_view_image(image_path)
                 if result:
                     if result.get('view_image_source') == "memory":
                         # Mem-cached — emit sentinel so main thread fetches bytes.
@@ -235,8 +235,8 @@ class InspectorView(QWidget):
                     elif result.get('view_image_path'):
                         view_image_path = result['view_image_path']
         except Exception as e:
-            # why: socket calls can raise ConnectionError/OSError/TimeoutError on
-            # NAS drop or pool exhaustion; log and emit empty path to unblock GUI.
+            # why: service calls can raise on NAS drop or thread errors;
+            # log and emit empty path to unblock GUI.
             logging.error("Inspector: error fetching preview status for %s: %s", image_path, e)
             view_image_path = ""
 
@@ -268,9 +268,9 @@ class InspectorView(QWidget):
 
     def _load_mem_cached_view(self, image_path: str, norm_pos: QPointF):
         """Fetch mem-cached bytes from daemon and display in inspector."""
-        if not self.socket_client:
+        if not self.service:
             return
-        image_bytes = self.socket_client.get_cached_view_image(image_path)
+        image_bytes = self.service.get_cached_view_image(image_path)
         if not image_bytes:
             # Race: evicted from mem cache. Inspector will catch up on next mouse move.
             return
@@ -470,7 +470,7 @@ class InspectorView(QWidget):
         event.accept()
 
     def set_service(self, service):
-        self.socket_client = service
+        self.service = service
 
     # --------------------------------------------------------- video scrub player
 

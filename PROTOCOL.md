@@ -1,16 +1,23 @@
-# RabbitViewer Client-Daemon IPC Protocol
+# RabbitViewer IPC Protocol Reference
 
 ## 1. Overview
 
-The GUI client and daemon communicate over a Unix domain socket at
-`/tmp/rabbitviewer_{username}.sock`. There are two distinct channel types on
-the same socket:
+This document defines the message schemas and wire format for RabbitViewer's
+IPC protocol. The GUI currently runs all core services **in-process** via
+`ThumbnailService` — there is no socket IPC between GUI and daemon. This
+protocol specification remains the canonical reference for:
 
-**Request/Response** — short-lived pooled connections. The client sends a
-request and receives exactly one response.
+- **Benchmarks** (`bench_first_image.py`) that communicate with a standalone daemon over a socket
+- **GUI control socket** (`network/gui_server.py`) used by CLI tools
+- **Protocol types** (`network/protocol.py`) used as structured data contracts throughout the codebase
 
-**Notification** — one persistent connection per GUI. The client registers as a
-listener and the daemon pushes events to it asynchronously.
+The wire format supports two channel types:
+
+**Request/Response** — short-lived connections. The client sends a request and
+receives exactly one response.
+
+**Notification** — one persistent connection. The server pushes events
+asynchronously after a registration handshake.
 
 ---
 
@@ -79,7 +86,7 @@ All requests include:
 | Field | Type | Description |
 |---|---|---|
 | `command` | string | Command name |
-| `session_id` | string\|null | GUI session UUID, auto-set by `ThumbnailSocketClient` |
+| `session_id` | string\|null | GUI session UUID (used by benchmarks and legacy clients) |
 
 ### Base Response fields
 
