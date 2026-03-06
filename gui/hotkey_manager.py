@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit
 from PySide6.QtCore import Qt, QObject
 from config.hotkeys import HotkeyDefinition
 from typing import Dict, List, Callable
-from core.event_system import event_system, EventType, EventData, ZoomEventData
+from core.event_system import event_system, EventType, EventData
 
 _TEXT_INPUT_TYPES = (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox)
 
@@ -32,8 +32,8 @@ class HotkeyManager(QObject):
 		
 	def _setup_built_in_action_handlers(self):
 		self.add_action("escape_picture_view", lambda: event_system.publish(EventData(event_type=EventType.ESCAPE_PRESSED, source="hotkey_manager", timestamp=time.time())))
-		self.add_action("zoom_in", self._handle_zoom_in)
-		self.add_action("zoom_out", self._handle_zoom_out)
+		self.add_action("zoom_in", lambda: None)  # placeholder; main_window overrides
+		self.add_action("zoom_out", lambda: None)  # placeholder; main_window overrides
 		self.add_action("next_image", lambda: event_system.publish(EventData(event_type=EventType.NAVIGATE_NEXT, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("previous_image", lambda: event_system.publish(EventData(event_type=EventType.NAVIGATE_PREVIOUS, source="hotkey_manager", timestamp=time.time())))
 		self.add_action("toggle_inspector", lambda: event_system.publish(EventData(event_type=EventType.TOGGLE_INSPECTOR, source="hotkey_manager", timestamp=time.time())))
@@ -43,23 +43,6 @@ class HotkeyManager(QObject):
 		self.add_action("show_hotkey_help", lambda: None)  # placeholder; main_window overrides
 		self.add_action("toggle_info_panel", lambda: None)  # placeholder; main_window overrides
 
-	def _handle_zoom_in(self):
-		logging.debug("Zoom in triggered")
-		event_system.publish(ZoomEventData(
-			event_type=EventType.ZOOM_IN,
-			source="hotkey_manager",
-			timestamp=time.time(),
-			zoom_factor=1.25,
-		))
-
-	def _handle_zoom_out(self):
-		logging.debug("Zoom out triggered")
-		event_system.publish(ZoomEventData(
-			event_type=EventType.ZOOM_OUT,
-			source="hotkey_manager",
-			timestamp=time.time(),
-			zoom_factor=1.25,
-		))
 
 	def _on_focus_changed(self, old, new):
 		"""Suppress shortcuts while a text-input widget has focus."""

@@ -326,6 +326,15 @@ class InspectorView(QWidget):
             self._picture_base.setFitMode(False)
             self._picture_base.setZoom(self._zoom_factor)
 
+    def zoom_by_factor(self, factor: float):
+        """Zoom in (factor > 1) or out (factor < 1), handling FIT→TRACKING transition."""
+        if self._view_mode == _ViewMode.FIT:
+            self._view_mode = _ViewMode.TRACKING
+            self._picture_base.setFitMode(False)
+            self._picture_base.setZoom(self._zoom_factor)
+            self._update_window_title()
+        self.set_zoom_factor(self._zoom_factor * factor)
+
     def _enter_manual_mode(self):
         """Detach from thumbnail mouse tracking; user has taken direct control."""
         if self._view_mode != _ViewMode.MANUAL:

@@ -267,9 +267,9 @@ class MainWindow(QMainWindow):
         inspector.closed.connect(lambda: self._on_inspector_closed(inspector))
         inspector.show()
         if self.picture_view and self.stacked_widget.currentWidget() == self.picture_view:
-            self._force_inspector_update_from_picture_view()
+            self._prime_inspector_from_picture_view(inspector)
         elif self.current_hovered_image:
-            # Prime the new inspector with the currently hovered thumbnail.
+            # Prime only the new inspector with the currently hovered thumbnail.
             event_data = InspectorEventData(
                 event_type=EventType.INSPECTOR_UPDATE,
                 source="main_window",
@@ -277,7 +277,7 @@ class MainWindow(QMainWindow):
                 image_path=self.current_hovered_image,
                 normalized_position=QPointF(0.5, 0.5),
             )
-            event_system.publish(event_data)
+            inspector._handle_inspector_update(event_data)
         logging.info("Opened new Inspector window.")
 
     def _on_inspector_closed(self, inspector):
@@ -293,10 +293,38 @@ class MainWindow(QMainWindow):
         if self.inspector_views:
             self.inspector_views[-1].toggle_pin()
 
+    def _handle_hotkey_zoom(self, direction: int):
+        """Route +/- zoom to the appropriate view.
+
+        direction: +1 for zoom in, -1 for zoom out.
+        """
+        factor = 1.25 if direction > 0 else 1 / 1.25
+
+        # 1. Focused inspector gets priority
+        focused = QApplication.focusWidget()
+        if focused:
+            for inspector in self.inspector_views:
+                if inspector is focused or inspector.isAncestorOf(focused):
+                    inspector.zoom_by_factor(factor)
+                    return
+
+        # 2. Picture view active → zoom via its PictureBase
+        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+            # zoomIn/zoomOut both expect a positive factor (they multiply/divide internally)
+            if direction > 0:
+                self.picture_view._picture_base.zoomIn(1.25)
+            else:
+                self.picture_view._picture_base.zoomOut(1.25)
+            return
+
+        # 3. Thumbnail mode → zoom the latest inspector (if any)
+        if self.inspector_views:
+            self.inspector_views[-1].zoom_by_factor(factor)
+
     def _open_info_panel(self):
         """Create and show a new metadata info panel."""
         provider = MetadataProvider(self.metadata_cache)
-        panel = InfoPanelShell(provider,
+        panel = InfoPanelShell(provider, self.metadata_cache,
                                panel_index=self._info_panel_slot,
                                config_manager=self.config_manager,
                                parent=self)
@@ -495,8 +523,8 @@ class MainWindow(QMainWindow):
         if hovered_path:
             self.thumbnail_view.thumbnailHovered.emit(hovered_path)
             
-    def _force_inspector_update_from_picture_view(self):
-        """Force an inspector update from the current picture view state."""
+    def _prime_inspector_from_picture_view(self, inspector):
+        """Prime a single inspector from the current picture view state."""
         if (self.picture_view and self.picture_view.current_path and
                 self.picture_view._picture_base.has_image()):
             try:
@@ -513,9 +541,10 @@ class MainWindow(QMainWindow):
                     image_path=self.picture_view.current_path,
                     normalized_position=norm_pos,
                 )
-                event_system.publish(event_data)
-            except Exception as e:  # why: publish invokes arbitrary subscriber callbacks
-                logging.error(f"Error forcing inspector update: {e}", exc_info=True)
+                inspector._handle_inspector_update(event_data)
+            except Exception as e:
+                logging.error(f"Error priming inspector: {e}", exc_info=True)
+
             
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -624,6 +653,8 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("show_hotkey_help", self._toggle_hotkey_help)
         self.hotkey_manager.add_action("toggle_info_panel", self._open_info_panel)
         self.hotkey_manager.add_action("open_comfyui", self.open_comfyui_dialog)
+        self.hotkey_manager.add_action("zoom_in", lambda: self._handle_hotkey_zoom(1))
+        self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
 
     def _toggle_hotkey_help(self):
         """Toggle the keyboard shortcuts overlay."""
