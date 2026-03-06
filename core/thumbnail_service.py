@@ -117,6 +117,11 @@ class ThumbnailService:
         )
         self.rm.submit_source_job(reconcile_job)
 
+        # Watch the browsed directory for live filesystem changes so new
+        # images are detected even if the path isn't in config watch_paths.
+        if self.tm.watchdog_handler:
+            self.tm.watchdog_handler.set_gui_directory(path, recursive)
+
         return {
             'files': sorted(db_files),
             'thumbnail_paths': thumb_map,

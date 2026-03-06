@@ -21,6 +21,7 @@ class WatchdogHandler(FileSystemEventHandler):
         self._watch_paths = watch_paths
         self.observer = Observer()
         self._ignore_until: dict[str, float] = {}  # path → monotonic deadline; dict key access is atomic under CPython GIL
+        self._gui_watch = None  # (ObservedWatch, path) for the currently browsed directory
 
     @property
     def watch_paths(self):
@@ -66,6 +67,59 @@ class WatchdogHandler(FileSystemEventHandler):
             if self.observer.is_alive():
                 logging.warning("Watchdog observer thread did not stop gracefully.")
         logging.info("Watchdog observer stopped.")
+
+    def set_gui_directory(self, path: str, recursive: bool = True):
+        """Watch the directory the GUI is currently browsing.
+
+        Unwatches the previous GUI directory (if any) and schedules the new
+        one on the running observer.  Config ``watch_paths`` are unaffected.
+        """
+        if not self.observer.is_alive():
+            return
+        if self._gui_watch is not None:
+            old_watch, old_path = self._gui_watch
+            if old_path == path:
+                return
+            try:
+                self.observer.unschedule(old_watch)
+                logging.info("Unwatched previous GUI directory: %s", old_path)
+            except Exception:
+                pass  # already unscheduled or observer restarted
+            self._gui_watch = None
+        if not path or not os.path.isdir(path):
+            return
+        # Skip if already covered by a config watch_path
+        rp = os.path.realpath(path)
+        for wp in self._watch_paths:
+            if rp == os.path.realpath(wp) or rp.startswith(os.path.realpath(wp) + os.sep):
+                logging.debug("GUI directory %s already covered by watch_path %s", path, wp)
+                return
+        watch = self.observer.schedule(self, path=path, recursive=recursive)
+        self._gui_watch = (watch, path)
+        logging.info("Watching GUI directory: %s (recursive=%s)", path, recursive)
+
+    def _notify_scan_progress(self, file_path: str):
+        """Emit a scan_progress notification so the GUI adds the file to its grid."""
+        from core.notifications import ScanProgressData, ImageEntryModel, Notification
+        notification = Notification(
+            type="scan_progress",
+            data=ScanProgressData(
+                path=os.path.dirname(file_path),
+                files=[ImageEntryModel(path=file_path)],
+            ).model_dump(),
+        )
+        self.thumbnail_manager.render_manager.notify(notification)
+
+    def _notify_files_removed(self, file_paths: list):
+        """Emit a files_removed notification so the GUI drops the paths from its grid."""
+        from core.notifications import FilesRemovedData, ImageEntryModel, Notification
+        notification = Notification(
+            type="files_removed",
+            data=FilesRemovedData(
+                files=[ImageEntryModel(path=p) for p in file_paths],
+            ).model_dump(),
+        )
+        self.thumbnail_manager.render_manager.notify(notification)
 
     def ignore_next_modification(self, path: str):
         """Suppress watchdog events for *path* for a short window after a self-inflicted EXIF write.
@@ -129,6 +183,7 @@ class WatchdogHandler(FileSystemEventHandler):
                 self.thumbnail_manager.metadata_db.move_records,
                 [{"old_path": old_path, "new_path": new_path}],
             )
+            self._notify_files_removed([old_path])
             # Also re-index the new path so thumbnail/metadata tasks are created
             # if plugins are available; if not, the DB record is still preserved.
             file_path = new_path
@@ -141,6 +196,7 @@ class WatchdogHandler(FileSystemEventHandler):
                 self.thumbnail_manager.metadata_db.remove_records,
                 [event.src_path],
             )
+            self._notify_files_removed([event.src_path])
             # Clean up orphaned XMP sidecar (our sidecars only contain
             # rating/tags we wrote — useless without the image).
             from core.priority import xmp_sidecar_path
@@ -163,9 +219,16 @@ class WatchdogHandler(FileSystemEventHandler):
             # why: watchdog callbacks run on observer thread; plugin error must not crash the observer
             logging.error(f"Watchdog: Error creating tasks for '{file_path}': {e}", exc_info=True)
             return
+        if not tasks:
+            return
         for task in tasks:
             self.thumbnail_manager.render_manager.submit_task(
                 task.task_id, task.priority, task.func, *task.args,
                 dependencies=task.dependencies, task_type=task.task_type,
                 on_complete_callback=task.on_complete_callback, **task.kwargs
             )
+        # Notify the GUI so the file is added to the grid (scan_progress)
+        # or removed+re-added on move.  Without this, watchdog tasks produce
+        # previews_ready for a path the GUI doesn't know about yet.
+        if event.event_type in ('created', 'moved'):
+            self._notify_scan_progress(file_path)
