@@ -146,12 +146,12 @@ def _run_daemon(config_manager):
         time.sleep(2)
 
 
-def _auto_launch_daemon():
-    """Spawn the daemon as a detached subprocess if not already running."""
-    if is_gui_active():
-        # Another GUI is running — it already has workers. Don't spawn another daemon.
-        return
-    # The daemon uses its own instance lock, so a double-launch is harmless (second exits).
+def _launch_daemon():
+    """Spawn the daemon as a detached subprocess.
+
+    The daemon acquires its own PID lock, so double-launches are harmless
+    (the second process exits immediately).
+    """
     script = os.path.abspath(__file__)
     subprocess.Popen(
         [sys.executable, script, "--daemon"],
@@ -159,7 +159,7 @@ def _auto_launch_daemon():
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    logging.info("Auto-launched daemon subprocess.")
+    logging.info("Launched daemon subprocess.")
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +237,6 @@ def _run_gui(args, config_manager):
 
     watcher.start()
 
-    # Auto-launch daemon for background indexing when GUI exits.
-    _auto_launch_daemon()
-
     # --- Qt Application ---
     if sys.platform == 'darwin':
         _set_macos_app_name("Rabbit Viewer")
@@ -296,6 +293,9 @@ def _run_gui(args, config_manager):
     watcher.stop()
     thumbnail_manager.shutdown()
     release_gui_lock(gui_lock_fd)
+
+    # Launch daemon after releasing flock so it can start indexing immediately.
+    _launch_daemon()
 
     logging.info(f"Application exiting with code {exit_code}.")
     return exit_code
