@@ -114,6 +114,8 @@ class HotkeyHelpOverlay(QWidget):
         self._trigger_key = trigger_key
         self._show_at_startup = show_at_startup()
         self._checkbox_rect = QRectF()  # set during paint
+        self._scroll_offset = 0
+        self._content_height = 0  # total paintable height, set during resize
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -136,6 +138,7 @@ class HotkeyHelpOverlay(QWidget):
             self._open()
 
     def _open(self):
+        self._scroll_offset = 0
         self._resize_to_fit()
         self._position_center()
         self._is_open = True
@@ -183,13 +186,15 @@ class HotkeyHelpOverlay(QWidget):
         w = min(w, 600)
 
         section_gaps = (len(self._sections) - 1) * self._SECTION_GAP if self._sections else 0
-        h = (self._PADDING * 2 + self._TITLE_HEIGHT + section_gaps
-             + total_rows * self._ROW_HEIGHT
-             + self._SECTION_GAP + self._FOOTER_HEIGHT)
-        h = min(h, 800)
+        self._content_height = int(
+            self._PADDING * 2 + self._TITLE_HEIGHT + section_gaps
+            + total_rows * self._ROW_HEIGHT
+            + self._SECTION_GAP + self._FOOTER_HEIGHT)
+        h = min(self._content_height, 800)
 
         self.setFixedSize(QSize(w, int(h)))
         self._keys_col_width = max_keys_w
+        self._scroll_offset = min(self._scroll_offset, self._max_scroll())
 
     def _measure_keys_width(self, fm: QFontMetrics, sequences: List[str]) -> int:
         w = 0
@@ -209,6 +214,20 @@ class HotkeyHelpOverlay(QWidget):
                       parent.mapToGlobal(parent.rect().topLeft()).y() + py)
 
     # ------------------------------------------------------------------
+    # Scrolling
+    # ------------------------------------------------------------------
+
+    def _max_scroll(self) -> int:
+        return max(0, self._content_height - self.height())
+
+    def wheelEvent(self, event):
+        if self._max_scroll() <= 0:
+            return
+        delta = -event.angleDelta().y()
+        self._scroll_offset = max(0, min(self._scroll_offset + delta, self._max_scroll()))
+        self.update()
+
+    # ------------------------------------------------------------------
     # Event filter
     # ------------------------------------------------------------------
 
@@ -224,12 +243,19 @@ class HotkeyHelpOverlay(QWidget):
             self._close()
             return True
 
+        if event.type() == QEvent.Type.Wheel:
+            if self.geometry().contains(event.globalPosition().toPoint()):
+                self.wheelEvent(event)
+                return True
+
         if event.type() == QEvent.Type.MouseButtonPress:
             if isinstance(event, QMouseEvent):
                 global_pos = event.globalPosition().toPoint()
                 local_pos = self.mapFromGlobal(global_pos)
-                # Toggle checkbox if clicked
-                if self._checkbox_rect.contains(local_pos.toPointF()):
+                # Toggle checkbox if clicked (adjust for scroll offset)
+                scrolled_pos = local_pos.toPointF()
+                scrolled_pos.setY(scrolled_pos.y() + self._scroll_offset)
+                if self._checkbox_rect.contains(scrolled_pos):
                     self._show_at_startup = not self._show_at_startup
                     settings = QSettings("RabbitViewer", "HotkeyHelp")
                     settings.setValue(_SETTINGS_KEY, self._show_at_startup)
@@ -253,6 +279,10 @@ class HotkeyHelpOverlay(QWidget):
         path = QPainterPath()
         path.addRoundedRect(self.rect().toRectF(), self._CORNER_RADIUS, self._CORNER_RADIUS)
         painter.fillPath(path, self._BG_COLOR)
+        painter.setClipPath(path)
+
+        painter.save()
+        painter.translate(0, -self._scroll_offset)
 
         font = QFont("monospace", self._FONT_SIZE)
         font.setStyleHint(QFont.Monospace)
@@ -355,4 +385,5 @@ class HotkeyHelpOverlay(QWidget):
                          label_w + 4, self._FOOTER_HEIGHT,
                          Qt.AlignVCenter | Qt.AlignLeft, cb_label)
 
+        painter.restore()
         painter.end()
