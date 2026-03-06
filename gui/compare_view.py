@@ -11,7 +11,6 @@ from .picture_base import PictureBase, ViewState
 
 class _CompareSplit(QWidget):
 
-    viewSynced = Signal(object)  # emits (self, ViewState) when user navigates
     _image_ready = Signal(QImage)  # marshals loaded image to GUI thread
 
     def __init__(self, parent=None):
@@ -19,12 +18,11 @@ class _CompareSplit(QWidget):
         self.setMouseTracking(True)
         self._picture_base = PictureBase()
         self._picture_base.viewStateChanged.connect(self.update)
-        self._picture_base.viewStateChanged.connect(self._on_view_state_changed)
         self._current_path = None
         self._is_panning = False
         self._last_mouse_pos = QPoint()
-        self._syncing = False
         self._interacting = False
+        self._user_navigating = False
         self._image_ready.connect(self._on_image_ready)
 
         # Offset from master: client_pos = master_pos + center_offset
@@ -56,16 +54,10 @@ class _CompareSplit(QWidget):
         self.update()
 
     def apply_view_state(self, center: QPointF, zoom: float, fit_mode: bool):
-        self._syncing = True
         if fit_mode:
             self._picture_base.setFitMode(True)
         else:
             self._picture_base.setZoom(zoom, center)
-        self._syncing = False
-
-    def _on_view_state_changed(self, state: ViewState):
-        if not self._syncing:
-            self.viewSynced.emit(state)
 
     def view_state(self) -> ViewState:
         return self._picture_base.viewState()
@@ -78,11 +70,19 @@ class _CompareSplit(QWidget):
     def interacting(self, value: bool):
         self._interacting = value
 
+    @property
+    def user_navigating(self) -> bool:
+        return self._user_navigating
+
     def zoom_in(self, factor: float = 1.25):
+        self._user_navigating = True
         self._picture_base.zoomIn(factor)
+        self._user_navigating = False
 
     def zoom_out(self, factor: float = 1.25):
+        self._user_navigating = True
         self._picture_base.zoomOut(factor)
+        self._user_navigating = False
 
     def cleanup(self):
         self._picture_base.cleanup_subscriptions()
@@ -106,10 +106,12 @@ class _CompareSplit(QWidget):
         if event.button() == Qt.LeftButton:
             self._is_panning = True
             self._interacting = True
+            self._user_navigating = True
             self._last_mouse_pos = event.position().toPoint()
             self.setCursor(Qt.ClosedHandCursor)
         elif event.button() == Qt.RightButton:
             self._interacting = True
+            self._user_navigating = True
             anchor = self._picture_base.screenToNormalized(QPointF(event.position()))
             self._picture_base.startDragZoom(anchor, QPointF(event.position()))
 
@@ -141,6 +143,7 @@ class _CompareSplit(QWidget):
 
     def _end_interaction(self):
         self._interacting = False
+        self._user_navigating = False
         self.update()
         parent = self.parent()
         if isinstance(parent, CompareView):
@@ -148,22 +151,26 @@ class _CompareSplit(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
+            self._user_navigating = True
             if self._picture_base.isFitMode() or abs(self._picture_base.viewState().zoom - 1.0) > 0.01:
                 click_pos = self._picture_base.screenToNormalized(QPointF(event.position()))
                 self._picture_base.setZoom(1.0, click_pos)
             else:
                 self._picture_base.setFitMode(True)
+            self._user_navigating = False
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
         if delta == 0:
             return
+        self._user_navigating = True
         center = self._picture_base.screenToNormalized(QPointF(event.position()))
         factor = 1.25
         if delta > 0:
             self._picture_base.zoomIn(factor, center)
         else:
             self._picture_base.zoomOut(factor, center)
+        self._user_navigating = False
 
 
 class CompareView(QWidget):
@@ -185,7 +192,7 @@ class CompareView(QWidget):
 
     def load_images(self, image_paths: list[str]):
         for split in self._splits:
-            split.viewSynced.disconnect()
+            split._picture_base.viewStateChanged.disconnect()
             split.cleanup()
             self._grid_layout.removeWidget(split)
             split.deleteLater()
@@ -199,7 +206,9 @@ class CompareView(QWidget):
 
         for i, path in enumerate(image_paths):
             split = _CompareSplit(self)
-            split.viewSynced.connect(self._on_split_navigated)
+            split._picture_base.viewStateChanged.connect(
+                lambda state, s=split: self._on_split_navigated(s, state)
+            )
             self._splits.append(split)
             self._grid_layout.addWidget(split, i // cols, i % cols)
 
@@ -218,25 +227,22 @@ class CompareView(QWidget):
     def _master(self) -> _CompareSplit | None:
         return self._splits[0] if self._splits else None
 
-    def _on_split_navigated(self, state: ViewState):
-        if self._syncing:
+    def _on_split_navigated(self, sender: _CompareSplit, state: ViewState):
+        if self._syncing or not sender.user_navigating:
             return
         self._syncing = True
-        sender = self.sender()
-        is_master = sender is self._master
 
-        if is_master:
-            # Master navigated → push state to all clients with their offsets
+        if sender is self._master:
             for split in self._splits[1:]:
-                split.interacting = sender.interacting if isinstance(sender, _CompareSplit) else False
+                split.interacting = sender.interacting
                 split.apply_view_state(
                     QPointF(state.center.x() + split.center_offset.x(),
                             state.center.y() + split.center_offset.y()),
                     state.zoom * split.zoom_ratio,
                     state.fit_mode,
                 )
-        elif isinstance(sender, _CompareSplit):
-            # Client navigated → update its offset relative to master
+        else:
+            # Client navigated by user → update its offset relative to master
             master = self._master
             if master:
                 master_state = master.view_state()
