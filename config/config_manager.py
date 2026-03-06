@@ -98,6 +98,26 @@ DEFAULT_CONFIG = {
         "open_comfyui": {
             "sequence": "G",
             "description": "Open ComfyUI generation dialog"
+        },
+        "zoom_in": {
+            "sequence": "+",
+            "description": "Zoom in"
+        },
+        "zoom_out": {
+            "sequence": "-",
+            "description": "Zoom out"
+        },
+        "open_filter": {
+            "sequence": "Ctrl+F",
+            "description": "Open filter dialog"
+        },
+        "undo_selection": {
+            "sequence": "Ctrl+Z",
+            "description": "Undo selection"
+        },
+        "redo_selection": {
+            "sequence": "Ctrl+Shift+Z",
+            "description": "Redo selection"
         }
     },
     "comfyui": {
