@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import re
-from typing import Dict, List, Tuple
 
 from PySide6.QtWidgets import QWidget, QGraphicsDropShadowEffect, QApplication
 from PySide6.QtCore import Qt, QSize, QEvent, QObject, QRectF, QSettings
@@ -11,7 +12,7 @@ from config.hotkeys import HotkeyDefinition
 _SETTINGS_KEY = "hotkey_help/show_at_startup"
 
 # (category_label, action_names) — order defines display order
-_CATEGORIES: List[Tuple[str, List[str]]] = [
+_CATEGORIES: list[tuple[str, list[str]]] = [
     ("Navigation", [
         "next_image", "previous_image", "escape_picture_view", "close_or_quit",
     ]),
@@ -29,13 +30,13 @@ _CATEGORIES: List[Tuple[str, List[str]]] = [
 _RATING_PATTERN = re.compile(r"^script:set_rating_\d+$")
 
 
-def _build_rows(definitions: Dict[str, HotkeyDefinition]) -> List[Tuple[str, list]]:
+def _build_rows(definitions: dict[str, HotkeyDefinition]) -> list[tuple[str, list]]:
     """Return [(category, [(sequences, description), ...]), ...] for display."""
     known = set()
     for _, actions in _CATEGORIES:
         known.update(actions)
 
-    rows_by_category: List[Tuple[str, list]] = []
+    rows_by_category: list[tuple[str, list]] = []
 
     for cat_label, static_actions in _CATEGORIES:
         rows = []
@@ -83,8 +84,6 @@ def show_at_startup() -> bool:
 
 
 class HotkeyHelpOverlay(QWidget):
-    """Floating overlay that lists all active keyboard shortcuts."""
-
     _PADDING = 24
     _ROW_HEIGHT = 28
     _SECTION_GAP = 12
@@ -106,7 +105,7 @@ class HotkeyHelpOverlay(QWidget):
     _CHECKBOX_CHECK = QColor(220, 200, 100)
     _CORNER_RADIUS = 10
 
-    def __init__(self, parent: QWidget, definitions: Dict[str, HotkeyDefinition],
+    def __init__(self, parent: QWidget, definitions: dict[str, HotkeyDefinition],
                  trigger_key: str = "?"):
         super().__init__(parent)
         self._is_open = False
@@ -196,7 +195,7 @@ class HotkeyHelpOverlay(QWidget):
         self._keys_col_width = max_keys_w
         self._scroll_offset = min(self._scroll_offset, self._max_scroll())
 
-    def _measure_keys_width(self, fm: QFontMetrics, sequences: List[str]) -> int:
+    def _measure_keys_width(self, fm: QFontMetrics, sequences: list[str]) -> int:
         w = 0
         for i, seq in enumerate(sequences):
             if i > 0:
@@ -252,7 +251,6 @@ class HotkeyHelpOverlay(QWidget):
             if isinstance(event, QMouseEvent):
                 global_pos = event.globalPosition().toPoint()
                 local_pos = self.mapFromGlobal(global_pos)
-                # Toggle checkbox if clicked (adjust for scroll offset)
                 scrolled_pos = local_pos.toPointF()
                 scrolled_pos.setY(scrolled_pos.y() + self._scroll_offset)
                 if self._checkbox_rect.contains(scrolled_pos):
@@ -275,7 +273,6 @@ class HotkeyHelpOverlay(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Background
         path = QPainterPath()
         path.addRoundedRect(self.rect().toRectF(), self._CORNER_RADIUS, self._CORNER_RADIUS)
         painter.fillPath(path, self._BG_COLOR)
@@ -291,7 +288,6 @@ class HotkeyHelpOverlay(QWidget):
 
         y = self._PADDING
 
-        # Title
         title_font = QFont("monospace", self._FONT_SIZE + 2, QFont.Bold)
         title_font.setStyleHint(QFont.Monospace)
         painter.setFont(title_font)
@@ -307,7 +303,6 @@ class HotkeyHelpOverlay(QWidget):
             if section_idx > 0:
                 y += self._SECTION_GAP
 
-            # Section header
             header_font = QFont("monospace", self._FONT_SIZE - 1, QFont.Bold)
             header_font.setStyleHint(QFont.Monospace)
             painter.setFont(header_font)
@@ -343,27 +338,23 @@ class HotkeyHelpOverlay(QWidget):
 
                 y += self._ROW_HEIGHT
 
-        # Footer: hint + checkbox
         y += self._SECTION_GAP
         small_font = QFont("monospace", self._FONT_SIZE - 2)
         small_font.setStyleHint(QFont.Monospace)
         painter.setFont(small_font)
         small_fm = QFontMetrics(small_font)
 
-        # Hint text on left
         hint = f"Press  {self._trigger_key}  to toggle this help"
         painter.setPen(self._HINT_FG)
         painter.drawText(self._PADDING, y, self.width() // 2, self._FOOTER_HEIGHT,
                          Qt.AlignVCenter | Qt.AlignLeft, hint)
 
-        # Checkbox + label on right
         cb_label = "Don't show at startup"
         label_w = small_fm.horizontalAdvance(cb_label)
         cb_total_w = self._CHECKBOX_SIZE + 6 + label_w
         cb_x = self.width() - self._PADDING - cb_total_w
         cb_y = y + (self._FOOTER_HEIGHT - self._CHECKBOX_SIZE) // 2
 
-        # Draw checkbox box
         cb_rect = QRectF(cb_x, cb_y, self._CHECKBOX_SIZE, self._CHECKBOX_SIZE)
         self._checkbox_rect = QRectF(cb_x - 4, y, cb_total_w + 8, self._FOOTER_HEIGHT)
         cb_path = QPainterPath()
@@ -372,14 +363,12 @@ class HotkeyHelpOverlay(QWidget):
         painter.drawPath(cb_path)
 
         if not self._show_at_startup:
-            # Draw checkmark
             painter.setPen(self._CHECKBOX_CHECK)
             cx, cy = cb_rect.center().x(), cb_rect.center().y()
             s = self._CHECKBOX_SIZE * 0.3
             painter.drawLine(int(cx - s), int(cy), int(cx - s * 0.3), int(cy + s * 0.7))
             painter.drawLine(int(cx - s * 0.3), int(cy + s * 0.7), int(cx + s), int(cy - s * 0.5))
 
-        # Checkbox label
         painter.setPen(self._HINT_FG)
         painter.drawText(int(cb_x + self._CHECKBOX_SIZE + 6), y,
                          label_w + 4, self._FOOTER_HEIGHT,
