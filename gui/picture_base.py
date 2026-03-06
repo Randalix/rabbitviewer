@@ -424,4 +424,15 @@ class PictureBase(QObject):
 
     def resetDragZoom(self) -> None:
         self._is_drag_zooming = False
+
+    def cleanup_subscriptions(self) -> None:
+        event_system.unsubscribe(EventType.ZOOM_IN, self._handle_zoom_in)
+        event_system.unsubscribe(EventType.ZOOM_OUT, self._handle_zoom_out)
+        event_system.unsubscribe(EventType.ZOOM_TO_POINT, self._handle_zoom_to_point)
+        event_system.unsubscribe(EventType.ZOOM_FIT, self._handle_zoom_fit)
+        event_system.unsubscribe(EventType.ZOOM_RESET, self._handle_zoom_reset)
+        event_system.unsubscribe(EventType.ZOOM_DRAG_START, self._handle_zoom_drag_start)
+        event_system.unsubscribe(EventType.ZOOM_DRAG_UPDATE, self._handle_zoom_drag_update)
+        event_system.unsubscribe(EventType.ZOOM_DRAG_END, self._handle_zoom_drag_end)
+        event_system.unsubscribe(EventType.DOUBLE_CLICK_ZOOM, self._handle_double_click_zoom)
     

@@ -27,6 +27,7 @@ from network.daemon_signals import DaemonSignals
 if TYPE_CHECKING:
     from .inspector_view import InspectorView
     from .picture_view import PictureView
+    from .compare_view import CompareView
 
 _VIDEO_EXTENSIONS = frozenset([
     '.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v',
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_view = None
         self.picture_view = None
         self.video_view = None
+        self.compare_view: Optional[CompareView] = None
         self.current_hovered_image = None
         self.inspector_views: List[InspectorView] = []
         self._inspector_slot = 0
@@ -85,7 +87,6 @@ class MainWindow(QMainWindow):
 
         self.filter_dialog = None
         self.tag_editor_dialog = None
-        self._tag_editor_targets: list = []
         self.tag_filter_dialog = None
         self.comfyui_dialog = None
         self._removed_images = []
@@ -145,7 +146,7 @@ class MainWindow(QMainWindow):
 
     def _is_detail_view_active(self) -> bool:
         current = self.stacked_widget.currentWidget()
-        return current is self.picture_view or current is self.video_view
+        return current is self.picture_view or current is self.video_view or current is self.compare_view
 
     def _on_thumbnail_hovered(self, path: str):
         if self._is_detail_view_active():
@@ -300,7 +301,15 @@ class MainWindow(QMainWindow):
                     inspector.zoom_by_factor(factor)
                     return
 
-        # 2. Picture view active → zoom via its PictureBase
+        # 2. Compare view active → zoom via first split (syncs to all)
+        if self.compare_view and self.stacked_widget.currentWidget() is self.compare_view:
+            if direction > 0:
+                self.compare_view.zoom_in(1.25)
+            else:
+                self.compare_view.zoom_out(1.25)
+            return
+
+        # 3. Picture view active → zoom via its PictureBase
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             if direction > 0:
                 self.picture_view.zoom_in(1.25)
@@ -430,7 +439,9 @@ class MainWindow(QMainWindow):
             self.tag_editor_dialog.tags_confirmed.connect(self._on_tags_confirmed)
             self._tag_editor_ready.connect(self._on_tag_editor_ready)
 
-        self._tag_editor_targets = selected
+        # Capture selection at open time so _on_tags_confirmed uses the
+        # correct targets even if the dialog is re-opened before confirm.
+        self.tag_editor_dialog.targets = list(selected)
         threading.Thread(
             target=self._fetch_tag_editor_data,
             args=(selected,),
@@ -467,7 +478,7 @@ class MainWindow(QMainWindow):
     def _on_tags_confirmed(self, tags_to_add: list, tags_to_remove: list):
         if not self.thumbnail_view or not self.thumbnail_view.service:
             return
-        selected = self._tag_editor_targets
+        selected = getattr(self.tag_editor_dialog, 'targets', None) or []
         if not selected:
             return
         sc = self.thumbnail_view.service
@@ -659,6 +670,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("open_comfyui", self.open_comfyui_dialog)
         self.hotkey_manager.add_action("zoom_in", lambda: self._handle_hotkey_zoom(1))
         self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
+        self.hotkey_manager.add_action("compare_view", self._open_compare_view)
 
     def _toggle_hotkey_help(self):
         if not hasattr(self, '_hotkey_help_overlay') or self._hotkey_help_overlay is None:
@@ -762,7 +774,9 @@ class MainWindow(QMainWindow):
             logging.error(f"Exception when opening Picture View: {e}", exc_info=True)
             
     def _handle_close_or_quit(self):
-        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+        if self.compare_view and self.stacked_widget.currentWidget() is self.compare_view:
+            self.close_compare_view()
+        elif self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             self.close_picture_view()
         elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
             self.close_video_view()
@@ -774,7 +788,9 @@ class MainWindow(QMainWindow):
             self.close()
 
     def _close_active_media_view(self):
-        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+        if self.compare_view and self.stacked_widget.currentWidget() is self.compare_view:
+            self.close_compare_view()
+        elif self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             self.close_picture_view()
         elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
             self.close_video_view()
@@ -807,6 +823,35 @@ class MainWindow(QMainWindow):
                 self.video_view = None
         except RuntimeError as e:
             logging.error(f"Error closing video view: {e}", exc_info=True)
+
+    def _open_compare_view(self):
+        selected = list(self.selection_state.selected_paths)
+        if len(selected) < 2:
+            return
+        self._close_active_media_view()
+        try:
+            if not self.compare_view:
+                from .compare_view import CompareView
+                self.compare_view = CompareView()
+                self.compare_view.escapePressed.connect(self.close_compare_view)
+                self.compare_view.set_service(self.service)
+                self.stacked_widget.addWidget(self.compare_view)
+            self.compare_view.load_images(selected)
+            self._hover_clear_timer.stop()
+            self.stacked_widget.setCurrentWidget(self.compare_view)
+            self.compare_view.setFocus()
+        except Exception as e:  # why: image loading may raise from plugins or socket errors
+            logging.error(f"Exception when opening Compare View: {e}", exc_info=True)
+
+    def close_compare_view(self):
+        logging.debug("Closing compare view")
+        try:
+            if self.compare_view:
+                self.stacked_widget.setCurrentWidget(self.thumbnail_view)
+                self.compare_view.close()
+                self.compare_view = None
+        except RuntimeError as e:
+            logging.error(f"Error closing compare view: {e}", exc_info=True)
 
     def navigate_to_image(self, direction: str):
         current_path = None
