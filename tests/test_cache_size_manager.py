@@ -121,6 +121,7 @@ class TestCacheSizeManager:
         mgr._current_bytes = 0
         mgr._evicting = False
         mgr._enabled = True
+        mgr._notified_full = False
         mgr._lock = __import__("threading").Lock()
         mgr.refresh()
 
@@ -139,6 +140,7 @@ class TestCacheSizeManager:
         mgr._current_bytes = 0
         mgr._evicting = False
         mgr._enabled = True
+        mgr._notified_full = False
         mgr._lock = __import__("threading").Lock()
         mgr.refresh()  # picks up 60 KB
 

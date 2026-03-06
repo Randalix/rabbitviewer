@@ -1,5 +1,8 @@
 import logging
 import threading
+import time
+
+from core.event_system import event_system, EventType, StatusMessageEventData, StatusSection
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ class CacheSizeManager:
         self._lock = threading.Lock()
         self._evicting = False
         self._enabled = self._max_bytes > 0
+        self._notified_full = False
 
         if self._enabled:
             self.refresh()
@@ -54,6 +58,20 @@ class CacheSizeManager:
             self._current_bytes += bytes_added
         self._evict_if_needed()
 
+    def _notify_cache_full(self) -> None:
+        if self._notified_full:
+            return
+        self._notified_full = True
+        max_mb = self._max_bytes // (1024 * 1024)
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE,
+            source="cache_size_manager",
+            timestamp=time.time(),
+            message=f"⚠️ Cache full ({max_mb} MB) — evicting old entries",
+            section=StatusSection.PROCESS,
+            timeout=10000,
+        ))
+
     def _evict_if_needed(self) -> None:
         if not self._enabled:
             return
@@ -61,6 +79,7 @@ class CacheSizeManager:
             if self._current_bytes < self._max_bytes or self._evicting:
                 return
             self._evicting = True
+        self._notify_cache_full()
         try:
             target = int(self._max_bytes * self._HEADROOM_RATIO)
             freed = self._db.evict_lru_cache(target)
@@ -69,6 +88,9 @@ class CacheSizeManager:
             # why: resync from disk regardless of partial failure to avoid
             # _current_bytes drifting permanently above the limit
             self.refresh()
+            with self._lock:
+                if self._current_bytes < self._max_bytes:
+                    self._notified_full = False
         finally:
             with self._lock:
                 self._evicting = False
