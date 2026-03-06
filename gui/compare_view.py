@@ -4,43 +4,56 @@ import threading
 
 from PySide6.QtWidgets import QWidget, QGridLayout
 from PySide6.QtCore import Qt, Signal, QPointF, QSizeF, QPoint
-from PySide6.QtGui import QPainter, QMouseEvent, QPaintEvent, QResizeEvent, QWheelEvent, QKeyEvent
+from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QWheelEvent, QKeyEvent
 
 from .picture_base import PictureBase, ViewState
 
 
 class _CompareSplit(QWidget):
-    """A single image panel within the compare grid."""
 
-    viewSynced = Signal(object)  # emits ViewState when user navigates
+    viewSynced = Signal(object)  # emits (self, ViewState) when user navigates
+    _image_ready = Signal(QImage)  # marshals loaded image to GUI thread
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self._picture_base = PictureBase()
+        self._picture_base.viewStateChanged.connect(self.update)
         self._picture_base.viewStateChanged.connect(self._on_view_state_changed)
         self._current_path = None
         self._is_panning = False
         self._last_mouse_pos = QPoint()
         self._syncing = False
+        self._interacting = False
+        self._image_ready.connect(self._on_image_ready)
 
-    def load_image(self, image_path: str, socket_client) -> bool:
+        # Offset from master: client_pos = master_pos + center_offset
+        self.center_offset = QPointF(0.0, 0.0)
+        self.zoom_ratio = 1.0  # client_zoom = master_zoom * zoom_ratio
+
+    def fetch_image(self, image_path: str, socket_client):
         if not socket_client:
-            return False
+            return
         result = socket_client.request_view_image(image_path)
         if result is None:
-            return False
+            return
+        # why: QImage construction + load is thread-safe (no GUI dependency);
+        # _image_ready signal marshals to GUI thread before any widget mutation.
+        image = QImage()
         if result.get('view_image_source') == "memory":
             image_bytes = socket_client.get_cached_view_image(image_path)
-            success = self._picture_base.loadImageFromBytes(image_bytes) if image_bytes else False
+            if image_bytes:
+                image.loadFromData(image_bytes)
         elif result.get('view_image_path'):
-            success = self._picture_base.loadImageFromPath(result['view_image_path'])
-        else:
-            return False
-        if success:
+            image.load(result['view_image_path'])
+        if not image.isNull():
             self._current_path = image_path
-            self._picture_base.setFitMode(True)
-        return success
+            self._image_ready.emit(image)
+
+    def _on_image_ready(self, image: QImage):
+        self._picture_base.setImage(image)
+        self._picture_base.setFitMode(True)
+        self.update()
 
     def apply_view_state(self, center: QPointF, zoom: float, fit_mode: bool):
         self._syncing = True
@@ -53,6 +66,17 @@ class _CompareSplit(QWidget):
     def _on_view_state_changed(self, state: ViewState):
         if not self._syncing:
             self.viewSynced.emit(state)
+
+    def view_state(self) -> ViewState:
+        return self._picture_base.viewState()
+
+    @property
+    def interacting(self) -> bool:
+        return self._interacting
+
+    @interacting.setter
+    def interacting(self, value: bool):
+        self._interacting = value
 
     def zoom_in(self, factor: float = 1.25):
         self._picture_base.zoomIn(factor)
@@ -69,7 +93,8 @@ class _CompareSplit(QWidget):
         if not self._picture_base.has_image():
             return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        if not self._interacting:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.setTransform(self._picture_base.calculateTransform())
         painter.drawImage(0, 0, self._picture_base.get_image())
 
@@ -80,9 +105,11 @@ class _CompareSplit(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._is_panning = True
+            self._interacting = True
             self._last_mouse_pos = event.position().toPoint()
             self.setCursor(Qt.ClosedHandCursor)
         elif event.button() == Qt.RightButton:
+            self._interacting = True
             anchor = self._picture_base.screenToNormalized(QPointF(event.position()))
             self._picture_base.startDragZoom(anchor, QPointF(event.position()))
 
@@ -106,9 +133,18 @@ class _CompareSplit(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._is_panning = False
+            self._end_interaction()
             self.setCursor(Qt.ArrowCursor)
         elif event.button() == Qt.RightButton:
             self._picture_base.endDragZoom()
+            self._end_interaction()
+
+    def _end_interaction(self):
+        self._interacting = False
+        self.update()
+        parent = self.parent()
+        if isinstance(parent, CompareView):
+            parent._finish_interaction(self)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
@@ -160,7 +196,6 @@ class CompareView(QWidget):
             return
 
         cols = math.ceil(math.sqrt(n))
-        rows = math.ceil(n / cols)
 
         for i, path in enumerate(image_paths):
             split = _CompareSplit(self)
@@ -168,7 +203,6 @@ class CompareView(QWidget):
             self._splits.append(split)
             self._grid_layout.addWidget(split, i // cols, i % cols)
 
-        # Load images off the GUI thread
         for split, path in zip(self._splits, image_paths):
             threading.Thread(
                 target=self._load_split_image, args=(split, path), daemon=True
@@ -176,19 +210,50 @@ class CompareView(QWidget):
 
     def _load_split_image(self, split: _CompareSplit, path: str):
         try:
-            split.load_image(path, self.socket_client)
+            split.fetch_image(path, self.socket_client)
         except Exception as e:  # why: socket/plugin errors must not crash the worker thread
             logging.error(f"CompareView: failed to load {path}: {e}", exc_info=True)
+
+    @property
+    def _master(self) -> _CompareSplit | None:
+        return self._splits[0] if self._splits else None
 
     def _on_split_navigated(self, state: ViewState):
         if self._syncing:
             return
         self._syncing = True
         sender = self.sender()
-        for split in self._splits:
-            if split is not sender:
-                split.apply_view_state(state.center, state.zoom, state.fit_mode)
+        is_master = sender is self._master
+
+        if is_master:
+            # Master navigated → push state to all clients with their offsets
+            for split in self._splits[1:]:
+                split.interacting = sender.interacting if isinstance(sender, _CompareSplit) else False
+                split.apply_view_state(
+                    QPointF(state.center.x() + split.center_offset.x(),
+                            state.center.y() + split.center_offset.y()),
+                    state.zoom * split.zoom_ratio,
+                    state.fit_mode,
+                )
+        elif isinstance(sender, _CompareSplit):
+            # Client navigated → update its offset relative to master
+            master = self._master
+            if master:
+                master_state = master.view_state()
+                sender.center_offset = QPointF(
+                    state.center.x() - master_state.center.x(),
+                    state.center.y() - master_state.center.y(),
+                )
+                if master_state.zoom > 0:
+                    sender.zoom_ratio = state.zoom / master_state.zoom
+
         self._syncing = False
+
+    def _finish_interaction(self, source: _CompareSplit):
+        for split in self._splits:
+            if split is not source:
+                split.interacting = False
+                split.update()
 
     def zoom_in(self, factor: float = 1.25):
         if self._splits:
