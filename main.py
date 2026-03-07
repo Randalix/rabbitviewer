@@ -104,6 +104,22 @@ def _acquire_daemon_lock(pid_path):
         raise
 
 
+def _read_git_head():
+    """Return the current git HEAD commit hash, or None on failure."""
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        head_path = os.path.join(repo_dir, ".git", "HEAD")
+        with open(head_path) as f:
+            head = f.read().strip()
+        if head.startswith("ref: "):
+            ref_path = os.path.join(repo_dir, ".git", head[5:])
+            with open(ref_path) as f:
+                return f.read().strip()
+        return head  # detached HEAD
+    except OSError:
+        return None
+
+
 def _run_daemon(config_manager, log_level_override=None):
     """Headless background indexer.  Pauses when the GUI holds the flock."""
     from core.background_indexer import BackgroundIndexer
@@ -133,6 +149,7 @@ def _run_daemon(config_manager, log_level_override=None):
 
     rm = thumbnail_manager.render_manager
     gui_was_active = False
+    startup_head = _read_git_head()
 
     def _shutdown(signum=None, frame=None):
         logger.info("Daemon shutting down...")
@@ -160,6 +177,18 @@ def _run_daemon(config_manager, log_level_override=None):
                 gui_was_active = False
         except Exception as e:  # why: is_gui_active() can raise OSError on remote fs; must not crash poll loop
             logger.debug("GUI lock poll error: %s", e)
+
+        # Auto-restart when code changes (git HEAD moves).
+        if startup_head is not None:
+            current_head = _read_git_head()
+            if current_head is not None and current_head != startup_head:
+                logger.info("Code changed (HEAD %s → %s) — restarting daemon.",
+                            startup_head[:8], current_head[:8])
+                watcher.stop()
+                thumbnail_manager.shutdown()
+                pid_fd.close()
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+
         time.sleep(2)
 
 
@@ -309,6 +338,10 @@ def _run_gui(args, config_manager):
         if event.type() == QEvent.Type.FileOpen:
             path = event.file()
             if path and os.path.isfile(path):
+                _, ext = os.path.splitext(path)
+                if not ext or ext.lower() not in service.tm.supported_formats:
+                    logger.debug("QFileOpenEvent: ignoring unsupported file %s", path)
+                    return False
                 logger.info("QFileOpenEvent: %s", path)
                 parent = os.path.dirname(path)
                 window.load_directory(parent, recursive=False)
