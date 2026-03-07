@@ -35,6 +35,5 @@ def build_menus() -> dict:
         MenuNode("90° CW", key="9", script="rotate_90"),
         MenuNode("180°", key="1", script="rotate_180"),
         MenuNode("270° CW", key="2", script="rotate_270"),
-        MenuNode("Reset", key="0", script="rotate_reset"),
     ])
     return {"sort": sort_menu, "tags": tag_menu, "export": export_menu, "rotate": rotate_menu}

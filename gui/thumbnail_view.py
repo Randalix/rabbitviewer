@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Set
 from PySide6.QtCore import (
     Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QEvent, Slot
 )
-from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QCursor, QPainter
+from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QCursor, QPainter, QTransform
 from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QScrollArea, QWidget, QFrame
 )
@@ -650,6 +650,7 @@ class ThumbnailViewWidget(QFrame):
             if label and orig_idx not in self._pixmap_cache:
                 image = QImage(thumb_path)
                 if not image.isNull():
+                    image = self._apply_db_orientation(image, source_path)
                     pixmap = QPixmap.fromImage(image)
                     self._pixmap_cache[orig_idx] = pixmap
                     label.updateThumbnail(pixmap)
@@ -1099,12 +1100,13 @@ class ThumbnailViewWidget(QFrame):
             self._virtual_grid.scroll_to_top(visible_idx)
             self._sync_virtual_viewport()
 
-    def invalidate_thumbnails(self, image_paths: List[str]) -> None:
-        """Evict all cached thumbnail state for the given paths so fresh
+    def invalidate_thumbnails(self, image_paths: List[str], clear_labels: bool = True) -> None:
+        """Evict cached thumbnail state for the given paths so fresh
         thumbnails are accepted when the next ``previews_ready`` arrives.
 
-        Clears: pixmap cache, thumb-path cache, image_states.loaded,
-        heatmap delta cache, and resets any materialized labels to placeholder.
+        When *clear_labels* is True (default), materialized labels are reset
+        to placeholder immediately.  When False, the old pixmap stays visible
+        until the replacement ``previews_ready`` arrives — avoiding a flash.
         """
         for path in image_paths:
             idx = self._path_to_idx.get(path)
@@ -1117,10 +1119,48 @@ class ThumbnailViewWidget(QFrame):
             self._pixmap_cache.pop(idx, None)
             self._thumb_path_cache.pop(idx, None)
             self._last_thumb_pairs.pop(path, None)
-            label = self.labels.get(idx)
-            if label:
-                label.clear()
-                label.loaded = False
+            if clear_labels:
+                label = self.labels.get(idx)
+                if label:
+                    label.clear()
+                    label.loaded = False
+
+    # EXIF orientation → clockwise rotation degrees (pure rotations only).
+    _ORIENTATION_DEGREES = {1: 0, 3: 180, 6: 90, 8: 270}
+
+    def _apply_db_orientation(self, image: QImage, image_path: str) -> QImage:
+        """Apply DB orientation as a visual QImage transform."""
+        if not self.service:
+            return image
+        try:
+            resp = self.service.get_metadata_batch([image_path])
+            orientation = resp.get(image_path, {}).get('orientation', 1) or 1
+        except Exception:
+            return image
+        degrees = self._ORIENTATION_DEGREES.get(orientation, 0)
+        if degrees:
+            return image.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
+        return image
+
+    def rotate_thumbnails(self, image_paths: List[str], degrees: int) -> None:
+        """Rotate cached thumbnail pixmaps in-place for immediate visual feedback."""
+        transform = QTransform().rotate(degrees)
+        for path in image_paths:
+            idx = self._path_to_idx.get(path)
+            if idx is None:
+                continue
+            pixmap = self._pixmap_cache.get(idx)
+            if pixmap and not pixmap.isNull():
+                rotated = pixmap.transformed(transform, Qt.SmoothTransformation)
+                scaled = rotated.scaled(self.display_size, self.display_size,
+                                        Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self._pixmap_cache[idx] = scaled
+                label = self.labels.get(idx)
+                if label:
+                    label.updateThumbnail(scaled)
+            # Clear so _tick_preview_loading accepts the regenerated thumbnail.
+            self._thumb_path_cache.pop(idx, None)
+            self._last_thumb_pairs.pop(path, None)
 
     def ensure_visible(self, original_idx: int, center: bool = False):
         """Scroll so the thumbnail at *original_idx* is in the viewport, then
@@ -1294,6 +1334,7 @@ class ThumbnailViewWidget(QFrame):
                     continue
             image = QImage(thumbnail_path)
             if not image.isNull():
+                image = self._apply_db_orientation(image, image_path)
                 self._thumb_path_cache[orig_idx] = thumbnail_path
                 self._thumbnail_generated_signal.emit(image_path, image, None)
             else:
@@ -1662,6 +1703,7 @@ class ThumbnailViewWidget(QFrame):
             if thumb_path:
                 image = QImage(thumb_path)
                 if not image.isNull():
+                    image = self._apply_db_orientation(image, file_path)
                     pixmap = QPixmap.fromImage(image)
                     self._pixmap_cache[original_idx] = pixmap
         if pixmap:

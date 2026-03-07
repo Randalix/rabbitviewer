@@ -806,17 +806,23 @@ class ThumbnailManager:
         return False
 
     def write_orientation_to_file(self, file_path: str, orientation: int) -> bool:
+        from plugins.base_plugin import sidecar_path_for
+
         if not os.path.exists(file_path):  # disk-io: write guard
             logger.warning(f"File not found, cannot write orientation: {file_path}")
             return False
 
         ext = os.path.splitext(file_path)[1].lower()
+        mode = self._resolve_write_mode(ext)
 
         if self.watchdog_handler:
-            self.watchdog_handler.ignore_next_modification(file_path)
+            suppress_path = file_path if mode == "embedded" else sidecar_path_for(file_path)
+            self.watchdog_handler.ignore_next_modification(suppress_path)
 
         plugin = self.plugin_registry.get_plugin_for_format(ext)
         if plugin and plugin.is_available():
+            if mode == "embedded":
+                return plugin.write_orientation_embedded(file_path, orientation)
             return plugin.write_orientation(file_path, orientation)
 
         logger.warning(f"No plugin found for format {ext} to write orientation for {file_path}")

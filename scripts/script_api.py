@@ -271,10 +271,9 @@ class ScriptAPI:
         avoids a blank/stale flash when the background task (e.g. rotation)
         generates the correct thumbnail shortly after.
         """
-        if clear_gui:
-            view = self.main_window.thumbnail_view
-            if view:
-                view.invalidate_thumbnails(image_paths)
+        view = self.main_window.thumbnail_view
+        if view:
+            view.invalidate_thumbnails(image_paths, clear_labels=clear_gui)
         self.service.invalidate_thumbnail_paths(image_paths)
 
     def rotate_images(self, image_paths: List[str], degrees: int) -> None:
@@ -289,8 +288,18 @@ class ScriptAPI:
         if not image_paths:
             return
 
-        self.invalidate_thumbnails(image_paths, clear_gui=False)
+        # DB + sidecar update (background). No cache invalidation.
         success = self.service.rotate_images(image_paths, degrees)
+
+        # Immediate visual rotation in PySide (no NAS round-trip).
+        pv = self.main_window.picture_view
+        if pv and self.main_window.stacked_widget.currentWidget() is pv:
+            if pv.current_path in image_paths:
+                pv.rotate_current_image(degrees)
+
+        tv = self.main_window.thumbnail_view
+        if tv:
+            tv.rotate_thumbnails(image_paths, degrees)
         if success:
             logger.info(f"Rotated {len(image_paths)} images by {degrees}°.")
             event_system.publish(StatusMessageEventData(
@@ -304,25 +313,7 @@ class ScriptAPI:
                 timestamp=time.time(), message="Failed to rotate images.", timeout=5000
             ))
 
-    def reset_rotation(self, image_paths: List[str]) -> None:
-        """Reset images to default orientation (EXIF Orientation = 1)."""
-        if not image_paths:
-            return
 
-        self.invalidate_thumbnails(image_paths, clear_gui=False)
-        success = self.service.reset_rotation(image_paths)
-        if success:
-            logger.info(f"Reset rotation for {len(image_paths)} images.")
-            event_system.publish(StatusMessageEventData(
-                event_type=EventType.STATUS_MESSAGE, source="script_api",
-                timestamp=time.time(), message=f"Reset rotation for {len(image_paths)} images.", timeout=3000
-            ))
-        else:
-            logger.error("Failed to reset rotation.")
-            event_system.publish(StatusMessageEventData(
-                event_type=EventType.STATUS_MESSAGE, source="script_api",
-                timestamp=time.time(), message="Failed to reset rotation.", timeout=5000
-            ))
 
     def set_tags_for_images(self, image_paths: List[str], tags: List[str]) -> None:
         """Adds tags to the given images via the daemon."""

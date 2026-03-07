@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, Signal, Slot, QPointF, QSizeF, QPoint, QTimer
-from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QKeyEvent
+from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QKeyEvent, QTransform
 
 import logging
 logger = logging.getLogger(__name__)
@@ -132,6 +132,9 @@ class PictureView(QWidget):
             return False  # Indicate loading is in progress
 
         if success:
+            # Apply DB orientation as a visual transform (rotation is metadata-only).
+            self._apply_db_orientation(image_path)
+
             self._current_path = image_path  # Store original path for navigation and external use
             self.imageChanged.emit(self._current_path)  # Emit signal with original path
 
@@ -217,6 +220,37 @@ class PictureView(QWidget):
     def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
         self._daemon_signals = daemon_signals
         daemon_signals.previews_ready.connect(self._on_previews_ready)
+
+    # EXIF orientation → clockwise rotation degrees (non-mirror orientations).
+    _ORIENTATION_DEGREES = {1: 0, 3: 180, 6: 90, 8: 270}
+
+    def _apply_db_orientation(self, image_path: str) -> None:
+        """Apply the DB orientation as a visual rotation after loading a cached image."""
+        if not self.service:
+            return
+        orientation = 1
+        try:
+            resp = self.service.get_metadata_batch([image_path])
+            if resp and image_path in resp:
+                orientation = resp[image_path].get('orientation', 1) or 1
+        except Exception:
+            pass
+        degrees = self._ORIENTATION_DEGREES.get(orientation, 0)
+        if degrees:
+            img = self._picture_base.get_image()
+            if img and not img.isNull():
+                rotated = img.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
+                self._picture_base.setImage(rotated)
+
+    def rotate_current_image(self, degrees: int) -> None:
+        """Apply a visual rotation to the currently displayed image immediately."""
+        img = self._picture_base.get_image()
+        if img is None or img.isNull():
+            return
+        rotated = img.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
+        self._picture_base.setImage(rotated)
+        self._picture_base.setFitMode(True)
+        self.update()
 
     @Slot(object)
     def _on_previews_ready(self, data: PreviewsReadyData) -> None:

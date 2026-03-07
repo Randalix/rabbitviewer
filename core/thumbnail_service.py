@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 
 from core.directory_scanner import DirectoryScanner, ReconcileContext
 from core.notifications import Notification, FilesRemovedData, ImageEntryModel
-from core.rendermanager import Priority, TaskType, TaskState, SourceJob
+from core.rendermanager import Priority, TaskType, SourceJob
 
 logger = logging.getLogger(__name__)
 
@@ -263,40 +263,25 @@ class ThumbnailService:
             current = self.db.get_orientation(path)
             new_orientation = table.get(current, table.get(1, 1))
             self.db.set_orientation(path, new_orientation)
-            # Clear any completed write_orientation task so re-submission
-            # is not silently ignored by the RenderManager.
+            # Remove any existing write_orientation task (regardless of state)
+            # so the new submission with the latest orientation is not ignored.
             task_id = f"write_orientation::{path}"
             with self.rm.graph_lock:
-                prev = self.rm.task_graph.get(task_id)
-                if prev and prev.state in (TaskState.COMPLETED, TaskState.FAILED):
-                    del self.rm.task_graph[task_id]
+                prev = self.rm.task_graph.pop(task_id, None)
+                if prev:
+                    prev.is_active = False
             self.rm.submit_task(
                 task_id,
                 Priority.NORMAL,
-                self._rotate_and_invalidate,
+                self._write_orientation_to_sidecar,
                 path, new_orientation,
                 task_type=TaskType.SIMPLE,
             )
         return True
 
-    def _rotate_and_invalidate(self, path: str, orientation: int):
-        """Write orientation to file and regenerate cached images.
-
-        The GUI thread pre-invalidated caches so the grid shows placeholders
-        immediately.  However, the heatmap may re-generate stale thumbnails
-        from the pre-rotation file during the exiftool write window.  We
-        re-invalidate here (after the write) to clear any such stale data
-        before requesting fresh thumbnail generation.
-        """
+    def _write_orientation_to_sidecar(self, path: str, orientation: int):
+        """Write orientation to sidecar file only — no cache invalidation."""
         self.tm.write_orientation_to_file(path, orientation)
-        # Clear any stale thumbnails the heatmap regenerated during the write.
-        self.tm.invalidate_cached_images(path)
-        with self.rm.graph_lock:
-            self.rm.task_graph.pop(f"write_orientation::{path}", None)
-            self.rm.task_graph.pop(path, None)
-            self.rm.task_graph.pop(f"meta::{path}", None)
-            self.rm.task_graph.pop(f"view::{path}", None)
-        self.tm.request_thumbnail(path, Priority.NORMAL)
 
     def invalidate_thumbnail_paths(self, image_paths: List[str]):
         """Clear DB thumbnail/view paths and delete cached files synchronously.

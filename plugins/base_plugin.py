@@ -410,6 +410,23 @@ class BasePlugin(ABC):
             return False
 
     def write_orientation(self, file_path: str, orientation: int) -> bool:
+        """Write EXIF Orientation to an XMP sidecar next to the image."""
+        xmp = sidecar_path_for(file_path)
+        try:
+            output = self._write_to_sidecar(
+                xmp, [f"-XMP-tiff:Orientation#={orientation}", "-n"], file_path,
+            )
+            if self._sidecar_write_ok(output):
+                logger.info("Wrote orientation %d to sidecar %s.", orientation, xmp)
+                return True
+            logger.error("exiftool reported no update writing orientation sidecar %s: %s",
+                          xmp, output.decode("utf-8", "replace").strip())
+            return False
+        except (RuntimeError, TimeoutError) as e:
+            logger.error("Failed to write orientation sidecar for %s: %s", file_path, e)
+            return False
+
+    def write_orientation_embedded(self, file_path: str, orientation: int) -> bool:
         """Write the EXIF Orientation numeric tag directly into the image file."""
         try:
             et = self._get_exiftool()
