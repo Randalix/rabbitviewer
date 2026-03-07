@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
     _tag_filter_ready = Signal(list, list)  # (dir_tags, global_tags)
     _tag_editor_ready = Signal(int, list, list, list)  # (count, common_tags, dir_tags, global_tags)
     def __init__(self, config_manager, service,
-                 daemon_signals: DaemonSignals):
+                 daemon_signals: DaemonSignals, *, debug_ui: bool = False):
         super().__init__()
         self.config_manager = config_manager
         self.service = service
@@ -85,6 +85,9 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         else:
             self.resize(800, 600)
+
+        if debug_ui:
+            self.setStyleSheet("QWidget { border: 1px solid red; }")
 
         self.filter_dialog = None
         self.tag_editor_dialog = None

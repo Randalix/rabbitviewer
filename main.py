@@ -214,7 +214,7 @@ def _set_macos_app_name(name):
 def _run_gui(args, config_manager):
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
-    from PySide6.QtCore import QTimer, QEvent
+    from PySide6.QtCore import QTimer, QEvent, qInstallMessageHandler, QtMsgType
     from core.thumbnail_service import ThumbnailService
     from network.daemon_signals import DaemonSignals
     from gui.main_window import MainWindow
@@ -227,6 +227,15 @@ def _run_gui(args, config_manager):
     setup_logging(log_level,
                   logging_levels=config_manager.get("logging_levels", {}))
     logger.info("Starting RabbitViewer")
+
+    # why: PySide6 swallows unhandled slot exceptions without logging; this surfaces them.
+    def _handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+    sys.excepthook = _handle_exception
 
     # If the user (or macOS) passed a file instead of a directory,
     # open the parent directory and navigate to that file.
@@ -262,6 +271,22 @@ def _run_gui(args, config_manager):
     app = QApplication(sys.argv)
     app.setApplicationName("Rabbit Viewer")
 
+    # why: Qt C++ warnings are otherwise lost; route them to rabbitviewer.log.
+    _qt_logger = logging.getLogger("qt")
+    _qt_level_map = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
+
+    def _qt_message_handler(mode, context, message):
+        level = _qt_level_map.get(mode, logging.WARNING)
+        _qt_logger.log(level, message)
+
+    qInstallMessageHandler(_qt_message_handler)
+
     daemon_signals = DaemonSignals()
     thumbnail_manager.render_manager.add_notification_callback(
         daemon_signals.dispatch_notification
@@ -275,7 +300,8 @@ def _run_gui(args, config_manager):
         release_gui_lock(gui_lock_fd)
         return 1
 
-    window = MainWindow(config_manager, service, daemon_signals)
+    window = MainWindow(config_manager, service, daemon_signals,
+                        debug_ui=args.debug_ui)
 
     # macOS "Open With" sends files via QFileOpenEvent (Apple Events),
     # not as CLI arguments.  Install a handler so the window receives them.
@@ -363,6 +389,12 @@ def main():
         default=None,
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         help='Override logging level from config.',
+    )
+    parser.add_argument(
+        '--debug-ui',
+        action='store_true',
+        default=False,
+        help='Draw red borders on all widgets for layout debugging.',
     )
     args = parser.parse_args()
 
