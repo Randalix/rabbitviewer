@@ -294,6 +294,34 @@ class VirtualGridManager(QObject):
             self._mat_start = 0
             self._mat_end = 0
 
+    def reindex_labels(
+        self,
+        new_total: int,
+        map_label: Callable[[ThumbnailLabel], Optional[int]],
+    ) -> None:
+        """Re-key materialized labels after an insertion or reorder.
+
+        *map_label(label)* returns the new vis_idx for a surviving label,
+        or ``None`` to drop it (caller should recycle separately if needed).
+        """
+        new_mat: Dict[int, ThumbnailLabel] = {}
+        for label in self._mat_labels.values():
+            new_idx = map_label(label)
+            if new_idx is not None:
+                new_mat[new_idx] = label
+                label.move(self._pos_x(new_idx), self._pos_y(new_idx))
+
+        self._mat_labels = new_mat
+        self._total_items = new_total
+        self._update_container_height()
+
+        if new_mat:
+            self._mat_start = min(new_mat)
+            self._mat_end = max(new_mat) + 1
+        else:
+            self._mat_start = 0
+            self._mat_end = 0
+
     def clear(self, recycle_label: Callable[[ThumbnailLabel], None]) -> None:
         """Recycle all materialized labels."""
         for label in self._mat_labels.values():

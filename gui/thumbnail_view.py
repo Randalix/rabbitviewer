@@ -916,25 +916,11 @@ class ThumbnailViewWidget(QFrame):
             self._original_to_visible_mapping[orig_idx] = vis_idx
 
         if self._virtual_grid:
-            self._virtual_grid.set_total_items(len(self.current_files))
-            # Re-index materialized labels whose vis_idx shifted
-            old_mat = dict(self._virtual_grid._mat_labels)
-            new_mat = {}
-            for old_vis_idx, label in old_mat.items():
-                new_vis_idx = self._original_to_visible_mapping.get(label._original_idx)
-                if new_vis_idx is not None:
-                    new_mat[new_vis_idx] = label
-                    label.move(
-                        self._virtual_grid._pos_x(new_vis_idx),
-                        self._virtual_grid._pos_y(new_vis_idx),
-                    )
-            self._virtual_grid._mat_labels = new_mat
-            if new_mat:
-                self._virtual_grid._mat_start = min(new_mat)
-                self._virtual_grid._mat_end = max(new_mat) + 1
-            else:
-                self._virtual_grid._mat_start = 0
-                self._virtual_grid._mat_end = 0
+            mapping = self._original_to_visible_mapping
+            self._virtual_grid.reindex_labels(
+                len(self.current_files),
+                lambda label: mapping.get(label._original_idx),
+            )
             self._sync_virtual_viewport()
 
         self._last_layout_file_count = len(self.all_files)
