@@ -433,6 +433,8 @@ logging_levels:                        # per-module overrides
 
 CLI `--log-level DEBUG` overrides the config value for a single session. PIL logger is hardcoded to INFO to suppress EXIF tag noise.
 
+See [`docs/debugging.md`](docs/debugging.md) for the full debugging protocol: step-by-step triage, per-module verbosity, breakpoint strategies, threading diagnostics, and fail-loudly safeguards (Qt message routing, `sys.excepthook`, `--debug-ui`).
+
 ---
 
 ## Scripts
