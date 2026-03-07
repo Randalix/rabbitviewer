@@ -309,7 +309,9 @@ class ThumbnailManager:
         if not self._is_volume_accessible(image_path):
             return None
 
-        # Re-check: view image may already exist from a previous run.
+        # Re-check: view image may already exist (disk or memory cache).
+        if self._mem_cache_get(image_path) is not None:
+            return "memory"
         current_paths = self.metadata_db.get_thumbnail_paths(image_path)
         existing_view = current_paths.get('view_image_path')
         if existing_view and os.path.exists(existing_view):
@@ -979,6 +981,9 @@ class ThumbnailManager:
         if not self._passes_pre_checks(file_path):
             return []
 
+        if self._mem_cache_get(file_path) is not None:
+            return []
+
         paths = self.metadata_db.get_thumbnail_paths(file_path)
         existing_view = paths.get('view_image_path')
         if existing_view and os.path.exists(existing_view):
@@ -1016,15 +1021,16 @@ class ThumbnailManager:
                 args=(file_path,),
             ))
 
-        paths = self.metadata_db.get_thumbnail_paths(file_path)
-        existing_view = paths.get('view_image_path') if paths else None
-        if not (existing_view and os.path.exists(existing_view)):
-            tasks.append(RenderTask(
-                task_id=f"view::{file_path}",
-                priority=priority,
-                func=self._generate_view_image_task,
-                args=(file_path,),
-            ))
+        if self._mem_cache_get(file_path) is None:
+            paths = self.metadata_db.get_thumbnail_paths(file_path)
+            existing_view = paths.get('view_image_path') if paths else None
+            if not (existing_view and os.path.exists(existing_view)):
+                tasks.append(RenderTask(
+                    task_id=f"view::{file_path}",
+                    priority=priority,
+                    func=self._generate_view_image_task,
+                    args=(file_path,),
+                ))
 
         if not tasks:
             # Everything already valid — clear from ledger so this file
@@ -1068,15 +1074,16 @@ class ThumbnailManager:
             ))
 
         # View-image at BACKGROUND_SCAN — runs only after thumbnail queue drains.
-        paths = self.metadata_db.get_thumbnail_paths(file_path)
-        existing_view = paths.get('view_image_path') if paths else None
-        if not (existing_view and os.path.exists(existing_view)):
-            tasks.append(RenderTask(
-                task_id=f"view::{file_path}",
-                priority=Priority.BACKGROUND_SCAN,
-                func=self._generate_view_image_task,
-                args=(file_path,),
-            ))
+        if self._mem_cache_get(file_path) is None:
+            paths = self.metadata_db.get_thumbnail_paths(file_path)
+            existing_view = paths.get('view_image_path') if paths else None
+            if not (existing_view and os.path.exists(existing_view)):
+                tasks.append(RenderTask(
+                    task_id=f"view::{file_path}",
+                    priority=Priority.BACKGROUND_SCAN,
+                    func=self._generate_view_image_task,
+                    args=(file_path,),
+                ))
 
         return tasks
 
