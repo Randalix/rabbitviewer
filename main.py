@@ -112,7 +112,10 @@ def _run_daemon(config_manager):
 
     watcher.start()
 
-    background_indexer = BackgroundIndexer(thumbnail_manager, directory_scanner, watch_paths)
+    background_indexer = BackgroundIndexer(
+        thumbnail_manager, directory_scanner, watch_paths,
+        metadata_db=thumbnail_manager.metadata_db,
+    )
     background_indexer.start_indexing()
 
     rm = thumbnail_manager.render_manager
@@ -140,6 +143,7 @@ def _run_daemon(config_manager):
             elif not gui_active and gui_was_active:
                 logging.info("GUI gone — resuming daemon workers.")
                 rm.resume()
+                background_indexer.recover_orphans()
                 gui_was_active = False
         except Exception as e:
             logging.debug(f"GUI lock poll error: {e}")

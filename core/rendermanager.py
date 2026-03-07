@@ -412,6 +412,14 @@ class RenderManager:
 
         # 5. Process the yielded item and create child tasks.
         items_to_process = item if isinstance(item, list) else [item]
+
+        # Record discovered files in the scan ledger (if callback provided).
+        if job.on_batch_discovered is not None:
+            try:
+                job.on_batch_discovered(items_to_process)
+            except Exception as e:  # why: callback is caller-supplied; must not abort the generator dispatch
+                logging.warning(f"on_batch_discovered callback failed: {e}", exc_info=True)
+
         _is_daemon_job = job.job_id.startswith("daemon_idx::")
         job_parts = job.job_id.split('::', 1)
         job_path = job_parts[1] if len(job_parts) > 1 else job_parts[0]

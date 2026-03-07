@@ -143,6 +143,21 @@ class MetadataDatabase:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_file ON image_tags(file_path)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id)')
 
+                # Scan ledger: tracks files discovered by any scan so the daemon
+                # can resume processing without re-walking the filesystem.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS scan_ledger (
+                        file_path     TEXT PRIMARY KEY,
+                        scan_root     TEXT NOT NULL,
+                        status        TEXT NOT NULL DEFAULT 'discovered',
+                        discovered_at REAL NOT NULL
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_ledger_root_status
+                    ON scan_ledger(scan_root, status)
+                ''')
+
                 self.conn.commit()
                 
                 logging.info(f"Metadata database initialized: {self.db_path}")
@@ -1364,6 +1379,28 @@ class MetadataDatabase:
             logging.error(f"Error getting tags for {file_path}: {e}")
             return []
 
+    def batch_get_image_tags(self, file_paths: List[str]) -> Dict[str, List[str]]:
+        """Returns {file_path: [tag_names]} for multiple images in a single query."""
+        if not file_paths:
+            return {}
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                placeholders = ",".join("?" for _ in file_paths)
+                cursor.execute(f'''
+                    SELECT it.file_path, t.name FROM tags t
+                    JOIN image_tags it ON it.tag_id = t.id
+                    WHERE it.file_path IN ({placeholders})
+                    ORDER BY it.file_path, t.name
+                ''', file_paths)
+                result: Dict[str, List[str]] = {fp: [] for fp in file_paths}
+                for file_path, tag_name in cursor.fetchall():
+                    result[file_path].append(tag_name)
+                return result
+        except sqlite3.Error as e:
+            logging.error(f"Error batch getting tags: {e}")
+            return {fp: [] for fp in file_paths}
+
     def get_all_tags(self, kind: Optional[str] = None) -> List[Dict[str, Any]]:
         """Returns all tags as [{id, name, kind}], optionally filtered by kind."""
         try:
@@ -1477,6 +1514,97 @@ class MetadataDatabase:
             self.remove_records(paths_to_remove)
 
         return bytes_to_free
+
+    # ------------------------------------------------------------------
+    #  Scan ledger — orphan recovery across GUI/daemon restarts
+    # ------------------------------------------------------------------
+
+    def ledger_batch_insert(self, file_paths: List[str], scan_root: str) -> None:
+        """Record discovered files. INSERT OR IGNORE keeps existing entries."""
+        if not file_paths:
+            return
+        try:
+            now = time.time()
+            with self._lock:
+                self.conn.executemany(
+                    'INSERT OR IGNORE INTO scan_ledger (file_path, scan_root, status, discovered_at) '
+                    'VALUES (?, ?, ?, ?)',
+                    [(fp, scan_root, 'discovered', now) for fp in file_paths],
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logging.error(f"ledger_batch_insert failed: {e}")
+
+    def ledger_mark_complete(self, file_path: str) -> None:
+        """Mark a file as fully processed. No-op if the path isn't in the ledger."""
+        try:
+            with self._lock:
+                self.conn.execute(
+                    "UPDATE scan_ledger SET status = 'complete' WHERE file_path = ?",
+                    (file_path,),
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logging.error(f"ledger_mark_complete failed: {e}")
+
+    def ledger_get_incomplete(self, scan_root: str) -> List[str]:
+        """Return file paths that were discovered but not yet processed."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "SELECT file_path FROM scan_ledger "
+                    "WHERE scan_root = ? AND status = 'discovered'",
+                    (scan_root,),
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logging.error(f"ledger_get_incomplete failed: {e}")
+            return []
+
+    def ledger_get_walked_dirs(self, scan_root: str) -> set:
+        """Derive the set of fully-walked directories from the ledger.
+
+        Only considers 'complete' entries — partially-walked directories
+        (with 'discovered' files that were never processed) are NOT skipped,
+        so the daemon re-walks them and discovers any remaining files.
+        """
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "SELECT DISTINCT file_path FROM scan_ledger "
+                    "WHERE scan_root = ? AND status = 'complete'",
+                    (scan_root,),
+                )
+                return {os.path.dirname(row[0]) for row in cursor.fetchall()}
+        except sqlite3.Error as e:
+            logging.error(f"ledger_get_walked_dirs failed: {e}")
+            return set()
+
+    def ledger_prune_complete(self, scan_root: str) -> int:
+        """Remove fully-processed entries for a scan root."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "DELETE FROM scan_ledger WHERE scan_root = ? AND status = 'complete'",
+                    (scan_root,),
+                )
+                self.conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logging.error(f"ledger_prune_complete failed: {e}")
+            return 0
+
+    def ledger_get_all_scan_roots(self) -> List[str]:
+        """Return all scan roots that have ledger entries."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "SELECT DISTINCT scan_root FROM scan_ledger"
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logging.error(f"ledger_get_all_scan_roots failed: {e}")
+            return []
 
     def close(self):
         """Closes the database connection."""

@@ -33,16 +33,36 @@ class _StubDirectoryScanner:
     def __init__(self, files_by_path: dict[str, list[str]]):
         self._files = files_by_path
 
-    def scan_incremental(self, path, recursive=True):
+    def scan_incremental(self, path, recursive=True, skip_dirs=None):
         files = self._files.get(path, [])
         if files:
             yield files
+
+
+class _StubLedger:
+    """Minimal stub for MetadataDatabase ledger methods."""
+
+    def ledger_get_all_scan_roots(self):
+        return []
+
+    def ledger_get_incomplete(self, scan_root):
+        return []
+
+    def ledger_get_walked_dirs(self, scan_root):
+        return set()
+
+    def ledger_batch_insert(self, file_paths, scan_root):
+        pass
+
+    def ledger_prune_complete(self, scan_root):
+        return 0
 
 
 class _StubThumbnailManager:
 
     def __init__(self, render_manager):
         self.render_manager = render_manager
+        self.metadata_db = _StubLedger()
         self.all_calls: list[str] = []
 
     def create_all_tasks_for_file(self, path, priority):
@@ -54,7 +74,10 @@ class _MockRenderManager:
     """Tracks submit_source_job calls without running workers."""
 
     def __init__(self):
+        import threading
         self._active_jobs: dict[str, SourceJob] = {}
+        self.active_jobs_lock = threading.Lock()
+        self.active_jobs = self._active_jobs
 
     def get_all_job_ids(self) -> list[str]:
         return list(self._active_jobs.keys())

@@ -224,6 +224,7 @@ class ThumbnailManager:
         # Re-check validity — another task may have already processed this file.
         if self.metadata_db.is_thumbnail_valid(image_path):
             logger.debug(f"Thumbnail for {image_path} already valid. Sending notification and skipping.")
+            self.metadata_db.ledger_mark_complete(image_path)
             paths = self.metadata_db.get_thumbnail_paths(image_path)
             notification_data = protocol.PreviewsReadyData(
                 image_entry=protocol.ImageEntryModel(path=image_path),
@@ -250,6 +251,7 @@ class ThumbnailManager:
         thumbnail_path = plugin.process_thumbnail(image_path, md5_hash, prefetch_buffer=prefetch_buffer)
         if thumbnail_path:
             self.metadata_db.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path)
+            self.metadata_db.ledger_mark_complete(image_path)
             if self.cache_size_manager:
                 try:
                     self.cache_size_manager.record_cache_write(os.path.getsize(thumbnail_path))
@@ -992,6 +994,11 @@ class ThumbnailManager:
                 func=self._generate_view_image_task,
                 args=(file_path,),
             ))
+
+        if not tasks:
+            # Everything already valid — clear from ledger so this file
+            # is not re-submitted as an orphan on every daemon restart.
+            self.metadata_db.ledger_mark_complete(file_path)
 
         return tasks
 

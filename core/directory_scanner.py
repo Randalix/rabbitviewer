@@ -67,12 +67,15 @@ class DirectoryScanner:
 
         return True
 
-    def scan_incremental(self, directory_path: str, recursive: bool = True, batch_size: int = 10):
+    def scan_incremental(self, directory_path: str, recursive: bool = True,
+                         batch_size: int = 10, skip_dirs: Optional[Set[str]] = None):
+        """Generator that incrementally yields batches of supported file paths.
+
+        *skip_dirs* is an optional set of absolute directory paths to skip
+        (including their subtrees).  Used by the daemon to avoid re-walking
+        directories already recorded in the scan ledger.
         """
-        Generator that incrementally yields batches of supported file paths.
-        Batching reduces priority-queue and notification overhead.
-        """
-        logging.info(f"Performing incremental scan for: {directory_path} (Recursive: {recursive}, batch_size={batch_size})")
+        logging.info(f"Performing incremental scan for: {directory_path} (Recursive: {recursive}, batch_size={batch_size}, skip_dirs={len(skip_dirs) if skip_dirs else 0})")
         current_batch = []
         total_yielded = 0
         scan_start = time.monotonic()
@@ -84,7 +87,12 @@ class DirectoryScanner:
         try:
             walk_start = time.monotonic()
             walker = os.walk(directory_path) if recursive else [(directory_path, [], os.listdir(directory_path))]
-            for root, _, files in walker:
+            for root, dirs, files in walker:
+                if skip_dirs:
+                    # Prune os.walk descent into already-walked subtrees.
+                    dirs[:] = [d for d in dirs if os.path.join(root, d) not in skip_dirs]
+                    if root in skip_dirs:
+                        continue
                 walk_elapsed = time.monotonic() - walk_start
                 logging.info(f"[chunking] scan_incremental: entering dir '{root}' ({len(files)} entries, {walk_elapsed:.3f}s since last yield/start)")
                 for filename in files:
@@ -113,14 +121,16 @@ class DirectoryScanner:
             logging.error(f"Error during directory scan of {directory_path}: {e}", exc_info=True)
 
     def scan_incremental_reconcile(self, directory_path: str, recursive: bool,
-                                     ctx: ReconcileContext, batch_size: int = 10):
+                                     ctx: ReconcileContext, batch_size: int = 10,
+                                     skip_dirs: Optional[Set[str]] = None):
         """Like scan_incremental but also tracks ghost files via *ctx*.
 
         Wraps scan_incremental: for each discovered file, discards it from
         ctx.db_file_set.  After the walk finishes, any paths remaining in
         db_file_set are ghost files (in DB but deleted on disk).
         """
-        for batch in self.scan_incremental(directory_path, recursive, batch_size):
+        for batch in self.scan_incremental(directory_path, recursive, batch_size,
+                                           skip_dirs=skip_dirs):
             for f in batch:
                 ctx.db_file_set.discard(f)
             ctx.discovered_files.extend(batch)

@@ -55,6 +55,7 @@ class SourceJob:
     create_tasks: bool = True
     task_priority: Optional[Priority] = None
     on_complete: Optional[Callable] = field(default=None, compare=False)
+    on_batch_discovered: Optional[Callable] = field(default=None, compare=False)
     _cancel_event: threading.Event = field(default_factory=threading.Event, compare=False)
 
     def __lt__(self, other):

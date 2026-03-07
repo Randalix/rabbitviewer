@@ -105,6 +105,11 @@ class ThumbnailService:
                 )
                 self.rm.submit_source_job(task_job)
 
+            self.db.ledger_prune_complete(path)
+
+        def _ledger_batch_cb(paths):
+            self.db.ledger_batch_insert(paths, scan_root=path)
+
         reconcile_job = SourceJob(
             job_id=f"gui_scan::{path}",
             priority=Priority(80),
@@ -114,6 +119,7 @@ class ThumbnailService:
             task_factory=self.tm.create_gui_tasks_for_file,
             create_tasks=False,
             on_complete=_on_reconcile_complete,
+            on_batch_discovered=_ledger_batch_cb,
         )
         self.rm.submit_source_job(reconcile_job)
 

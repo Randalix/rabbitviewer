@@ -37,8 +37,11 @@ GUI startup:
 Daemon startup:
   1. Acquire daemon PID lock (~/.rabbitviewer/cache/daemon.pid)
   2. Init core: ThumbnailManager, WatchdogHandler, DirectoryScanner
-  3. Start BackgroundIndexer (SourceJobs for each watch_path)
+  3. Start BackgroundIndexer:
+     a. Phase 1 — recover orphans from scan_ledger at ORPHAN_SCAN(15)
+     b. Phase 2 — walk un-walked directories at BACKGROUND_SCAN(10)
   4. Poll GUI flock every 2s — pause workers when GUI active, resume when gone
+     On GUI disconnect: resume workers, then recover_orphans() again
 ```
 
 ---
@@ -53,6 +56,15 @@ Wires together:
 - `WatchdogHandler` (filesystem monitor)
 
 Coordinated with the GUI via flock: the daemon polls `is_gui_active()` every 2 s and pauses/resumes its `RenderManager` workers accordingly, so both processes never compete for resources. Signal handlers (`SIGTERM`, `SIGINT`) trigger graceful shutdown.
+
+### Scan Ledger — `scan_ledger` table in MetadataDatabase
+
+Tracks every file discovered by any scan so the daemon can resume processing without re-walking the filesystem.
+
+- **Schema:** `file_path TEXT PRIMARY KEY`, `scan_root TEXT`, `status TEXT` (`'discovered'` or `'complete'`), `discovered_at REAL`.
+- **Write path:** `SourceJob.on_batch_discovered` callback (called by `_cooperative_generator_runner` after each batch yield) inserts discovered files. `_generate_thumbnail_task` marks entries `'complete'` after successful thumbnail generation.
+- **Read path:** On daemon startup or GUI disconnect, `BackgroundIndexer.recover_orphans()` queries incomplete entries and submits them as an `orphan_recovery::` SourceJob at `ORPHAN_SCAN(15)`. Walk-checkpoint directories are derived from the ledger (`ledger_get_walked_dirs`) and passed as `skip_dirs` to `scan_incremental`.
+- **Cleanup:** `ledger_prune_complete(scan_root)` is called after a full reconciliation walk completes.
 
 ---
 
@@ -103,7 +115,7 @@ Priority upgrade invalidates the old `RenderTask` in the queue (sets `is_active=
 
 All multi-file workflows are `SourceJob`s — a generator (discovers paths) paired with a task factory (converts each path to `RenderTask`s). `_cooperative_generator_runner` processes one item per worker invocation and reschedules itself, enabling backpressure-friendly, interruptible scanning without blocking the worker pool. When queue depth exceeds `backpressure_threshold`, the next generator slice is throttled to `Priority.LOW`.
 
-`SourceJob.task_priority` (optional) decouples the generator runner priority from child task priority. When set, child tasks are created at `task_priority` instead of `job.priority`, allowing the generator to run fast while tasks start low and await heatmap upgrades.
+`SourceJob.task_priority` (optional) decouples the generator runner priority from child task priority. When set, child tasks are created at `task_priority` instead of `job.priority`, allowing the generator to run fast while tasks start low and await heatmap upgrades. `SourceJob.on_batch_discovered` (optional callback) is called with the file-path list after each batch yield — used by the scan ledger to persist discovered files for orphan recovery.
 
 **Demote-on-disconnect:** When a GUI client disconnects mid-scan, the socket server demotes all `gui_scan::` and `post_scan::` jobs to `ORPHAN_SCAN(15)` via `demote_job()` instead of cancelling them. The generator keeps running at the lower priority, populating the DB cache so the next GUI connect loads cached files instantly. `demote_job()` mutates `job.priority`; the next `_cooperative_generator_runner` slice picks up the new priority automatically. If the reconcile scan completes after disconnect, `_on_reconcile_complete` creates the `post_scan::` job at `ORPHAN_SCAN` instead of `LOW`.
 
