@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QSize, QEvent, QObject, QRectF, QSettings
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QMouseEvent, QFontMetrics
 
 from config.hotkeys import HotkeyDefinition
+from gui.utils import mono_font
 
 
 _SETTINGS_KEY = "hotkey_help/show_at_startup"
@@ -108,6 +109,7 @@ class HotkeyHelpOverlay(QWidget):
     def __init__(self, parent: QWidget, definitions: dict[str, HotkeyDefinition],
                  trigger_key: str = "?"):
         super().__init__(parent)
+        self._mono = mono_font()
         self._is_open = False
         self._sections = _build_rows(definitions)
         self._trigger_key = trigger_key
@@ -162,7 +164,7 @@ class HotkeyHelpOverlay(QWidget):
     # ------------------------------------------------------------------
 
     def _resize_to_fit(self):
-        font = QFont("monospace", self._FONT_SIZE)
+        font = QFont(self._mono, self._FONT_SIZE)
         font.setStyleHint(QFont.Monospace)
         fm = QFontMetrics(font)
 
@@ -281,14 +283,14 @@ class HotkeyHelpOverlay(QWidget):
         painter.save()
         painter.translate(0, -self._scroll_offset)
 
-        font = QFont("monospace", self._FONT_SIZE)
+        font = QFont(self._mono, self._FONT_SIZE)
         font.setStyleHint(QFont.Monospace)
         painter.setFont(font)
         fm = QFontMetrics(font)
 
         y = self._PADDING
 
-        title_font = QFont("monospace", self._FONT_SIZE + 2, QFont.Bold)
+        title_font = QFont(self._mono, self._FONT_SIZE + 2, QFont.Bold)
         title_font.setStyleHint(QFont.Monospace)
         painter.setFont(title_font)
         painter.setPen(self._TITLE_FG)
@@ -303,7 +305,7 @@ class HotkeyHelpOverlay(QWidget):
             if section_idx > 0:
                 y += self._SECTION_GAP
 
-            header_font = QFont("monospace", self._FONT_SIZE - 1, QFont.Bold)
+            header_font = QFont(self._mono, self._FONT_SIZE - 1, QFont.Bold)
             header_font.setStyleHint(QFont.Monospace)
             painter.setFont(header_font)
             painter.setPen(self._HEADER_FG)
@@ -339,7 +341,7 @@ class HotkeyHelpOverlay(QWidget):
                 y += self._ROW_HEIGHT
 
         y += self._SECTION_GAP
-        small_font = QFont("monospace", self._FONT_SIZE - 2)
+        small_font = QFont(self._mono, self._FONT_SIZE - 2)
         small_font.setStyleHint(QFont.Monospace)
         painter.setFont(small_font)
         small_fm = QFontMetrics(small_font)

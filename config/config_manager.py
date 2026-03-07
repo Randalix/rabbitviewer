@@ -21,7 +21,8 @@ DEFAULT_CONFIG = {
         "select_border_color": "orange",
         "placeholder_color": "black",
         "statusbar_font": "Arial",
-        "statusbar_font_size": 10
+        "statusbar_font_size": 10,
+        "monospace_font": "Menlo"
     },
     "hotkeys": {
         "escape_picture_view": {

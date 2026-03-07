@@ -9,6 +9,9 @@ from PySide6.QtCore import Qt, QSize, QEvent, QObject
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QKeyEvent, QMouseEvent
 
 
+from gui.utils import mono_font
+
+
 @dataclass
 class MenuContext:
     view: str  # "thumbnail" | "picture" | "video"
@@ -53,6 +56,7 @@ class ModalMenu(QWidget):
 
     def __init__(self, parent, menus: dict, script_manager):
         super().__init__(parent)
+        self._mono = mono_font()
         self._menus = menus
         self._script_manager = script_manager
         self._is_open = False
@@ -251,7 +255,7 @@ class ModalMenu(QWidget):
         path.addRoundedRect(self.rect().toRectF(), self._CORNER_RADIUS, self._CORNER_RADIUS)
         painter.fillPath(path, self._BG_COLOR)
 
-        font = QFont("monospace", self._FONT_SIZE)
+        font = QFont(self._mono, self._FONT_SIZE)
         font.setStyleHint(QFont.Monospace)
         painter.setFont(font)
 

@@ -1,6 +1,8 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
 from PySide6.QtCore import Qt, Signal
 
+from gui.utils import mono_font
+
 # Palette — mirrors HotkeyHelpOverlay
 _BG = "#1e1e1e"
 _HEADER_BG = "#232323"
@@ -9,11 +11,17 @@ _ARROW_FG = "#8cb4ff"
 _KEY_FG = "#8c8c8c"          # row key — dim
 _VAL_FG = "#dcdcdc"          # row value — bright
 _SEPARATOR = "#2a2a2a"
-_FONT = "monospace"
 _FONT_SIZE = 12
 
-_KEY_SS = f"color:{_KEY_FG};font-family:{_FONT};font-size:{_FONT_SIZE}px;min-width:90px;max-width:90px;"
-_VAL_SS = f"color:{_VAL_FG};font-family:{_FONT};font-size:{_FONT_SIZE}px;"
+
+def _key_ss() -> str:
+    return f"color:{_KEY_FG};font-family:{mono_font()};font-size:{_FONT_SIZE}px;min-width:90px;max-width:90px;"
+
+
+def _val_ss() -> str:
+    return f"color:{_VAL_FG};font-family:{mono_font()};font-size:{_FONT_SIZE}px;"
+
+
 _ROW_SS = f"background:{_BG};"
 
 
@@ -48,13 +56,13 @@ class CollapsibleSection(QWidget):
         self._arrow.setFixedWidth(14)
         self._arrow.setStyleSheet(f"""
             color: {_ARROW_FG};
-            font-family: {_FONT};
+            font-family: {mono_font()};
             font-size: {_FONT_SIZE - 2}px;
         """)
         self._title_label = QLabel(title.upper())
         self._title_label.setStyleSheet(f"""
             color: {_HEADER_FG};
-            font-family: {_FONT};
+            font-family: {mono_font()};
             font-size: {_FONT_SIZE - 1}px;
             font-weight: bold;
             letter-spacing: 1px;
@@ -92,11 +100,11 @@ class CollapsibleSection(QWidget):
         row_layout.setSpacing(8)
 
         key_label = QLabel(key)
-        key_label.setStyleSheet(_KEY_SS)
+        key_label.setStyleSheet(_key_ss())
         key_label.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
         val_label = QLabel(value)
-        val_label.setStyleSheet(_VAL_SS)
+        val_label.setStyleSheet(_val_ss())
         val_label.setWordWrap(True)
         val_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 

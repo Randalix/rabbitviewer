@@ -299,6 +299,8 @@ def _run_gui(args, config_manager):
         _set_macos_app_name("Rabbit Viewer")
     app = QApplication(sys.argv)
     app.setApplicationName("Rabbit Viewer")
+    app.setProperty("monospace_font",
+                     config_manager.get("gui.monospace_font", "monospace"))
 
     # why: Qt C++ warnings are otherwise lost; route them to rabbitviewer.log.
     _qt_logger = logging.getLogger("qt")

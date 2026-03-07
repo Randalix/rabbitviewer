@@ -7,6 +7,7 @@ from PySide6.QtGui import QFont
 from .content_provider import ContentProvider
 from ..components.collapsible_section import CollapsibleSection
 from core.event_system import event_system, EventType, InspectorEventData
+from gui.utils import mono_font
 
 # Palette — mirrors HotkeyHelpOverlay
 _BG = "#1e1e1e"
@@ -17,7 +18,6 @@ _PIN_BG_ACTIVE = "#8cb4ff"
 _PIN_FG = "#dcdcdc"
 _PIN_FG_ACTIVE = "#1e1e1e"
 _BORDER = "#2a2a2a"
-_FONT = "monospace"
 _FONT_SIZE = 12
 
 
@@ -84,7 +84,8 @@ class InfoPanelShell(QWidget):
             opacity = self._config_manager.get("gui.info_panel_opacity", 0.8)
         self.setWindowOpacity(opacity)
 
-        font = QFont(_FONT, _FONT_SIZE)
+        _font = mono_font()
+        font = QFont(_font, _FONT_SIZE)
         font.setStyleHint(QFont.Monospace)
         self.setFont(font)
 
@@ -104,7 +105,7 @@ class InfoPanelShell(QWidget):
         self._path_label = QLabel("")
         self._path_label.setStyleSheet(f"""
             color: {_TEXT};
-            font-family: {_FONT};
+            font-family: {_font};
             font-size: {_FONT_SIZE}px;
             font-weight: bold;
         """)
@@ -122,7 +123,7 @@ class InfoPanelShell(QWidget):
                 border: none;
                 border-radius: 4px;
                 padding: 2px 10px;
-                font-family: {_FONT};
+                font-family: {_font};
                 font-size: {_FONT_SIZE - 1}px;
             }}
             QPushButton:checked {{
