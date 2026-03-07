@@ -137,7 +137,8 @@ def _run_daemon(config_manager, log_level_override=None):
     logger.info("Starting RabbitViewer daemon (headless indexer)")
 
     thumbnail_manager, watcher, watch_paths = _init_core(config_manager)
-    directory_scanner = DirectoryScanner(thumbnail_manager, config_manager)
+    directory_scanner = DirectoryScanner(thumbnail_manager, config_manager,
+                                        source_cache=thumbnail_manager.source_cache)
 
     watcher.start()
 
@@ -289,7 +290,8 @@ def _run_gui(args, config_manager):
         return 1
 
     thumbnail_manager, watcher, watch_paths = _init_core(config_manager)
-    directory_scanner = DirectoryScanner(thumbnail_manager, config_manager)
+    directory_scanner = DirectoryScanner(thumbnail_manager, config_manager,
+                                        source_cache=thumbnail_manager.source_cache)
     service = ThumbnailService(thumbnail_manager, directory_scanner)
 
     watcher.start()

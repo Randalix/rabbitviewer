@@ -199,8 +199,6 @@ class BasePlugin(ABC):
         Reads the first 256 KB; returns None to fall back to the default exiftool
         extractor if the file is missing or the scan yields nothing.
         """
-        if not os.path.exists(file_path):
-            return None
         results: Dict[str, Any] = {}
         ns = {
             "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",

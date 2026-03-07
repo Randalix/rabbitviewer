@@ -178,6 +178,7 @@ class WatchdogHandler(FileSystemEventHandler):
             old_path = event.src_path
             new_path = event.dest_path
             logger.debug(f"Watchdog: Submitting move task for {old_path} → {new_path}")
+            self.thumbnail_manager.source_cache.invalidate(old_path)
             self.thumbnail_manager._mem_cache_remove(old_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_move::{old_path}::{new_path}",
@@ -191,6 +192,7 @@ class WatchdogHandler(FileSystemEventHandler):
             file_path = new_path
         elif event.event_type == 'deleted':
             logger.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
+            self.thumbnail_manager.source_cache.invalidate(event.src_path)
             self.thumbnail_manager._mem_cache_remove(event.src_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_cleanup_deleted::{event.src_path}",

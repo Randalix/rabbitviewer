@@ -7,6 +7,7 @@ import fnmatch
 from dataclasses import dataclass, field
 from typing import List, Set, Optional
 from core.thumbnail_manager import ThumbnailManager
+from core.source_cache import SourceExistsCache
 
 
 @dataclass
@@ -24,9 +25,11 @@ class ReconcileContext:
 
 class DirectoryScanner:
 
-    def __init__(self, thumbnail_manager: Optional[ThumbnailManager], config_manager=None):
+    def __init__(self, thumbnail_manager: Optional[ThumbnailManager], config_manager=None,
+                 source_cache: Optional[SourceExistsCache] = None):
         self.thumbnail_manager = thumbnail_manager
         self.config_manager = config_manager
+        self.source_cache = source_cache
         self.min_file_size = config_manager.get("min_file_size", 8192) if config_manager else 8192
         self.ignore_patterns = config_manager.get("ignore_patterns", ["._*"]) if config_manager else ["._*"]
 
@@ -36,11 +39,13 @@ class DirectoryScanner:
             return set(self.thumbnail_manager.get_supported_formats())
         return set()
 
-    def is_supported_file(self, file_path: str) -> bool:
+    def is_supported_file(self, file_path: str, stat_result: Optional[os.stat_result] = None) -> bool:
         """Single-stat check: regular file, not ignored, supported extension, big enough.
 
-        Combines the is-file and min-size checks into one os.stat() call so
-        NAS paths only incur a single network round-trip per candidate.
+        If *stat_result* is provided (e.g. from ``DirEntry.stat()``), no
+        additional ``os.stat`` call is made — saving one NAS round-trip.
+        When the check passes, the stat result is stored in the source cache
+        so downstream task factories don't re-stat.
         """
         filename = os.path.basename(file_path)
         _, ext = os.path.splitext(file_path)
@@ -53,18 +58,19 @@ class DirectoryScanner:
         if ext.lower() not in self._supported_extensions:
             return False
 
-        # Single stat() for both is-regular-file and min-size.
-        # why: intentional double-stat with _passes_pre_checks — scanner and task
-        # factory run in different contexts; the scanner gate prevents model pollution
-        # while the task factory gate handles files submitted outside the scanner path.
-        try:
-            st = os.stat(file_path)
-        except OSError:
+        if stat_result is None:
+            try:
+                stat_result = os.stat(file_path)
+            except OSError:
+                return False
+        if not stat.S_ISREG(stat_result.st_mode):
             return False
-        if not stat.S_ISREG(st.st_mode):
+        if stat_result.st_size < self.min_file_size:
             return False
-        if st.st_size < self.min_file_size:
-            return False
+
+        # Pre-populate the source cache so _passes_pre_checks avoids re-stat.
+        if self.source_cache:
+            self.source_cache.put(file_path, stat_result)
 
         return True
 

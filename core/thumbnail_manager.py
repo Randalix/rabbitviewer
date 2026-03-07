@@ -2,6 +2,7 @@
 import os
 import pathlib
 import hashlib
+import stat as stat_mod
 import time
 import logging
 import fnmatch
@@ -10,6 +11,7 @@ from collections import OrderedDict
 from typing import Optional, Dict, List, Set, Tuple, Any, Callable
 from core.metadata_database import MetadataDatabase
 from core.rendermanager import Priority, RenderManager, RenderTask, TaskState, TaskType
+from core.source_cache import SourceExistsCache
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import shutdown_all as _shutdown_exiftool_processes
 from core import notifications as protocol
@@ -59,6 +61,7 @@ class ThumbnailManager:
         self._volume_cache: Dict[str, Tuple[bool, float]] = {}   # mount_point → (ok, expiry)
         self.cache_size_manager = None  # set by daemon after construction
         self._volume_cache_lock = threading.Lock()
+        self.source_cache = SourceExistsCache(ttl=30.0)
 
         # In-memory LRU cache for fast fullres extractions (below threshold → RAM only).
         self._fullres_mem_cache: OrderedDict[str, bytes] = OrderedDict()
@@ -178,37 +181,39 @@ class ThumbnailManager:
         """
         Performs pre-checks (existence, ignore patterns, file size, format support)
         before queuing a thumbnail generation task.
-        """
-        if not os.path.isfile(image_path):
-            logger.debug(f"Path is not a regular file, skipping: {image_path}")
-            return False
 
+        Uses ``source_cache.stat()`` so files recently stat'd by the directory
+        scanner (or another worker task) don't incur a second NAS round-trip.
+        """
         filename = os.path.basename(image_path)
         for pattern in self.ignore_patterns:
             if fnmatch.fnmatch(filename, pattern):
                 logger.debug(f"File matches ignore pattern, skipping: {image_path}")
                 return False
 
-        try:
-            file_size = os.path.getsize(image_path)
-            if file_size < self.min_file_size:
-                logger.debug(f"File too small, skipping: {image_path} ({file_size} bytes)")
-                return False
-        except OSError as e:
-            logger.warning(f"Could not get size for file {image_path}, skipping: {e}")
-            return False
-
         if not self.is_format_supported(image_path):
             logger.debug(f"Unsupported file format, skipping: {image_path}")
             return False
-        
+
+        st = self.source_cache.stat(image_path)
+        if st is None:
+            logger.debug(f"Cannot stat file, skipping: {image_path}")
+            return False
+
+        if not stat_mod.S_ISREG(st.st_mode):
+            logger.debug(f"Path is not a regular file, skipping: {image_path}")
+            return False
+        if st.st_size < self.min_file_size:
+            logger.debug(f"File too small, skipping: {image_path} ({st.st_size} bytes)")
+            return False
+
         return True
 
     def _generate_thumbnail_task(self, image_path: str):
         """Worker task (Stage A/B): generates the embedded thumbnail only (~1-2s on NAS).
         Sends previews_ready immediately on success. No view image is generated here.
         """
-        if not os.path.exists(image_path):
+        if not self.source_cache.exists(image_path):
             logger.warning(f"File not found during thumbnail processing: '{image_path}'. Queuing JIT database cleanup.")
             self.render_manager.submit_task(
                 f"jit-cleanup::{image_path}",
@@ -296,7 +301,7 @@ class ThumbnailManager:
 
     def _generate_view_image_task_inner(self, image_path: str,
                                          cancel_event: Optional[threading.Event] = None):
-        if not os.path.exists(image_path):
+        if not self.source_cache.exists(image_path):
             logger.warning(f"File not found during view image processing: '{image_path}'. Queuing JIT database cleanup.")
             self.render_manager.submit_task(
                 f"jit-cleanup::{image_path}",
@@ -629,7 +634,7 @@ class ThumbnailManager:
     def _process_view_image_task(self, image_path: str, md5_hash: str,
                                    cancel_event: Optional[threading.Event] = None):
         logger.debug(f"Starting view image task for {image_path}")
-        if not os.path.exists(image_path):
+        if not self.source_cache.exists(image_path):
             logger.warning(f"File not found for view image processing: '{image_path}'. Queuing JIT database cleanup.")
             self.render_manager.submit_task(
                 f"jit-cleanup::{image_path}",
@@ -689,7 +694,7 @@ class ThumbnailManager:
         """Fast metadata scan (orientation, rating, file_size).
         Queues a deferred full exiftool extraction at BACKGROUND_SCAN."""
         logger.debug(f"Starting fast metadata extraction for {image_path}")
-        if not os.path.exists(image_path):
+        if not self.source_cache.exists(image_path):
             logger.warning(f"File not found for metadata extraction: '{image_path}'. Queuing JIT database cleanup.")
             self.render_manager.submit_task(
                 f"jit-cleanup::{image_path}",
@@ -716,7 +721,7 @@ class ThumbnailManager:
             )
 
     def _process_full_metadata_task(self, image_path: str):
-        if not os.path.exists(image_path):
+        if not self.source_cache.exists(image_path):
             return
         if not self._is_volume_accessible(image_path):
             return
@@ -893,10 +898,6 @@ class ThumbnailManager:
         identify the file and inspect its binary structure without a second NAS
         round-trip.  Returns ``None`` on error.
         """
-        if os.path.isdir(file_path):
-            logger.warning(f"Cannot hash a directory: {file_path}. Skipping.")
-            return None
-
         start_time = time.time()
         try:
             with open(file_path, "rb") as f:
@@ -918,13 +919,12 @@ class ThumbnailManager:
     def request_metadata_extraction(self, image_paths: List[str], priority: Priority = Priority.NORMAL):
         logger.info(f"Queueing metadata extraction for {len(image_paths)} images with {priority.name} priority.")
         for image_path in image_paths:
-            if os.path.exists(image_path):
-                self.render_manager.submit_task(
-                    f"meta::{image_path}",
-                    priority,
-                    self._process_metadata_task,
-                    image_path,
-                )
+            self.render_manager.submit_task(
+                f"meta::{image_path}",
+                priority,
+                self._process_metadata_task,
+                image_path,
+            )
 
     def create_tasks_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
         """
