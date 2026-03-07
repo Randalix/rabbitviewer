@@ -409,6 +409,24 @@ class BasePlugin(ABC):
             logging.error("Failed to write embedded tags for %s: %s", file_path, e)
             return False
 
+    def write_orientation(self, file_path: str, orientation: int) -> bool:
+        """Write the EXIF Orientation numeric tag directly into the image file."""
+        try:
+            et = self._get_exiftool()
+            output = et.execute([
+                f"-Orientation#={orientation}", "-n",
+                "-overwrite_original", file_path,
+            ])
+            if self._embedded_write_ok(output):
+                logging.info("Wrote orientation %d to %s.", orientation, file_path)
+                return True
+            logging.error("exiftool reported no update writing orientation to %s: %s",
+                          file_path, output.decode("utf-8", "replace").strip())
+            return False
+        except (RuntimeError, TimeoutError) as e:
+            logging.error("Failed to write orientation for %s: %s", file_path, e)
+            return False
+
     def _apply_orientation(self, img: Image.Image, orientation: int) -> Image.Image:
         """Apply rotation/flip to a PIL Image based on the EXIF Orientation tag value."""
         T = Image.Transpose

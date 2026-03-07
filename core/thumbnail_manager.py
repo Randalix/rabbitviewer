@@ -548,7 +548,7 @@ class ThumbnailManager:
         _, ext = os.path.splitext(image_path)
         if ext.lower() in _NATIVELY_VIEWABLE:
             meta = self.metadata_db.get_metadata(image_path)
-            if meta and meta.get('orientation', 1) == 1:
+            if meta and meta.get('orientation') == 1:
                 return "direct:" + image_path
 
         view_task_id = f"view::{image_path}"
@@ -797,6 +797,37 @@ class ThumbnailManager:
 
         logger.warning(f"No plugin found or available for format {ext} to write tags for {file_path}")
         return False
+
+    def write_orientation_to_file(self, file_path: str, orientation: int) -> bool:
+        if not os.path.exists(file_path):
+            logger.warning(f"File not found, cannot write orientation: {file_path}")
+            return False
+
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if self.watchdog_handler:
+            self.watchdog_handler.ignore_next_modification(file_path)
+
+        plugin = self.plugin_registry.get_plugin_for_format(ext)
+        if plugin and plugin.is_available():
+            return plugin.write_orientation(file_path, orientation)
+
+        logger.warning(f"No plugin found for format {ext} to write orientation for {file_path}")
+        return False
+
+    def invalidate_cached_images(self, file_path: str):
+        """Deletes cached thumbnail, view image, and mem-cache entry for regeneration."""
+        paths = self.metadata_db.get_thumbnail_paths(file_path)
+        for key in ('thumbnail_path', 'view_image_path'):
+            cached = paths.get(key)
+            if cached and os.path.exists(cached):
+                try:
+                    os.remove(cached)
+                    logger.debug("Removed cached %s: %s", key, cached)
+                except OSError as e:
+                    logger.warning("Failed to remove cached %s: %s", cached, e)
+        self._mem_cache_remove(file_path)
+        self.metadata_db.clear_thumbnail_paths(file_path)
 
     def get_cached_thumbnail_path(self, md5_hash: str) -> str:
         return os.path.join(self.thumbnail_cache_dir, f"{md5_hash}.jpg")

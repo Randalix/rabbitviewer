@@ -201,6 +201,7 @@ meta_full::{file_path}   — deferred full exiftool extraction (all EXIF fields,
 view::{file_path}        — speculative fullres pre-cache (has cancel_event)
 exif_rating::{file_path} — EXIF star rating write-back
 write_tags::{file_path}  — XMP:Subject tag write-back
+write_orientation::{file_path} — EXIF Orientation write + thumbnail regeneration
 job_slice::{job_id}::{n} — nth cooperative slice of a SourceJob
 script_task::{counter}   — compound task from script daemon_tasks API
 

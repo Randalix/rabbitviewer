@@ -603,6 +603,22 @@ class MetadataDatabase:
             logging.error(f"Error setting thumbnail paths for {file_path}: {e}", exc_info=True)
             return False
     
+    def clear_thumbnail_paths(self, file_path: str) -> bool:
+        """Set thumbnail_path and view_image_path to NULL so the file is re-generated."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE image_metadata
+                    SET thumbnail_path = NULL, view_image_path = NULL, updated_at = ?
+                    WHERE file_path = ?
+                ''', (time.time(), file_path))
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logging.error(f"Error clearing thumbnail paths for {file_path}: {e}")
+            return False
+
     def get_thumbnail_paths(self, file_path: str) -> Dict[str, str]:
         """
         Gets the thumbnail and view image paths for a file.
@@ -903,6 +919,35 @@ class MetadataDatabase:
                 
         except sqlite3.Error as e:
             logging.error(f"Error setting rating for {file_path} in database: {e}", exc_info=True)
+            return False
+
+    def get_orientation(self, file_path: str) -> int:
+        """Returns the stored EXIF orientation for a file, or 1 if unknown."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT orientation FROM image_metadata WHERE file_path = ?', (file_path,))
+                row = cursor.fetchone()
+                return row[0] if row and row[0] else 1
+        except sqlite3.Error as e:
+            logging.error(f"Error getting orientation for {file_path}: {e}")
+            return 1
+
+    def set_orientation(self, file_path: str, orientation: int) -> bool:
+        """Sets the EXIF orientation for a file in the database."""
+        try:
+            current_time = time.time()
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE image_metadata
+                    SET orientation = ?, updated_at = ?
+                    WHERE file_path = ?
+                ''', (orientation, current_time, file_path))
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logging.error(f"Error setting orientation for {file_path}: {e}")
             return False
 
     def batch_set_ratings(self, file_paths: List[str], rating: int) -> tuple:

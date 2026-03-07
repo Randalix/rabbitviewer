@@ -8,7 +8,6 @@ from core.event_system import event_system, EventType, StatusMessageEventData, S
 
 _overlay_id_counter = itertools.count()
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand
-from core.priority import Priority
 
 class ScriptAPI:
     """API interface provided to scripts for interacting with RabbitViewer."""
@@ -77,27 +76,8 @@ class ScriptAPI:
             self._operation_stats['remove_images_error'] = str(e)
 
     def remove_image_records(self, image_paths: List[str]) -> bool:
-        """Remove image records from database & cache via a background task."""
-        try:
-            core_tm = self.main_window.core_thumbnail_manager
-            if not (core_tm and core_tm.db and core_tm.render_manager):
-                logging.error("Core services (db, render_manager) not available.")
-                return False
-
-            # Submit the database and cache cleanup as a low-priority background task
-            # to ensure it completes properly, even during app shutdown.
-            task_id = f"delete-records-{time.monotonic()}"
-            core_tm.render_manager.submit_task(
-                task_id,
-                Priority.LOW,
-                core_tm.db.remove_records,
-                image_paths
-            )
-            logging.info(f"Submitted background task {task_id} to delete {len(image_paths)} DB records.")
-            return True
-        except Exception as e:
-            logging.error(f"Error submitting background deletion task: {e}", exc_info=True)
-            return False
+        """Remove image records from database & cache via a background daemon task."""
+        return self.daemon_tasks([("remove_records", image_paths)])
 
     def daemon_tasks(self, operations: List[tuple]) -> bool:
         """Submit compound task operations to the daemon for async execution.
@@ -278,6 +258,68 @@ class ScriptAPI:
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message="Failed to set rating for images.", timeout=5000
+            ))
+
+    def invalidate_thumbnails(self, image_paths: List[str], clear_gui: bool = True) -> None:
+        """Evict cached thumbnail state for the given paths.
+
+        When *clear_gui* is True (default), the grid immediately shows
+        placeholders.  When False, the old thumbnail stays visible until
+        a ``previews_ready`` notification delivers the replacement — this
+        avoids a blank/stale flash when the background task (e.g. rotation)
+        generates the correct thumbnail shortly after.
+        """
+        if clear_gui:
+            view = self.main_window.thumbnail_view
+            if view:
+                view.invalidate_thumbnails(image_paths)
+        self.service.invalidate_thumbnail_paths(image_paths)
+
+    def rotate_images(self, image_paths: List[str], degrees: int) -> None:
+        """Rotate images by the given degrees (90, 180, or 270) clockwise.
+
+        Updates EXIF Orientation cumulatively, regenerates cached thumbnails.
+        """
+        if degrees not in (90, 180, 270):
+            logging.error(f"Invalid rotation: {degrees}°. Must be 90, 180, or 270.")
+            return
+
+        if not image_paths:
+            return
+
+        self.invalidate_thumbnails(image_paths, clear_gui=False)
+        success = self.service.rotate_images(image_paths, degrees)
+        if success:
+            logging.info(f"Rotated {len(image_paths)} images by {degrees}°.")
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="script_api",
+                timestamp=time.time(), message=f"Rotated {len(image_paths)} images {degrees}°.", timeout=3000
+            ))
+        else:
+            logging.error("Failed to rotate images.")
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="script_api",
+                timestamp=time.time(), message="Failed to rotate images.", timeout=5000
+            ))
+
+    def reset_rotation(self, image_paths: List[str]) -> None:
+        """Reset images to default orientation (EXIF Orientation = 1)."""
+        if not image_paths:
+            return
+
+        self.invalidate_thumbnails(image_paths, clear_gui=False)
+        success = self.service.reset_rotation(image_paths)
+        if success:
+            logging.info(f"Reset rotation for {len(image_paths)} images.")
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="script_api",
+                timestamp=time.time(), message=f"Reset rotation for {len(image_paths)} images.", timeout=3000
+            ))
+        else:
+            logging.error("Failed to reset rotation.")
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="script_api",
+                timestamp=time.time(), message="Failed to reset rotation.", timeout=5000
             ))
 
     def set_tags_for_images(self, image_paths: List[str], tags: List[str]) -> None:

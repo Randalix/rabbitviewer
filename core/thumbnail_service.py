@@ -244,6 +244,78 @@ class ThumbnailService:
         return success
 
     # ------------------------------------------------------------------
+    #  Rotation
+    # ------------------------------------------------------------------
+
+    # Cumulative rotation: compose current orientation with the requested rotation.
+    _ROTATE_CW_90 = {1: 6, 2: 7, 3: 8, 4: 5, 5: 2, 6: 3, 7: 4, 8: 1}
+    _ROTATE_180 = {1: 3, 2: 4, 3: 1, 4: 2, 5: 7, 6: 8, 7: 5, 8: 6}
+    _ROTATE_CW_270 = {1: 8, 2: 5, 3: 6, 4: 7, 5: 4, 6: 1, 7: 2, 8: 3}
+    _ROTATION_TABLES = {90: _ROTATE_CW_90, 180: _ROTATE_180, 270: _ROTATE_CW_270}
+
+    def rotate_images(self, image_paths: List[str], degrees: int) -> bool:
+        """Rotate images by updating EXIF Orientation (cumulative)."""
+        table = self._ROTATION_TABLES.get(degrees)
+        if table is None:
+            return False
+
+        for path in image_paths:
+            current = self.db.get_orientation(path)
+            new_orientation = table.get(current, table.get(1, 1))
+            self.db.set_orientation(path, new_orientation)
+            self.rm.submit_task(
+                f"write_orientation::{path}",
+                Priority.NORMAL,
+                self._rotate_and_invalidate,
+                path, new_orientation,
+                task_type=TaskType.SIMPLE,
+            )
+        return True
+
+    def _rotate_and_invalidate(self, path: str, orientation: int):
+        """Write orientation to file and regenerate cached images.
+
+        The GUI thread pre-invalidated caches so the grid shows placeholders
+        immediately.  However, the heatmap may re-generate stale thumbnails
+        from the pre-rotation file during the exiftool write window.  We
+        re-invalidate here (after the write) to clear any such stale data
+        before requesting fresh thumbnail generation.
+        """
+        self.tm.write_orientation_to_file(path, orientation)
+        # Clear any stale thumbnails the heatmap regenerated during the write.
+        self.tm.invalidate_cached_images(path)
+        with self.rm.graph_lock:
+            self.rm.task_graph.pop(path, None)
+            self.rm.task_graph.pop(f"meta::{path}", None)
+            self.rm.task_graph.pop(f"view::{path}", None)
+        self.tm.request_thumbnail(path, Priority.NORMAL)
+
+    def invalidate_thumbnail_paths(self, image_paths: List[str]):
+        """Clear DB thumbnail/view paths and delete cached files synchronously.
+
+        After this call, ``is_thumbnail_valid()`` returns False for all given
+        paths, preventing heatmap re-requests from reloading stale cached
+        files.  Does NOT evict the task graph — completed tasks stay so that
+        heatmap ``request_thumbnail`` calls are no-ops (the background task
+        handles graph eviction + re-request after the file write completes).
+        """
+        for path in image_paths:
+            self.tm.invalidate_cached_images(path)
+
+    def reset_rotation(self, image_paths: List[str]) -> bool:
+        """Reset images to default orientation (Orientation = 1)."""
+        for path in image_paths:
+            self.db.set_orientation(path, 1)
+            self.rm.submit_task(
+                f"write_orientation::{path}",
+                Priority.NORMAL,
+                self._rotate_and_invalidate,
+                path, 1,
+                task_type=TaskType.SIMPLE,
+            )
+        return True
+
+    # ------------------------------------------------------------------
     #  Tags
     # ------------------------------------------------------------------
 

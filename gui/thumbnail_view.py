@@ -1098,6 +1098,29 @@ class ThumbnailViewWidget(QFrame):
             self._virtual_grid.scroll_to_top(visible_idx)
             self._sync_virtual_viewport()
 
+    def invalidate_thumbnails(self, image_paths: List[str]) -> None:
+        """Evict all cached thumbnail state for the given paths so fresh
+        thumbnails are accepted when the next ``previews_ready`` arrives.
+
+        Clears: pixmap cache, thumb-path cache, image_states.loaded,
+        heatmap delta cache, and resets any materialized labels to placeholder.
+        """
+        for path in image_paths:
+            idx = self._path_to_idx.get(path)
+            if idx is None:
+                continue
+            state = self.image_states.get(idx)
+            if state:
+                state.loaded = False
+                state.prioritized = False
+            self._pixmap_cache.pop(idx, None)
+            self._thumb_path_cache.pop(idx, None)
+            self._last_thumb_pairs.pop(path, None)
+            label = self.labels.get(idx)
+            if label:
+                label.clear()
+                label.loaded = False
+
     def ensure_visible(self, original_idx: int, center: bool = False):
         """Scroll so the thumbnail at *original_idx* is in the viewport, then
         materialize widgets so it actually appears.
@@ -1264,9 +1287,13 @@ class ThumbnailViewWidget(QFrame):
                 continue
             state = self.image_states.get(orig_idx)
             if state and state.loaded:
-                continue
+                # Already loaded — but accept if the path changed (rotation/edit
+                # regenerated the thumbnail at a new cache path).
+                if self._thumb_path_cache.get(orig_idx) == thumbnail_path:
+                    continue
             image = QImage(thumbnail_path)
             if not image.isNull():
+                self._thumb_path_cache[orig_idx] = thumbnail_path
                 self._thumbnail_generated_signal.emit(image_path, image, None)
             else:
                 logging.warning("Failed to load thumbnail: %s", thumbnail_path)
