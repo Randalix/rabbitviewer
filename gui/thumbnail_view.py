@@ -266,6 +266,17 @@ class ThumbnailViewWidget(QFrame):
         self._scroll_idle_timer.setInterval(200)
         self._scroll_idle_timer.timeout.connect(self._on_scroll_idle)
 
+        # Coalesce rapid scan batches into fewer layout updates.
+        # singleShot: fires 250ms after first batch in a burst, NOT restarted
+        # per batch, so flushes happen every ~250ms during continuous scanning.
+        self._scan_coalesce_timer = QTimer(self)
+        self._scan_coalesce_timer.setSingleShot(True)
+        self._scan_coalesce_timer.setInterval(250)
+        self._scan_coalesce_timer.timeout.connect(self._flush_scan_layout)
+        self._scan_batch_pending = False
+        self._scan_first_batch_flushed = False
+        self._scan_active = False  # True from load_directory to scan_complete
+
         self._viewport_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewport")
 
         event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
@@ -558,6 +569,11 @@ class ThumbnailViewWidget(QFrame):
         self._startup_inline_thumb_count = 0
         logging.info("[startup] load_directory called for %s", directory_path)
         self.clear_layout()
+        # Set scan state AFTER clear_layout() which resets _scan_active to False
+        self._scan_batch_pending = False
+        self._scan_first_batch_flushed = False
+        self._scan_active = True
+        self._scan_coalesce_timer.stop()
         event_system.publish(StatusMessageEventData(
             event_type=EventType.STATUS_MESSAGE,
             source="thumbnail_view",
@@ -762,12 +778,30 @@ class ThumbnailViewWidget(QFrame):
             "[virtual] scan_complete: all_files=%d, labels=%d, current_files(in layout)=%d",
             len(self.all_files), len(self.labels), len(self.current_files),
         )
-        # Stop any pending batched update, as this is the final one.
         self._filter_update_timer.stop()
-        # Mark loading complete before reapply_filters() so the daemon is queried
-        # with the current filter rather than showing all files unconditionally.
+        self._scan_coalesce_timer.stop()
+        self._scan_active = False
         self._is_loading = False
-        self.reapply_filters()
+        self._scan_batch_pending = False
+
+        if not self._hidden_indices and self._virtual_grid:
+            # No filter active: data structures are fully populated by the
+            # append-only fast path.  Do one final sorted reorder (no-op if
+            # all_files is already sorted) and snap the container height.
+            top_file = self._get_first_visible_file()
+            logging.info(
+                "[virtual] scan_complete: final sort, top_file=%s, all_files=%d",
+                os.path.basename(top_file) if top_file else None, len(self.all_files),
+            )
+            self._virtual_grid.snap_height_to_exact()
+            self.reorder_files(sorted(self.all_files))
+            if top_file:
+                self.scroll_to_top(top_file)
+                self._sync_virtual_viewport()
+            QTimer.singleShot(100, self._prioritize_visible_thumbnails)
+        else:
+            # Filter active: full rebuild unavoidable.
+            self.reapply_filters()
 
     def _add_image_batch(self, files: List[str]):
         """Adds a batch of new file paths (data-only, no widget creation).
@@ -803,15 +837,10 @@ class ThumbnailViewWidget(QFrame):
             len(new_files), len(self.all_files),
         )
         if not self._hidden_indices:
-            if not self._is_loading:
-                # Post-scan arrival (watchdog, ComfyUI): insert in sorted
-                # position so new files appear next to related originals.
-                self.reorder_files(sorted(self.all_files))
-            else:
-                # Append-only fast path during scan: batches arrive sorted,
-                # just extend mappings.  Avoids a full clear+rebuild which
-                # would destroy the label under the cursor and lose the
-                # CSS :hover state (causing the hover indicator to jump).
+            if self._scan_active:
+                # Active scan (cached or uncached): append new files to end.
+                # Existing items never shift — only the scrollbar range grows.
+                # Layout update is coalesced via timer to avoid per-batch jitter.
                 for f in new_files:
                     vis_idx = len(self.current_files)
                     orig_idx = self._path_to_idx[f]
@@ -819,11 +848,29 @@ class ThumbnailViewWidget(QFrame):
                     self._visible_to_original_mapping[vis_idx] = orig_idx
                     self._original_to_visible_mapping[orig_idx] = vis_idx
                     self._visible_original_indices.append(orig_idx)
-                if self._virtual_grid:
-                    self._virtual_grid.set_total_items(len(self.current_files))
-                    self._virtual_grid.update_layout()
-                    self._sync_virtual_viewport()
-                self._last_layout_file_count = len(self.all_files)
+                self._scan_batch_pending = True
+                logging.debug(
+                    "[virtual] _scan_active append: +%d files (current_files=%d, coalesce_active=%s)",
+                    len(new_files), len(self.current_files), self._scan_coalesce_timer.isActive(),
+                )
+                if not self._scan_first_batch_flushed:
+                    # First batch: flush immediately so the initial layout
+                    # appears and heatmap seeding can fire.
+                    self._scan_coalesce_timer.stop()
+                    self._flush_scan_layout()
+                elif not self._scan_coalesce_timer.isActive():
+                    # Don't restart if already running — let it fire on
+                    # schedule so flushes happen every ~250ms during
+                    # continuous scanning rather than being pushed out
+                    # indefinitely.
+                    self._scan_coalesce_timer.start()
+            else:
+                # Post-scan arrival (watchdog, ComfyUI): insert in sorted
+                # position so new files appear next to related originals.
+                if len(new_files) > 50:
+                    self.reorder_files(sorted(self.all_files))
+                else:
+                    self._insert_sorted_incremental(new_files)
         else:
             # Filter is active — full rebuild needed to check which new
             # files pass the filter.
@@ -831,6 +878,67 @@ class ThumbnailViewWidget(QFrame):
                 self._apply_filter_results(set(self.all_files))
             else:
                 self._filter_update_timer.start()
+
+    def _flush_scan_layout(self):
+        """Coalesced layout update during scan."""
+        if not self._scan_batch_pending or not self._virtual_grid:
+            return
+        self._scan_batch_pending = False
+        self._scan_first_batch_flushed = True
+        logging.info(
+            "[virtual] _flush_scan_layout: current_files=%d, all_files=%d",
+            len(self.current_files), len(self.all_files),
+        )
+        self._virtual_grid.set_total_items_chunked(len(self.current_files))
+        self._virtual_grid.update_layout()
+        self._sync_virtual_viewport()
+        self._last_layout_file_count = len(self.all_files)
+
+    def _insert_sorted_incremental(self, new_files: list):
+        """Insert new files at sorted positions without full rebuild.
+
+        Precondition: new_files already appended to all_files and indexed in
+        _path_to_idx.  current_files is maintained sorted.
+        """
+        import bisect
+
+        for f in sorted(new_files):
+            orig_idx = self._path_to_idx[f]
+            insert_pos = bisect.bisect_left(self.current_files, f)
+            self.current_files.insert(insert_pos, f)
+            self._visible_original_indices.insert(insert_pos, orig_idx)
+
+        # Rebuild visible<->original mappings (O(n) but no label recycling)
+        self._visible_to_original_mapping.clear()
+        self._original_to_visible_mapping.clear()
+        for vis_idx, orig_idx in enumerate(self._visible_original_indices):
+            self._visible_to_original_mapping[vis_idx] = orig_idx
+            self._original_to_visible_mapping[orig_idx] = vis_idx
+
+        if self._virtual_grid:
+            self._virtual_grid.set_total_items(len(self.current_files))
+            # Re-index materialized labels whose vis_idx shifted
+            old_mat = dict(self._virtual_grid._mat_labels)
+            new_mat = {}
+            for old_vis_idx, label in old_mat.items():
+                new_vis_idx = self._original_to_visible_mapping.get(label._original_idx)
+                if new_vis_idx is not None:
+                    new_mat[new_vis_idx] = label
+                    label.move(
+                        self._virtual_grid._pos_x(new_vis_idx),
+                        self._virtual_grid._pos_y(new_vis_idx),
+                    )
+            self._virtual_grid._mat_labels = new_mat
+            if new_mat:
+                self._virtual_grid._mat_start = min(new_mat)
+                self._virtual_grid._mat_end = max(new_mat) + 1
+            else:
+                self._virtual_grid._mat_start = 0
+                self._virtual_grid._mat_end = 0
+            self._sync_virtual_viewport()
+
+        self._last_layout_file_count = len(self.all_files)
+        QTimer.singleShot(100, self._prioritize_visible_thumbnails)
 
     def add_images(self, image_paths: List[str]) -> None:
         normalized = [os.path.abspath(p) for p in image_paths]
@@ -1065,6 +1173,10 @@ class ThumbnailViewWidget(QFrame):
             self._preview_tick_timer.stop()
         if hasattr(self, '_pending_previews'):
             self._pending_previews.clear()
+        if hasattr(self, '_scan_coalesce_timer'):
+            self._scan_coalesce_timer.stop()
+            self._scan_batch_pending = False
+            self._scan_active = False
         # Recycle all materialized labels via VirtualGridManager
         if hasattr(self, '_virtual_grid') and self._virtual_grid:
             self._virtual_grid.clear(self._recycle_label)
@@ -1510,6 +1622,16 @@ class ThumbnailViewWidget(QFrame):
                 self._materialize_label,
                 self._recycle_virtual_label,
             )
+
+    def _get_first_visible_file(self) -> Optional[str]:
+        """Return the file path at the top-left of the visible viewport."""
+        if not self._virtual_grid or not self.current_files:
+            return None
+        first_row, _ = self._virtual_grid.get_visible_rows()
+        first_vis_idx = first_row * self._virtual_grid.columns
+        if 0 <= first_vis_idx < len(self.current_files):
+            return self.current_files[first_vis_idx]
+        return None
 
     def _materialize_label(self, visible_idx: int) -> ThumbnailLabel:
         original_idx = self._visible_to_original_mapping[visible_idx]

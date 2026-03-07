@@ -70,6 +70,7 @@ def _make_manager(thumb_size=128, spacing=5, viewport_width=800, viewport_height
     mgr._spacing = spacing
     mgr._columns = 1
     mgr._total_items = 0
+    mgr._height_rows_override = 0
     mgr._mat_start = 0
     mgr._mat_end = 0
     mgr._mat_labels = {}
@@ -292,3 +293,78 @@ class TestSyncViewport:
         mgr.clear(recycle_label)
         assert len(recycled) == mat_count
         assert len(mgr._mat_labels) == 0
+
+
+class TestChunkedHeight:
+    """Tests for set_total_items_chunked and snap_height_to_exact."""
+
+    def test_chunk_rounds_up_to_power_of_2(self):
+        mgr = _make_manager(thumb_size=128, spacing=5)
+        mgr._columns = 6
+        # 12 items / 6 cols = 2 rows → chunk = 8
+        mgr.set_total_items_chunked(12)
+        cell = 128 + 5
+        expected_height = 5 + 8 * cell  # 8 chunked rows
+        mgr._container.setFixedHeight.assert_called_with(expected_height)
+        assert mgr._total_items == 12
+
+    def test_chunk_no_change_skips_height_update(self):
+        mgr = _make_manager(thumb_size=128, spacing=5)
+        mgr._columns = 6
+        # 12 items → 2 rows → chunk = 8
+        mgr.set_total_items_chunked(12)
+        mgr._container.setFixedHeight.reset_mock()
+        # 30 items → 5 rows → still chunk = 8
+        mgr.set_total_items_chunked(30)
+        mgr._container.setFixedHeight.assert_not_called()
+        assert mgr._total_items == 30
+
+    def test_chunk_grows_at_boundary(self):
+        mgr = _make_manager(thumb_size=128, spacing=5)
+        mgr._columns = 6
+        mgr.set_total_items_chunked(12)  # 2 rows → chunk 8
+        mgr._container.setFixedHeight.reset_mock()
+        # 54 items → 9 rows → chunk = 16
+        mgr.set_total_items_chunked(54)
+        cell = 128 + 5
+        mgr._container.setFixedHeight.assert_called_with(5 + 16 * cell)
+
+    def test_snap_height_to_exact(self):
+        mgr = _make_manager(thumb_size=128, spacing=5)
+        mgr._columns = 6
+        mgr.set_total_items_chunked(12)  # 2 rows, chunked to 8
+        mgr._container.setFixedHeight.reset_mock()
+        mgr.snap_height_to_exact()
+        cell = 128 + 5
+        mgr._container.setFixedHeight.assert_called_with(5 + 2 * cell)
+
+    def test_set_total_items_clears_override(self):
+        mgr = _make_manager(thumb_size=128, spacing=5)
+        mgr._columns = 6
+        mgr.set_total_items_chunked(12)  # sets override to 8
+        mgr.set_total_items(12)  # should use exact height
+        cell = 128 + 5
+        mgr._container.setFixedHeight.assert_called_with(5 + 2 * cell)
+        assert mgr._height_rows_override == 0
+
+    def test_chunked_zero_items(self):
+        mgr = _make_manager(thumb_size=128, spacing=5)
+        mgr._columns = 6
+        mgr.set_total_items_chunked(0)
+        mgr._container.setFixedHeight.assert_called_with(0)
+        assert mgr._height_rows_override == 0
+
+    def test_sync_viewport_uses_real_total_not_chunk(self):
+        mgr = _make_manager(thumb_size=128, spacing=5, viewport_height=2000, scroll_y=0)
+        mgr._columns = 6
+        mgr.set_total_items_chunked(12)  # 12 real items, chunk = 8 rows (48 slots)
+
+        created = {}
+        def get_label(vis_idx):
+            label = MagicMock()
+            created[vis_idx] = label
+            return label
+
+        mgr.sync_viewport(get_label, lambda l: None)
+        # Should only materialize up to 12 items, not 48
+        assert max(created.keys()) < 12

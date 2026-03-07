@@ -168,6 +168,12 @@ def _make_view(all_files=None, is_loading=False):
     view._hovered_label = None
     view.thumbnailLeft = MagicMock()
     view._benchmark_timer = MagicMock()
+    view._scan_coalesce_timer = MagicMock()
+    view._scan_batch_pending = False
+    view._scan_first_batch_flushed = False
+    view._scan_active = is_loading  # scan is active when loading
+    view._sync_virtual_viewport = MagicMock()
+    view._recycle_label = MagicMock()
 
     return view
 
@@ -200,7 +206,8 @@ class TestAppendFastPath:
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
 
-        view._virtual_grid.set_total_items.assert_called_with(2)
+        # First batch flushes immediately via _flush_scan_layout
+        view._virtual_grid.set_total_items_chunked.assert_called_with(2)
         view._virtual_grid.update_layout.assert_called()
 
     def test_fast_path_does_not_clear_labels(self):
@@ -253,7 +260,8 @@ class TestAppendFastPath:
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/a.jpg", "/img/b.jpg"])
 
-        view._virtual_grid.set_total_items.assert_called_with(2)
+        # First batch flushes immediately via _flush_scan_layout
+        view._virtual_grid.set_total_items_chunked.assert_called_with(2)
         view._filter_update_timer.start.assert_not_called()
 
 

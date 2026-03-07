@@ -37,6 +37,7 @@ class VirtualGridManager(QObject):
         self._spacing = spacing
         self._columns = 1
         self._total_items = 0
+        self._height_rows_override: int = 0  # 0 = exact; >0 = use this row count for container height
 
         # Materialized window: visible_idx in [_mat_start, _mat_end)
         self._mat_start = 0
@@ -91,6 +92,31 @@ class VirtualGridManager(QObject):
 
     def set_total_items(self, count: int) -> None:
         self._total_items = count
+        self._height_rows_override = 0
+        self._update_container_height()
+
+    def set_total_items_chunked(self, count: int) -> None:
+        """Set logical item count; grow container height only at chunk boundaries.
+
+        Height uses a power-of-2 row count so the scrollbar thumb stays stable
+        between milestones during incremental scan loading.
+        """
+        self._total_items = count
+        real_rows = self._total_rows
+        if real_rows <= 0:
+            self._height_rows_override = 0
+            self._update_container_height()
+            return
+        chunk = 8
+        while chunk < real_rows:
+            chunk <<= 1
+        if chunk != self._height_rows_override:
+            self._height_rows_override = chunk
+            self._update_container_height()
+
+    def snap_height_to_exact(self) -> None:
+        """Clear chunked override so container height matches the real row count."""
+        self._height_rows_override = 0
         self._update_container_height()
 
     def update_layout(self) -> None:
@@ -292,5 +318,6 @@ class VirtualGridManager(QObject):
         return w
 
     def _update_container_height(self) -> None:
-        h = self._spacing + self._total_rows * self._cell if self._total_rows > 0 else 0
+        rows = self._height_rows_override if self._height_rows_override > 0 else self._total_rows
+        h = self._spacing + rows * self._cell if rows > 0 else 0
         self._container.setFixedHeight(max(0, h))
