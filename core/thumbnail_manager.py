@@ -975,12 +975,13 @@ class ThumbnailManager:
     def create_view_image_task_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
         """
         Task Factory for Stage C: creates a view image generation task for a single file.
-        Returns an empty list if the view image already exists on disk or the file is
-        not a supported format (so the Stage C SourceJob silently skips those files).
+        Returns an empty list if the view image already exists (on disk or in
+        memory cache) or the file is not a supported format.
         """
         if not self._passes_pre_checks(file_path):
             return []
 
+        # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
         if self._mem_cache_get(file_path) is not None:
             return []
 
@@ -1021,6 +1022,7 @@ class ThumbnailManager:
                 args=(file_path,),
             ))
 
+        # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
         if self._mem_cache_get(file_path) is None:
             paths = self.metadata_db.get_thumbnail_paths(file_path)
             existing_view = paths.get('view_image_path') if paths else None
@@ -1074,6 +1076,7 @@ class ThumbnailManager:
             ))
 
         # View-image at BACKGROUND_SCAN — runs only after thumbnail queue drains.
+        # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
         if self._mem_cache_get(file_path) is None:
             paths = self.metadata_db.get_thumbnail_paths(file_path)
             existing_view = paths.get('view_image_path') if paths else None
