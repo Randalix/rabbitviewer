@@ -38,7 +38,7 @@ class VideoPlugin(BasePlugin):
                           prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
         """Extract a frame at ~10% of the video duration and save as JPEG thumbnail."""
         output_path = self.get_thumbnail_path(md5_hash)
-        if os.path.exists(output_path):
+        if os.path.exists(output_path):  # disk-io: cache file check
             return output_path
 
         duration = self._get_duration(image_path)
@@ -58,7 +58,7 @@ class VideoPlugin(BasePlugin):
                 ],
                 capture_output=True, check=True, timeout=30,
             )
-            return output_path if os.path.exists(output_path) else None
+            return output_path if os.path.exists(output_path) else None  # disk-io: ffmpeg output check
         except subprocess.SubprocessError as e:
             logger.error("ffmpeg thumbnail failed for %s: %s", image_path, e)
             return None
@@ -66,7 +66,7 @@ class VideoPlugin(BasePlugin):
     def process_view_image(self, image_path: str, md5_hash: str) -> Optional[str]:
         """Return a poster frame for the brief moment before mpv starts rendering."""
         output_path = self.get_view_image_path(md5_hash)
-        if os.path.exists(output_path):
+        if os.path.exists(output_path):  # disk-io: cache file check
             return output_path
 
         duration = self._get_duration(image_path)
@@ -84,7 +84,7 @@ class VideoPlugin(BasePlugin):
                 ],
                 capture_output=True, check=True, timeout=30,
             )
-            return output_path if os.path.exists(output_path) else None
+            return output_path if os.path.exists(output_path) else None  # disk-io: ffmpeg output check
         except subprocess.SubprocessError as e:
             logger.error("ffmpeg view image failed for %s: %s", image_path, e)
             return None

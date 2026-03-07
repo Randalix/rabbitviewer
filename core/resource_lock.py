@@ -26,7 +26,7 @@ def acquire_gui_lock(lock_dir: str = _DEFAULT_LOCK_DIR):
     to remain held). Returns None if another GUI already holds the lock.
     """
     path = _lock_path(lock_dir)
-    fd = open(path, "a+")
+    fd = open(path, "a+")  # disk-io: lock file
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fd.seek(0)
@@ -56,10 +56,10 @@ def release_gui_lock(fd) -> None:
 def is_gui_active(lock_dir: str = _DEFAULT_LOCK_DIR) -> bool:
     """Check whether a GUI process currently holds the lock (non-blocking)."""
     path = _lock_path(lock_dir)
-    if not os.path.exists(path):
+    if not os.path.exists(path):  # disk-io: lock check
         return False
     try:
-        fd = open(path, "a+")
+        fd = open(path, "a+")  # disk-io: lock file
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         # We got the lock — no GUI is active. Release immediately.
         fd.close()

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 def resolve_sidecars(image_path: str) -> List[str]:
     """Return existing sidecar paths for *image_path*."""
     xmp = xmp_sidecar_path(image_path)
-    if os.path.exists(xmp):
+    if os.path.exists(xmp):  # disk-io: sidecar resolution
         return [xmp]
     return []
 

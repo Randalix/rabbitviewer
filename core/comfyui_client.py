@@ -113,12 +113,12 @@ class ComfyUIClient:
         Falls back to the raw file bytes for formats PIL cannot open (RAW, etc.).
         """
         try:
-            img = Image.open(image_path)
+            img = Image.open(image_path)  # disk-io: image upload
         except (OSError, Image.UnidentifiedImageError):
             # RAW or unsupported format — upload as-is.
             logger.debug("PIL cannot open %s, uploading raw bytes", image_path)
             p = Path(image_path)
-            return p.read_bytes(), p.name
+            return p.read_bytes(), p.name  # disk-io: raw file upload
 
         srgb_profile = ImageCms.createProfile("sRGB")
         try:

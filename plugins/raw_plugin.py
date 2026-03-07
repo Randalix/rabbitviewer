@@ -50,7 +50,7 @@ class RawPlugin(BasePlugin):
     def _get_orientation(self, image_path: str) -> int:
         """Extract EXIF Orientation via a fast binary scan of the file header."""
         try:
-            with open(image_path, "rb") as f:
+            with open(image_path, "rb") as f:  # disk-io: orientation header read
                 buf = f.read(256 * 1024)
             return self._scan_exif_orientation(buf)
         except (IOError, struct.error) as e:
@@ -120,7 +120,7 @@ class RawPlugin(BasePlugin):
     def process_thumbnail(self, image_path: str, md5_hash: str,
                           prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
         thumbnail_path = self.get_thumbnail_path(md5_hash)
-        if os.path.exists(thumbnail_path):
+        if os.path.exists(thumbnail_path):  # disk-io: cache file check
             return thumbnail_path
         try:
             orientation = (self._scan_exif_orientation(prefetch_buffer)
@@ -134,10 +134,10 @@ class RawPlugin(BasePlugin):
             # Fall back to generating from the full preview image.
             logger.debug("Generating thumbnail from preview for %s", image_path)
             view_path = self.process_view_image(image_path, md5_hash)
-            if not view_path or not os.path.exists(view_path):
+            if not view_path or not os.path.exists(view_path):  # disk-io: cache file check
                 logger.error("Failed to obtain view image for thumbnail fallback: %s", image_path)
                 return None
-            with Image.open(view_path) as img:
+            with Image.open(view_path) as img:  # disk-io: thumbnail from view image
                 img.thumbnail((self.thumbnail_size, self.thumbnail_size), Image.Resampling.LANCZOS)
                 os.makedirs(os.path.dirname(thumbnail_path), exist_ok=True)
                 img.save(thumbnail_path, "JPEG", quality=85)
@@ -148,7 +148,7 @@ class RawPlugin(BasePlugin):
 
     def process_view_image(self, image_path: str, md5_hash: str) -> Optional[str]:
         view_path = self.get_view_image_path(md5_hash)
-        if os.path.exists(view_path):
+        if os.path.exists(view_path):  # disk-io: cache file check
             return view_path
         try:
             orientation = self._get_orientation(image_path)
@@ -162,4 +162,3 @@ class RawPlugin(BasePlugin):
         except (OSError, ValueError) as e:
             logger.error("Unexpected error in process_view_image for %s: %s", image_path, e, exc_info=True)
             return None
-

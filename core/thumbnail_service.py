@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 
 from core.directory_scanner import DirectoryScanner, ReconcileContext
 from core.notifications import Notification, FilesRemovedData, ImageEntryModel
-from core.rendermanager import Priority, TaskType, SourceJob
+from core.rendermanager import Priority, TaskType, TaskState, SourceJob
 
 logger = logging.getLogger(__name__)
 
@@ -178,9 +178,9 @@ class ThumbnailService:
             if cached_paths:
                 thumbnail_path = cached_paths.get('thumbnail_path')
                 view_image_path = cached_paths.get('view_image_path')
-                if view_image_path and os.path.exists(view_image_path):
+                if view_image_path and os.path.exists(view_image_path):  # disk-io: preview status
                     view_image_ready = True
-                if thumbnail_path and os.path.exists(thumbnail_path):
+                if thumbnail_path and os.path.exists(thumbnail_path):  # disk-io: preview status
                     is_thumbnail_ready = True
 
             statuses[path] = {
@@ -263,8 +263,15 @@ class ThumbnailService:
             current = self.db.get_orientation(path)
             new_orientation = table.get(current, table.get(1, 1))
             self.db.set_orientation(path, new_orientation)
+            # Clear any completed write_orientation task so re-submission
+            # is not silently ignored by the RenderManager.
+            task_id = f"write_orientation::{path}"
+            with self.rm.graph_lock:
+                prev = self.rm.task_graph.get(task_id)
+                if prev and prev.state in (TaskState.COMPLETED, TaskState.FAILED):
+                    del self.rm.task_graph[task_id]
             self.rm.submit_task(
-                f"write_orientation::{path}",
+                task_id,
                 Priority.NORMAL,
                 self._rotate_and_invalidate,
                 path, new_orientation,
@@ -285,6 +292,7 @@ class ThumbnailService:
         # Clear any stale thumbnails the heatmap regenerated during the write.
         self.tm.invalidate_cached_images(path)
         with self.rm.graph_lock:
+            self.rm.task_graph.pop(f"write_orientation::{path}", None)
             self.rm.task_graph.pop(path, None)
             self.rm.task_graph.pop(f"meta::{path}", None)
             self.rm.task_graph.pop(f"view::{path}", None)
@@ -301,19 +309,6 @@ class ThumbnailService:
         """
         for path in image_paths:
             self.tm.invalidate_cached_images(path)
-
-    def reset_rotation(self, image_paths: List[str]) -> bool:
-        """Reset images to default orientation (Orientation = 1)."""
-        for path in image_paths:
-            self.db.set_orientation(path, 1)
-            self.rm.submit_task(
-                f"write_orientation::{path}",
-                Priority.NORMAL,
-                self._rotate_and_invalidate,
-                path, 1,
-                task_type=TaskType.SIMPLE,
-            )
-        return True
 
     # ------------------------------------------------------------------
     #  Tags

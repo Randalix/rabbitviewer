@@ -23,7 +23,7 @@ def pid_file_path(config_manager: ConfigManager | None = None) -> str:
 
 def flock_is_held(pid_path: str) -> bool:
     try:
-        with open(pid_path, "r") as fd:
+        with open(pid_path, "r") as fd:  # disk-io: PID file read
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(fd, fcntl.LOCK_UN)
             return False
@@ -37,7 +37,7 @@ def flock_is_held(pid_path: str) -> bool:
 
 def kill_by_pid_file(pid_path: str, sig: int = signal.SIGTERM) -> bool:
     try:
-        with open(pid_path) as f:
+        with open(pid_path) as f:  # disk-io: PID file read
             pid = int(f.read().strip())
     except (OSError, ValueError):
         return False

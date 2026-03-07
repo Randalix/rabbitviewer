@@ -18,14 +18,14 @@ class ScriptManager:
         self.main_window = main_window
         self.scripts: Dict[str, Script] = {}
         self.api = ScriptAPI(main_window)
-        
+
     def load_scripts(self, scripts_dir: str) -> None:
         """Scripts must have a 'run_script' function."""
-        if not os.path.exists(scripts_dir):
+        if not os.path.exists(scripts_dir):  # disk-io: scripts directory check
             logger.warning(f"Scripts directory not found: {scripts_dir}")
             return
 
-        for filename in os.listdir(scripts_dir):
+        for filename in os.listdir(scripts_dir):  # disk-io: script discovery
             if filename.endswith(".py") and filename not in ("__init__.py", "script_manager.py", "script_api.py"):
                 script_name = filename[:-3]
                 script_path = os.path.join(scripts_dir, filename)

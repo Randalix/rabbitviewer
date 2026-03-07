@@ -15,7 +15,7 @@ def run_script(api):
             return float(ts)
         # why: fallback to stat only when daemon has no cached timestamp
         try:
-            return os.path.getmtime(p)
+            return os.path.getmtime(p)  # disk-io: stat fallback for sort
         except OSError:
             return 0.0
 

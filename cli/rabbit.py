@@ -32,7 +32,7 @@ def _print_usage(commands: dict[str, Path]) -> None:
         # Grab the module docstring's first line as a description.
         desc = ""
         try:
-            src = path.read_text()
+            src = path.read_text()  # disk-io: script source for help
             mod = compile(src, str(path), "exec")
             if isinstance(mod.co_consts[0], str):
                 desc = mod.co_consts[0].strip().split("\n")[0]
@@ -50,7 +50,7 @@ def _extract_flags(path: Path) -> list[str]:
     """
     import ast, re
     try:
-        src = path.read_text()
+        src = path.read_text()  # disk-io: completions extraction
     except OSError:
         return []
     # Look for a module-level __completions__ list.

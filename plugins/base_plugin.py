@@ -27,18 +27,18 @@ def find_image_for_sidecar(xmp_path: str, supported_extensions: set) -> Optional
         return None
     candidate = xmp_path[:-4]  # strip ".xmp"
     _, ext = os.path.splitext(candidate)
-    if ext.lower() in supported_extensions and os.path.exists(candidate):
+    if ext.lower() in supported_extensions and os.path.exists(candidate):  # disk-io: XMP parent check
         return candidate
     return None
 
 
 class PluginRegistry:
     """Central registry for all image format plugins."""
-    
+
     def __init__(self):
         self.plugins: Dict[str, 'BasePlugin'] = {}
         self.format_map: Dict[str, 'BasePlugin'] = {}
-        
+
     def register_plugin(self, plugin: 'BasePlugin'):
         """Register a plugin and its supported formats."""
         plugin_name = plugin.__class__.__name__
@@ -53,23 +53,23 @@ class PluginRegistry:
             return
 
         self.plugins[plugin_name] = plugin
-        
+
         formats = plugin.get_supported_formats()
         for ext in formats:
             if ext in self.format_map:
                 logger.warning(f"Format {ext} already registered by {self.format_map[ext].__class__.__name__}, overriding with {plugin_name}")
             self.format_map[ext] = plugin
             logger.debug(f"Registered format {ext} with plugin {plugin_name}")
-        
+
         logger.info(f"Plugin {plugin_name} registered with formats: {', '.join(formats)}")
-    
+
     def get_plugin_for_format(self, file_extension: str) -> Optional['BasePlugin']:
         """Get the plugin that handles a specific file format."""
         # Ensure the extension starts with a dot and is lowercase
         if not file_extension.startswith('.'):
             file_extension = '.' + file_extension
         return self.format_map.get(file_extension.lower())
-    
+
     def get_supported_formats(self) -> Set[str]:
         """Get all supported file formats across all plugins."""
         return set(self.format_map.keys())
@@ -83,7 +83,7 @@ class PluginRegistry:
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
 
-        for filename in os.listdir(plugin_dir):
+        for filename in os.listdir(plugin_dir):  # disk-io: plugin discovery
             if filename.endswith('_plugin.py') and filename != 'base_plugin.py':
                 module_name = filename[:-3] # Remove .py
                 try:
@@ -100,7 +100,7 @@ class PluginRegistry:
                     module = importlib.util.module_from_spec(spec)
                     sys.modules[full_module_name] = module
                     spec.loader.exec_module(module)
-                    
+
                     # Iterate through the module's attributes to find BasePlugin subclasses
                     for attribute_name in dir(module):
                         attribute = getattr(module, attribute_name)
@@ -120,17 +120,17 @@ plugin_registry = PluginRegistry()
 
 class BasePlugin(ABC):
     """Base class for all image format plugins."""
-    
+
     def __init__(self, cache_dir: str, thumbnail_size: int = 64):
         self.cache_dir = cache_dir
         self.thumbnail_size = thumbnail_size
         self.thumbnail_cache_dir = os.path.join(cache_dir, "thumbnails")
         self.image_cache_dir = os.path.join(cache_dir, "images")
-        
+
         # Ensure cache directories exist
         os.makedirs(self.thumbnail_cache_dir, exist_ok=True)
         os.makedirs(self.image_cache_dir, exist_ok=True)
-        
+
         # Always register formats so the directory scanner discovers files
         # even when optional dependencies (e.g. exiftool) are temporarily
         # missing.  Plugins handle missing tools gracefully at use time.
@@ -139,21 +139,21 @@ class BasePlugin(ABC):
             logger.info(f"Plugin {self.__class__.__name__} loaded successfully")
         else:
             logger.warning(f"Plugin {self.__class__.__name__} loaded (formats registered) but dependencies unavailable")
-    
+
     @abstractmethod
     def is_available(self) -> bool:
         """Check if all required dependencies for this plugin are available."""
         pass
-    
+
     @abstractmethod
     def get_supported_formats(self) -> List[str]:
         """Return list of supported file extensions (with dots, lowercase)."""
         pass
-    
+
     def register_formats(self):
         """Register this plugin for its supported formats."""
         plugin_registry.register_plugin(self)
-    
+
     @abstractmethod
     def generate_view_image(self, image_path: str, image_source: Union[str, bytes], orientation: int, output_path: str) -> bool:
         """
@@ -205,7 +205,7 @@ class BasePlugin(ABC):
             "xmp": "http://ns.adobe.com/xap/1.0/",
         }
         try:
-            with open(file_path, "rb") as f:
+            with open(file_path, "rb") as f:  # disk-io: header scan
                 buf = f.read(256 * 1024)
 
             # EXIF Orientation (little-endian IFD tag 0x0112)
@@ -230,9 +230,9 @@ class BasePlugin(ABC):
 
             # Sidecar override: if FILENAME.xmp exists, its rating takes precedence.
             xmp = sidecar_path_for(file_path)
-            if os.path.exists(xmp):
+            if os.path.exists(xmp):  # disk-io: sidecar check
                 try:
-                    with open(xmp, "rb") as xf:
+                    with open(xmp, "rb") as xf:  # disk-io: sidecar read
                         xmp_buf = xf.read(64 * 1024)
                     sc_start = xmp_buf.find(b"<x:xmpmeta")
                     if sc_start != -1:
@@ -301,7 +301,7 @@ class BasePlugin(ABC):
         xmp = sidecar_path_for(file_path)
         try:
             et = self._get_exiftool()
-            if os.path.exists(xmp):
+            if os.path.exists(xmp):  # disk-io: sidecar check
                 # Existing sidecar: clear old tags first, then add new ones.
                 et.execute(["-XMP:Subject=", "-overwrite_original", xmp])
                 if tag_names:
@@ -342,7 +342,7 @@ class BasePlugin(ABC):
         because the file appeared.
         """
         et = self._get_exiftool()
-        if os.path.exists(xmp_path):
+        if os.path.exists(xmp_path):  # disk-io: sidecar check
             return et.execute(tag_args + ["-overwrite_original", xmp_path])
         # Create sidecar from the source image's XMP skeleton.
         output = et.execute(["-o", xmp_path] + tag_args + [image_path])

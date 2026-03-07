@@ -125,7 +125,7 @@ class ImageEntry:
     def from_path(image_path: str) -> 'ImageEntry':
         """Construct an ImageEntry, auto-discovering the XMP sidecar."""
         xmp = xmp_sidecar_path(image_path)
-        sidecars = (xmp,) if os.path.exists(xmp) else ()
+        sidecars = (xmp,) if os.path.exists(xmp) else ()  # disk-io: sidecar discovery
         return ImageEntry(path=image_path, sidecars=sidecars)
 
     @staticmethod

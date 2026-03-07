@@ -78,7 +78,7 @@ class BackgroundIndexer:
         # Phase 2: walk un-walked directories at BACKGROUND_SCAN(10).
         rm = self.thumbnail_manager.render_manager
         for path in self.watch_paths:
-            if not os.path.exists(path):
+            if not os.path.exists(path):  # disk-io: watch path validation
                 logger.warning(f"BackgroundIndexer: skipping non-existent watch_path: {path}")
                 continue
 

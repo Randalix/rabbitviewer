@@ -37,7 +37,7 @@ class SourceExistsCache:
                 return entry[2]
 
         try:
-            st = os.stat(path)
+            st = os.stat(path)  # disk-io: stat on miss, cached with TTL
         except OSError:
             with self._lock:
                 self._cache[path] = (False, now + self._ttl, None)

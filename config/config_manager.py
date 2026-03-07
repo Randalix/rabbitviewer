@@ -174,7 +174,7 @@ class ConfigManager:
 
     def load_config(self):
         try:
-            with open(self.config_path, "r") as f:
+            with open(self.config_path, "r") as f:  # disk-io: config load
                 user_config = yaml.safe_load(f) or {}
         except FileNotFoundError:
             self.save_config(DEFAULT_CONFIG)
@@ -185,7 +185,7 @@ class ConfigManager:
 
     def save_config(self, config):
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-        with open(self.config_path, "w") as f:
+        with open(self.config_path, "w") as f:  # disk-io: config save
             yaml.dump(config, f, default_flow_style=False)
 
     def get(self, key, default=None):

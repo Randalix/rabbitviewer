@@ -350,7 +350,7 @@ class MainWindow(QMainWindow):
             self.filter_dialog = FilterDialog(self)
             self.filter_dialog.filter_changed.connect(self._handle_filter_changed)
             self.filter_dialog.stars_changed.connect(self._handle_stars_changed)
-            
+
         if self.filter_dialog.isVisible():
             self.filter_dialog.hide()
             self.filter_dialog.clear_filter()
@@ -367,7 +367,7 @@ class MainWindow(QMainWindow):
             self.thumbnail_view.apply_filter(filter_text)
         else:
             logger.warning("Filter changed but no thumbnail_view available")
-            
+
     def _handle_stars_changed(self, star_states: list):
         logger.debug(f"Stars changed: {star_states}")
         if self.thumbnail_view:
@@ -550,7 +550,7 @@ class MainWindow(QMainWindow):
         hovered_path = self.thumbnail_view.get_hovered_image_path()
         if hovered_path:
             self.thumbnail_view.thumbnailHovered.emit(hovered_path)
-            
+
     def _prime_inspector_from_picture_view(self, inspector):
         if (self.picture_view and self.picture_view.current_path and
                 self.picture_view.has_image()):
@@ -572,7 +572,7 @@ class MainWindow(QMainWindow):
             except Exception as e:  # why: screenToNormalized may raise before first paint; priming is best-effort
                 logger.error(f"Error priming inspector: {e}", exc_info=True)
 
-            
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
@@ -592,13 +592,13 @@ class MainWindow(QMainWindow):
 
         if len(paths) == 1:
             path = paths[0]
-            if os.path.isdir(path):
+            if os.path.isdir(path):  # disk-io: drop path classification
                 self.load_directory(path, recursive=False)
-            elif os.path.isfile(path):
+            elif os.path.isfile(path):  # disk-io: drop path classification
                 self.load_directory(os.path.dirname(path), recursive=False)
                 self._open_media_view(path)
         else:
-            file_paths = [p for p in paths if os.path.isfile(p)]
+            file_paths = [p for p in paths if os.path.isfile(p)]  # disk-io: drop path filter
             if file_paths:
                 self.thumbnail_view.add_images(file_paths)
 
@@ -660,7 +660,7 @@ class MainWindow(QMainWindow):
     def _setup_hotkeys(self):
         hotkeys_config = self.config_manager.get("hotkeys", {})
         self.hotkey_manager = HotkeyManager(self, hotkeys_config)
-        
+
         self.hotkey_manager.add_action("toggle_inspector", self._open_inspector_window)
         self.hotkey_manager.add_action("pin_inspector", self._pin_last_inspector)
         self.hotkey_manager.add_action("escape_picture_view", self._close_active_media_view)
@@ -724,7 +724,7 @@ class MainWindow(QMainWindow):
             else:
                 self.close_video_view()
 
-        
+
     @Slot()
     def _handle_thumbnail_double_click(self):
         target_image = self.current_hovered_image
@@ -776,7 +776,7 @@ class MainWindow(QMainWindow):
             self._fetch_metadata_for_path(image_path)
         except Exception as e:  # why: loadImage delegates to format plugins which may raise arbitrarily
             logger.error(f"Exception when opening Picture View: {e}", exc_info=True)
-            
+
     def _handle_close_or_quit(self):
         if self.compare_view and self.stacked_widget.currentWidget() is self.compare_view:
             self.close_compare_view()

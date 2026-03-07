@@ -25,32 +25,32 @@ class MetadataDatabase:
     """
     Unified database for all image metadata (rating, EXIF, file size, etc.).
     """
-    
+
     def __init__(self, db_path: str):
         logger.info(f"Initializing MetadataDatabase with path: {db_path}")
         self.db_path = db_path
         self._lock = Lock()
-        
+
         # Ensure database directory exists
         db_dir = os.path.dirname(db_path)
         if db_dir: # Only create directory if db_dir is not an empty string
             os.makedirs(db_dir, exist_ok=True)
-        
+
         # Initialize database connection with check_same_thread=False for multi-threading
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        
+
         # Initialize database
         self._init_database()
-        
+
     def _init_database(self):
         with self._lock:
             try:
                 cursor = self.conn.cursor()
-                
+
                 # Enable Write-Ahead Logging for better concurrency
                 cursor.execute("PRAGMA journal_mode=WAL;")
                 cursor.execute("PRAGMA foreign_keys=ON;")
-                
+
                 # Create metadata table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS image_metadata (
@@ -80,7 +80,7 @@ class MetadataDatabase:
                         updated_at REAL NOT NULL
                     )
                 ''')
-                
+
                 # Indexes for better performance
                 cursor.execute('''
                     CREATE INDEX IF NOT EXISTS idx_file_path ON image_metadata(file_path)
@@ -160,17 +160,17 @@ class MetadataDatabase:
                 ''')
 
                 self.conn.commit()
-                
+
                 logger.info(f"Metadata database initialized: {self.db_path}")
-                
+
             except sqlite3.Error as e:
                 logger.error(f"Error initializing metadata database: {e}")
                 raise
-                
+
     def _get_metadata_hash(self, file_path: str, stat_result: Optional[os.stat_result] = None) -> Optional[str]:
         """Calculates a fast MD5 hash based on file path, size, and modification time."""
         try:
-            stat_info = stat_result or os.stat(file_path)
+            stat_info = stat_result or os.stat(file_path)  # disk-io: freshness hash
             info = f"{file_path}-{stat_info.st_size}-{stat_info.st_mtime_ns}"
             return hashlib.md5(info.encode('utf-8')).hexdigest()
         except OSError as e:
@@ -202,7 +202,7 @@ class MetadataDatabase:
     def get_rating(self, file_path: str) -> int:
         metadata = self.get_metadata(file_path)
         return metadata.get('rating', 0) if metadata else 0
-        
+
     def get_metadata_batch(self, file_paths: List[str]) -> Dict[str, Dict[str, Any]]:
         """Return metadata for multiple files in a single DB query.
 
@@ -250,25 +250,25 @@ class MetadataDatabase:
 
                 columns = [desc[0] for desc in cursor.description]
                 metadata = dict(zip(columns, result))
-                
+
                 if metadata.get('exif_data'):
                     try:
                         metadata['exif_data'] = json.loads(metadata['exif_data'])
                     except json.JSONDecodeError:
                         metadata['exif_data'] = {}
                 return metadata
-                
+
         except sqlite3.Error as e:
             logger.debug(f"Error getting metadata for {file_path}: {e}")
             return None
-            
+
     def extract_and_store_metadata(self, file_path: str):
         """
         Extracts metadata from a file and stores it in the database.
         This method is intended to be called from a background worker.
         """
         try:
-            st = os.stat(file_path)
+            st = os.stat(file_path)  # disk-io: metadata extraction
         except OSError:
             logger.warning(f"File not found for metadata extraction: {file_path}")
             return
@@ -308,7 +308,7 @@ class MetadataDatabase:
             return
 
         try:
-            st = os.stat(file_path)
+            st = os.stat(file_path)  # disk-io: fast metadata
             mtime = st.st_mtime
             file_size = st.st_size
         except OSError:
@@ -323,14 +323,15 @@ class MetadataDatabase:
             with self._lock:
                 cursor = self.conn.cursor()
                 cursor.execute(
-                    'SELECT id, rating, updated_at FROM image_metadata WHERE file_path = ?',
+                    'SELECT id, rating, orientation, updated_at FROM image_metadata WHERE file_path = ?',
                     (file_path,),
                 )
                 existing = cursor.fetchone()
 
                 if existing:
-                    if existing[2] and existing[2] > mtime:
+                    if existing[3] and existing[3] > mtime:
                         rating = existing[1]
+                        orientation = existing[2] or orientation
                     cursor.execute('''
                         UPDATE image_metadata SET
                             path_hash = ?, file_size = ?, orientation = ?,
@@ -354,7 +355,7 @@ class MetadataDatabase:
     def extract_and_store_full_metadata(self, file_path: str):
         """Runs the exiftool path (skipping the plugin fast path) and stores all fields."""
         try:
-            st = os.stat(file_path)
+            st = os.stat(file_path)  # disk-io: full metadata
         except OSError:
             logger.warning(f"File not found for full metadata extraction: {file_path}")
             return
@@ -389,7 +390,7 @@ class MetadataDatabase:
                         metadata['file_size'] = file_size
                     else:
                         try:
-                            metadata['file_size'] = os.path.getsize(file_path)
+                            metadata['file_size'] = os.path.getsize(file_path)  # disk-io: file size fallback
                         except OSError:
                             pass
                     return metadata
@@ -416,9 +417,9 @@ class MetadataDatabase:
             'view_image_path': None,  # Path to the cached image for display
             'exif_data': {}
         }
-        
+
         try:
-            metadata['file_size'] = file_size if file_size is not None else os.path.getsize(file_path)
+            metadata['file_size'] = file_size if file_size is not None else os.path.getsize(file_path)  # disk-io: file size
 
             # Extract EXIF data via the persistent exiftool process (avoids per-file startup cost).
             raw = _get_fallback_exiftool().execute(['-json', '-d', '%s', '-all', '-XMP:Rating', file_path])
@@ -516,7 +517,7 @@ class MetadataDatabase:
         # Sidecar override: if FILENAME.ext.xmp exists, its rating/tags take precedence.
         from plugins.base_plugin import sidecar_path_for
         xmp = sidecar_path_for(file_path)
-        if os.path.exists(xmp):
+        if os.path.exists(xmp):  # disk-io: sidecar check
             try:
                 sc_raw = _get_fallback_exiftool().execute(['-json', '-XMP:Rating', '-XMP:Subject', xmp])
                 sc_data = json.loads(sc_raw)
@@ -544,7 +545,7 @@ class MetadataDatabase:
                 logger.debug(f"Error reading sidecar {xmp}: {e}")
 
         return metadata
-    
+
     def set_thumbnail_paths(self, file_path: str, thumbnail_path: Optional[str] = None, view_image_path: Optional[str] = None) -> bool:
         """
         Sets the thumbnail and view image paths for a file.
@@ -553,7 +554,7 @@ class MetadataDatabase:
             current_time = time.time()
             # Stat outside the lock to avoid blocking other DB operations on NAS.
             try:
-                st = os.stat(file_path)
+                st = os.stat(file_path)  # disk-io: freshness check
             except OSError:
                 st = None
 
@@ -603,7 +604,7 @@ class MetadataDatabase:
         except sqlite3.Error as e:
             logger.error(f"Error setting thumbnail paths for {file_path}: {e}", exc_info=True)
             return False
-    
+
     def clear_thumbnail_paths(self, file_path: str) -> bool:
         """Set thumbnail_path and view_image_path to NULL so the file is re-generated."""
         try:
@@ -644,7 +645,7 @@ class MetadataDatabase:
 
         except sqlite3.Error as e:
             logger.error(f"Error getting thumbnail paths for {file_path}: {e}")
-            
+
         return {'thumbnail_path': None, 'view_image_path': None}
 
     def batch_get_thumbnail_validity(self, file_paths: List[str]) -> Dict[str, Dict]:
@@ -661,7 +662,7 @@ class MetadataDatabase:
         stat_cache: Dict[str, os.stat_result] = {}
         for p in file_paths:
             try:
-                stat_cache[p] = os.stat(p)
+                stat_cache[p] = os.stat(p)  # disk-io: batch stat
             except OSError:
                 pass  # file gone — will be treated as invalid
 
@@ -683,7 +684,7 @@ class MetadataDatabase:
                         and stored_mtime >= stat.st_mtime
                         and stored_size == stat.st_size
                         and thumb
-                        and os.path.exists(thumb)
+                        and os.path.exists(thumb)  # disk-io: cache file check
                     )
                     results[fp] = {
                         'thumbnail_path': thumb,
@@ -710,7 +711,7 @@ class MetadataDatabase:
                 ''', (file_path,))
                 result = cursor.fetchone()
 
-            if result and result[0] and os.path.exists(result[0]):
+            if result and result[0] and os.path.exists(result[0]):  # disk-io: cache file check
                 self._touch_accessed_at(file_path)
                 return {
                     'thumbnail_path': result[0],
@@ -742,7 +743,7 @@ class MetadataDatabase:
                 ''', file_paths)
                 for row in cursor.fetchall():
                     fp, thumb, view = row
-                    valid = bool(thumb and os.path.exists(thumb))
+                    valid = bool(thumb and os.path.exists(thumb))  # disk-io: cache file check
                     results[fp] = {
                         'thumbnail_path': thumb,
                         'view_image_path': view,
@@ -759,7 +760,7 @@ class MetadataDatabase:
         """
         try:
             # Combine file existence check, mtime, and size into a single os.stat call for efficiency.
-            stat_info = os.stat(file_path)
+            stat_info = os.stat(file_path)  # disk-io: thumbnail validity
             mtime = stat_info.st_mtime
             file_size = stat_info.st_size
 
@@ -781,7 +782,7 @@ class MetadataDatabase:
                     if (stored_mtime >= mtime and
                         stored_file_size == file_size and
                         thumbnail_path and
-                        os.path.exists(thumbnail_path)):
+                        os.path.exists(thumbnail_path)):  # disk-io: cache file check
                         return True
 
         except FileNotFoundError:
@@ -791,21 +792,21 @@ class MetadataDatabase:
             logger.error(f"Error checking thumbnail validity for {file_path}: {e}")
 
         return False
-        
+
     def _store_metadata(self, file_path: str, metadata: Dict[str, Any], mtime: float, stat_result: Optional[os.stat_result] = None):
         """Stores metadata in the database."""
         try:
             path_hash = self._get_metadata_hash(file_path, stat_result=stat_result)
             current_time = time.time()
-            
+
             # Serialize EXIF data as JSON
             exif_json = json.dumps(metadata.get('exif_data', {}))
-            
+
             with self._lock:
                 cursor = self.conn.cursor()
 
                 # Check for an existing entry to decide whether to INSERT or UPDATE
-                cursor.execute('SELECT id, thumbnail_path, view_image_path, content_hash, rating, updated_at FROM image_metadata WHERE file_path = ?', (file_path,))
+                cursor.execute('SELECT id, thumbnail_path, view_image_path, content_hash, rating, updated_at, orientation FROM image_metadata WHERE file_path = ?', (file_path,))
                 existing_row = cursor.fetchone()
 
                 # Preserve existing paths to avoid race conditions from other tasks
@@ -816,17 +817,15 @@ class MetadataDatabase:
                         metadata['view_image_path'] = existing_row[2]
                     if not metadata.get('content_hash'):
                         metadata['content_hash'] = existing_row[3]
-                    # Preserve user-set rating: if the DB row was updated after
-                    # the file was last modified, the rating was set explicitly
-                    # (e.g. via set_rating) and the EXIF write-back may not have
-                    # completed yet.  Don't overwrite it with stale EXIF data.
-                    # why: mtime has 1s granularity on HFS+/APFS, so a rating
-                    # set within the same second as a file write could be missed.
-                    # In practice this is rare: set_rating is user-initiated and
-                    # file writes are background tasks that don't coincide.
+                    # Preserve user-set values: if the DB row was updated after
+                    # the file was last modified, the value was set explicitly
+                    # (e.g. via set_rating/set_orientation) and the EXIF
+                    # write-back may not have completed yet.  Don't overwrite
+                    # with stale EXIF data.
                     existing_updated_at = existing_row[5]
                     if existing_updated_at and existing_updated_at > mtime:
                         metadata['rating'] = existing_row[4]
+                        metadata['orientation'] = existing_row[6] or metadata.get('orientation', 1)
 
                 if existing_row:
                     # UPDATE the existing row
@@ -850,7 +849,7 @@ class MetadataDatabase:
                 else:
                     # INSERT a new row
                     cursor.execute('''
-                        INSERT INTO image_metadata 
+                        INSERT INTO image_metadata
                         (file_path, path_hash, content_hash, file_size, width, height, rating, camera_make, camera_model, lens_model, focal_length, aperture, shutter_speed, iso, date_taken, orientation, color_space, thumbnail_path, view_image_path, exif_data, mtime, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
@@ -860,7 +859,7 @@ class MetadataDatabase:
                         metadata.get('date_taken'), metadata.get('orientation', 1), metadata.get('color_space'),
                         metadata.get('thumbnail_path'), metadata.get('view_image_path'), exif_json, mtime, current_time, current_time
                     ))
-                
+
                 self.conn.commit()
                 logger.debug(f"Committed full metadata for {file_path}. Rows affected: {cursor.rowcount}")
 
@@ -886,38 +885,38 @@ class MetadataDatabase:
                 cursor = self.conn.cursor()
 
                 cursor.execute('SELECT id FROM image_metadata WHERE file_path = ?', (file_path,))
-                
+
                 if cursor.fetchone():
                     # Update existing entry
                     logger.debug(f"Updating rating for {os.path.basename(file_path)} to {rating} in DB.")
                     cursor.execute('''
-                        UPDATE image_metadata 
+                        UPDATE image_metadata
                         SET rating = ?, updated_at = ?
                         WHERE file_path = ?
                     ''', (rating, current_time, file_path))
                 else:
                     # Create new entry with minimal metadata
                     logger.debug(f"Inserting new DB entry for {os.path.basename(file_path)} with rating {rating}.")
-                    st = os.stat(file_path)
+                    st = os.stat(file_path)  # disk-io: new entry stat
                     path_hash = self._get_metadata_hash(file_path, stat_result=st)
                     file_size = st.st_size
                     mtime = st.st_mtime
-                    
+
                     cursor.execute('''
-                        INSERT INTO image_metadata 
+                        INSERT INTO image_metadata
                         (file_path, path_hash, file_size, rating, mtime, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     ''', (file_path, path_hash, file_size, rating, mtime, current_time, current_time))
-                
+
                 self.conn.commit()
                 rowcount = cursor.rowcount
-                
+
                 if rowcount > 0:
                     logger.info(f"Successfully set rating for {os.path.basename(file_path)} to {rating}. Rows affected: {rowcount}.")
                 else:
                     logger.warning(f"DB transaction for rating on {os.path.basename(file_path)} completed, but no rows were affected.")
                 return True
-                
+
         except sqlite3.Error as e:
             logger.error(f"Error setting rating for {file_path} in database: {e}", exc_info=True)
             return False
@@ -982,7 +981,7 @@ class MetadataDatabase:
                         insert_data = []
                         for path in new_paths:
                             try:
-                                stat = os.stat(path)
+                                stat = os.stat(path)  # disk-io: batch insert stat
                                 info = f"{path}-{stat.st_size}-{stat.st_mtime_ns}"
                                 path_hash = hashlib.md5(info.encode('utf-8')).hexdigest()
                                 insert_data.append((
@@ -1006,7 +1005,7 @@ class MetadataDatabase:
         except sqlite3.Error as e:
             logger.error(f"Error in batch_set_ratings for {len(file_paths)} files: {e}", exc_info=True)
             return (False, 0)
-            
+
     def get_files_by_rating(self, rating: int) -> List[str]:
         """
         Gets all files with a specific rating.
@@ -1047,11 +1046,11 @@ class MetadataDatabase:
                 results = cursor.fetchall()
 
             return [row[0] for row in results]
-                
+
         except sqlite3.Error as e:
             logger.error(f"Error searching by camera: {e}")
             return []
-            
+
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                tag_names: Optional[List[str]] = None) -> List[str]:
         """
@@ -1163,7 +1162,7 @@ class MetadataDatabase:
         logger.info(f"Batch inserting {len(new_paths)} new minimal records into database.")
         for path in new_paths:
             try:
-                st = os.stat(path)
+                st = os.stat(path)  # disk-io: batch insert stat
                 path_hash = self._get_metadata_hash(path, stat_result=st)
                 records_to_insert.append((
                     path, path_hash, st.st_size, st.st_mtime,
@@ -1219,7 +1218,7 @@ class MetadataDatabase:
                             pass
                         except OSError as e:
                             logger.warning(f"Error removing cache file {path}: {e}")
-            
+
             return True
 
         except sqlite3.Error as e:
@@ -1239,7 +1238,7 @@ class MetadataDatabase:
                 all_paths = [row[0] for row in cursor.fetchall()]
 
             # Filesystem existence checks happen outside the lock to avoid blocking DB operations.
-            missing_paths = [p for p in all_paths if not os.path.exists(p)]
+            missing_paths = [p for p in all_paths if not os.path.exists(p)]  # disk-io: ghost cleanup
 
             if missing_paths:
                 with self._lock:
@@ -1507,7 +1506,7 @@ class MetadataDatabase:
             for path in (thumb, view):
                 if path:
                     try:
-                        total += os.path.getsize(path)
+                        total += os.path.getsize(path)  # disk-io: cache size accounting
                     except OSError:
                         pass
         return total
@@ -1534,7 +1533,7 @@ class MetadataDatabase:
             for path in (thumb, view):
                 if path:
                     try:
-                        size += os.path.getsize(path)
+                        size += os.path.getsize(path)  # disk-io: cache size accounting
                     except OSError:
                         pass
             record_sizes.append((file_path, size))

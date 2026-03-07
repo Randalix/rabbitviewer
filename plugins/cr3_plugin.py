@@ -17,11 +17,11 @@ class CR3Plugin(BasePlugin):
     def is_available(self) -> bool:
         """Checks if exiftool is available in the system's PATH."""
         return is_exiftool_available()
-    
+
     def get_supported_formats(self) -> List[str]:
         """Return list of supported file extensions."""
-        return ['.cr3'] 
-    
+        return ['.cr3']
+
     def _get_orientation_from_buffer(self, buffer: bytes) -> int:
         """Extract EXIF Orientation from an already-read byte buffer (no file I/O)."""
         return self._scan_exif_orientation(buffer)
@@ -32,7 +32,7 @@ class CR3Plugin(BasePlugin):
         Returns the integer value of the Orientation tag, or 1 if not found/error.
         """
         try:
-            with open(cr3_path, 'rb') as f:
+            with open(cr3_path, 'rb') as f:  # disk-io: orientation header read
                 buffer = f.read(256 * 1024)
             return self._get_orientation_from_buffer(buffer)
         except (IOError, struct.error) as e:
@@ -217,7 +217,7 @@ class CR3Plugin(BasePlugin):
         buffer doesn't contain the full thumbnail.
         """
         thumbnail_path = self.get_thumbnail_path(md5_hash)
-        if os.path.exists(thumbnail_path):
+        if os.path.exists(thumbnail_path):  # disk-io: cache file check
             return thumbnail_path
 
         try:
@@ -250,12 +250,12 @@ class CR3Plugin(BasePlugin):
             # Last resort: generate from the full view image (slow — JpgFromRaw).
             logger.debug(f"Generating thumbnail for {image_path} from its main preview image.")
             view_image_path = self.process_view_image(image_path, md5_hash) # This extracts the high-quality JPG
-            if not view_image_path or not os.path.exists(view_image_path):
+            if not view_image_path or not os.path.exists(view_image_path):  # disk-io: cache file check
                 logger.error(f"Failed to create or find view image to generate thumbnail for {image_path}")
                 return None
 
             # Now, create the thumbnail by resizing the high-quality view image
-            with Image.open(view_image_path) as img:
+            with Image.open(view_image_path) as img:  # disk-io: thumbnail from view image
                 img.thumbnail((self.thumbnail_size, self.thumbnail_size), Image.Resampling.LANCZOS)
                 os.makedirs(os.path.dirname(thumbnail_path), exist_ok=True)
                 img.save(thumbnail_path, "JPEG", quality=85)
@@ -270,7 +270,7 @@ class CR3Plugin(BasePlugin):
         Generates the full-resolution view image from the raw file's embedded JPG.
         """
         view_image_path = self.get_view_image_path(md5_hash)
-        if os.path.exists(view_image_path):
+        if os.path.exists(view_image_path):  # disk-io: cache file check
             return view_image_path
 
         try:
@@ -289,4 +289,3 @@ class CR3Plugin(BasePlugin):
         except (OSError, ValueError) as e:
             logger.error(f"Unexpected error in process_view_image for {image_path}: {e}", exc_info=True)
             return None
-

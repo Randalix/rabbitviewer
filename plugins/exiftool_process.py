@@ -44,7 +44,7 @@ def _resolve_exiftool() -> Optional[str]:
 
     for d in _EXTRA_SEARCH_DIRS:
         candidate = os.path.join(d, "exiftool")
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):  # disk-io: binary discovery
             _exiftool_path = candidate
             return candidate
 

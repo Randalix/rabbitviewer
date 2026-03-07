@@ -173,7 +173,7 @@ class ComfyUIDialog(QDialog):
         workflows_dir = self._resolve_workflows_dir()
         try:
             files = sorted(
-                f for f in os.listdir(workflows_dir)
+                f for f in os.listdir(workflows_dir)  # disk-io: workflow listing
                 if f.lower().endswith(".json")
             )
         except OSError:
@@ -211,7 +211,7 @@ class ComfyUIDialog(QDialog):
         """Load the selected workflow and rebuild the dynamic form."""
         if self._workflow_path:
             try:
-                with open(self._workflow_path, "r") as f:
+                with open(self._workflow_path, "r") as f:  # disk-io: workflow JSON load
                     self._current_workflow = json.load(f)
             except (OSError, json.JSONDecodeError) as e:
                 self._status_label.setText(f"Error loading workflow: {e}")

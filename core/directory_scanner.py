@@ -60,7 +60,7 @@ class DirectoryScanner:
 
         if stat_result is None:
             try:
-                stat_result = os.stat(file_path)
+                stat_result = os.stat(file_path)  # disk-io: stat for size+mode filter
             except OSError:
                 return False
         if not stat.S_ISREG(stat_result.st_mode):
@@ -87,13 +87,13 @@ class DirectoryScanner:
         total_yielded = 0
         scan_start = time.monotonic()
 
-        if not os.path.isdir(directory_path):
+        if not os.path.isdir(directory_path):  # disk-io: guard before walk
             logger.warning(f"Directory to scan does not exist: {directory_path}")
             return
 
         try:
             walk_start = time.monotonic()
-            walker = os.walk(directory_path) if recursive else [(directory_path, [], os.listdir(directory_path))]
+            walker = os.walk(directory_path) if recursive else [(directory_path, [], os.listdir(directory_path))]  # disk-io: directory discovery
             for root, dirs, files in walker:
                 if skip_dirs:
                     # Prune os.walk descent into already-walked subtrees.
@@ -148,4 +148,3 @@ class DirectoryScanner:
         # ghosts would cause irreversible data loss.
         if self._supported_extensions:
             ctx.ghost_files = list(ctx.db_file_set)
-

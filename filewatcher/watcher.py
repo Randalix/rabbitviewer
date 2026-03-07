@@ -48,7 +48,7 @@ class WatchdogHandler(FileSystemEventHandler):
             self.observer = Observer()
 
         for path in self.watch_paths:
-            if not os.path.exists(path):
+            if not os.path.exists(path):  # disk-io: watch path validation
                 logger.warning(f"Watch path does not exist: {path}")
                 continue
 
@@ -88,7 +88,7 @@ class WatchdogHandler(FileSystemEventHandler):
             except Exception:
                 pass  # already unscheduled or observer restarted
             self._gui_watch = None
-        if not path or not os.path.isdir(path):
+        if not path or not os.path.isdir(path):  # disk-io: directory validation
             return
         # Skip if already covered by a config watch_path
         rp = os.path.realpath(path)
@@ -205,7 +205,7 @@ class WatchdogHandler(FileSystemEventHandler):
             # rating/tags we wrote — useless without the image).
             from core.priority import xmp_sidecar_path
             xmp = xmp_sidecar_path(event.src_path)
-            if os.path.exists(xmp):
+            if os.path.exists(xmp):  # disk-io: orphan sidecar cleanup
                 try:
                     os.remove(xmp)
                     logger.debug(f"Watchdog: Removed orphaned sidecar {xmp}")

@@ -127,7 +127,7 @@ class ThumbnailManager:
         availability is critical and blocking is acceptable (e.g., a single image
         display where the user is waiting). For general grid loading, use request_thumbnail.
         """
-        if not os.path.exists(image_path):
+        if not os.path.exists(image_path):  # disk-io: source existence guard
             logger.error(f"ThumbnailManager: Image not found: {image_path}")
             return None
 
@@ -135,7 +135,7 @@ class ThumbnailManager:
         if self.metadata_db.is_thumbnail_valid(image_path):
             paths = self.metadata_db.get_thumbnail_paths(image_path)
             thumbnail_path = paths.get('thumbnail_path')
-            if thumbnail_path and os.path.exists(thumbnail_path):
+            if thumbnail_path and os.path.exists(thumbnail_path):  # disk-io: cache file check
                 logger.debug(f"Thumbnail for {image_path} found in cache: {thumbnail_path}")
                 return thumbnail_path
 
@@ -259,7 +259,7 @@ class ThumbnailManager:
             self.metadata_db.ledger_mark_complete(image_path)
             if self.cache_size_manager:
                 try:
-                    self.cache_size_manager.record_cache_write(os.path.getsize(thumbnail_path))
+                    self.cache_size_manager.record_cache_write(os.path.getsize(thumbnail_path))  # disk-io: cache size tracking
                 except OSError:
                     pass
         else:
@@ -319,7 +319,7 @@ class ThumbnailManager:
             return "memory"
         current_paths = self.metadata_db.get_thumbnail_paths(image_path)
         existing_view = current_paths.get('view_image_path')
-        if existing_view and os.path.exists(existing_view):
+        if existing_view and os.path.exists(existing_view):  # disk-io: cache file check
             logger.debug(f"View image for {image_path} already exists. Skipping.")
             return existing_view
 
@@ -548,7 +548,7 @@ class ThumbnailManager:
         # Fast path: view image already cached on disk.
         paths = self.metadata_db.get_thumbnail_paths(image_path)
         existing_view = paths.get('view_image_path')
-        if existing_view and os.path.exists(existing_view):
+        if existing_view and os.path.exists(existing_view):  # disk-io: cache file check
             return existing_view
 
         # Fast path: natively viewable format with no rotation needed.
@@ -610,7 +610,7 @@ class ThumbnailManager:
 
         paths = self.metadata_db.get_thumbnail_paths(image_path)
         existing_view = paths.get('view_image_path')
-        if existing_view and os.path.exists(existing_view):
+        if existing_view and os.path.exists(existing_view):  # disk-io: cache file check
             return
 
         # Only create a new Event if the task doesn't already exist;
@@ -646,7 +646,7 @@ class ThumbnailManager:
 
         current_paths = self.metadata_db.get_thumbnail_paths(image_path)
         current_view_image_path = current_paths.get('view_image_path')
-        if current_view_image_path and os.path.exists(current_view_image_path):
+        if current_view_image_path and os.path.exists(current_view_image_path):  # disk-io: cache file check
             logger.debug(f"View image for {image_path} already exists at {current_view_image_path}. Skipping generation.")
             return current_view_image_path
 
@@ -669,7 +669,7 @@ class ThumbnailManager:
         if duration < self._fullres_cache_threshold:
             # Fast extraction → RAM only, delete disk file.
             try:
-                with open(view_image_path, 'rb') as f:
+                with open(view_image_path, 'rb') as f:  # disk-io: mem-cache read
                     image_bytes = f.read()
                 os.remove(view_image_path)
             except OSError:
@@ -685,7 +685,7 @@ class ThumbnailManager:
         self.metadata_db.set_thumbnail_paths(image_path, view_image_path=view_image_path)
         if self.cache_size_manager:
             try:
-                self.cache_size_manager.record_cache_write(os.path.getsize(view_image_path))
+                self.cache_size_manager.record_cache_write(os.path.getsize(view_image_path))  # disk-io: cache size tracking
             except OSError:
                 pass
         return view_image_path
@@ -748,7 +748,7 @@ class ThumbnailManager:
         """
         from plugins.base_plugin import sidecar_path_for
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(file_path):  # disk-io: write guard
             logger.warning(f"File not found, cannot write rating: {file_path}")
             return False
 
@@ -780,7 +780,7 @@ class ThumbnailManager:
         """
         from plugins.base_plugin import sidecar_path_for
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(file_path):  # disk-io: write guard
             logger.warning(f"File not found, cannot write tags: {file_path}")
             return False
 
@@ -806,7 +806,7 @@ class ThumbnailManager:
         return False
 
     def write_orientation_to_file(self, file_path: str, orientation: int) -> bool:
-        if not os.path.exists(file_path):
+        if not os.path.exists(file_path):  # disk-io: write guard
             logger.warning(f"File not found, cannot write orientation: {file_path}")
             return False
 
@@ -827,7 +827,7 @@ class ThumbnailManager:
         paths = self.metadata_db.get_thumbnail_paths(file_path)
         for key in ('thumbnail_path', 'view_image_path'):
             cached = paths.get(key)
-            if cached and os.path.exists(cached):
+            if cached and os.path.exists(cached):  # disk-io: cache cleanup
                 try:
                     os.remove(cached)
                     logger.debug("Removed cached %s: %s", key, cached)
@@ -867,7 +867,7 @@ class ThumbnailManager:
         responded = threading.Event()
         def _probe():
             try:
-                os.stat(mount_point)
+                os.stat(mount_point)  # disk-io: volume accessibility probe
                 responded.set()
             except OSError:
                 pass   # event stays unset; timeout path handles it
@@ -900,7 +900,7 @@ class ThumbnailManager:
         """
         start_time = time.time()
         try:
-            with open(file_path, "rb") as f:
+            with open(file_path, "rb") as f:  # disk-io: prefetch header read
                 header = f.read(prefetch_size)
 
             # Hash only the first 256 KB so the digest stays compatible with
@@ -987,7 +987,7 @@ class ThumbnailManager:
 
         paths = self.metadata_db.get_thumbnail_paths(file_path)
         existing_view = paths.get('view_image_path')
-        if existing_view and os.path.exists(existing_view):
+        if existing_view and os.path.exists(existing_view):  # disk-io: cache file check
             logger.debug(f"View image for {file_path} already exists. No Stage C task created.")
             return []
 
@@ -1026,7 +1026,7 @@ class ThumbnailManager:
         if self._mem_cache_get(file_path) is None:
             paths = self.metadata_db.get_thumbnail_paths(file_path)
             existing_view = paths.get('view_image_path') if paths else None
-            if not (existing_view and os.path.exists(existing_view)):
+            if not (existing_view and os.path.exists(existing_view)):  # disk-io: cache file check
                 tasks.append(RenderTask(
                     task_id=f"view::{file_path}",
                     priority=priority,
@@ -1080,7 +1080,7 @@ class ThumbnailManager:
         if self._mem_cache_get(file_path) is None:
             paths = self.metadata_db.get_thumbnail_paths(file_path)
             existing_view = paths.get('view_image_path') if paths else None
-            if not (existing_view and os.path.exists(existing_view)):
+            if not (existing_view and os.path.exists(existing_view)):  # disk-io: cache file check
                 tasks.append(RenderTask(
                     task_id=f"view::{file_path}",
                     priority=Priority.BACKGROUND_SCAN,
