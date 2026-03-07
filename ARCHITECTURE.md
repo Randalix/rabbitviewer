@@ -418,6 +418,23 @@ metadata.format_write_mode: {}        # per-extension overrides, e.g. {".jpg": "
 
 ---
 
+## Logging
+
+`setup_logging()` in `main.py` configures the root logger with a `RotatingFileHandler` (50 MB, 3 backups) and stdout. GUI logs to `~/.rabbitviewer/rabbitviewer.log`, daemon to `~/.rabbitviewer/daemon.log`.
+
+All modules use named loggers (`logging.getLogger(__name__)`), enabling per-module level control.
+
+```yaml
+logging_level: INFO                    # global default
+logging_levels:                        # per-module overrides
+  core.rendermanager: DEBUG
+  core.metadata_database: WARNING
+```
+
+CLI `--log-level DEBUG` overrides the config value for a single session. PIL logger is hardcoded to INFO to suppress EXIF tag noise.
+
+---
+
 ## Scripts
 
 `scripts/` — user Python scripts executed via `ScriptAPI`. Each script exports `run_script(api)`. Loaded at startup; bound to hotkeys via `config.yaml`. Built-in examples: `set_rating_*.py`, `delete_selected.py`, `select_all.py`.

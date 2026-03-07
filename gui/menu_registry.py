@@ -28,4 +28,13 @@ def build_menus() -> dict:
         MenuNode("Add / Edit", key="a", action=_publish(EventType.OPEN_TAG_EDITOR)),
         MenuNode("Filter", key="f", action=_publish(EventType.OPEN_TAG_FILTER)),
     ])
-    return {"sort": sort_menu, "tags": tag_menu}
+    export_menu = MenuNode("Export", children=[
+        MenuNode("JPG from RAW", key="j", script="extract_jpg"),
+    ])
+    rotate_menu = MenuNode("Rotate", children=[
+        MenuNode("90° CW", key="9", script="rotate_90"),
+        MenuNode("180°", key="1", script="rotate_180"),
+        MenuNode("270° CW", key="2", script="rotate_270"),
+        MenuNode("Reset", key="0", script="rotate_reset"),
+    ])
+    return {"sort": sort_menu, "tags": tag_menu, "export": export_menu, "rotate": rotate_menu}

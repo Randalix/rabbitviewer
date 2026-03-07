@@ -9,6 +9,8 @@ Framing: 4-byte big-endian length prefix + UTF-8 JSON body (same as daemon).
 import json
 import logging
 import os
+
+logger = logging.getLogger(__name__)
 import socket
 import threading
 import time
@@ -54,7 +56,7 @@ class GuiServer(QObject):
 
         self._thread = threading.Thread(target=self._accept_loop, daemon=True, name="GuiServerThread")
         self._thread.start()
-        logging.info(f"GuiServer listening on {GUI_SOCKET_PATH}")
+        logger.info(f"GuiServer listening on {GUI_SOCKET_PATH}")
 
     def stop(self):
         self._running = False
@@ -69,7 +71,7 @@ class GuiServer(QObject):
             os.remove(GUI_SOCKET_PATH)
         except FileNotFoundError:
             pass
-        logging.info("GuiServer stopped.")
+        logger.info("GuiServer stopped.")
 
     # ------------------------------------------------------------------
     # Internal — main-thread bridge
@@ -126,7 +128,7 @@ class GuiServer(QObject):
             payload = response.encode()
             conn.sendall(len(payload).to_bytes(4, byteorder="big") + payload)
         except Exception as e:  # why: any unhandled error in client handler must not crash the server thread
-            logging.error(f"GuiServer: error handling client: {e}", exc_info=True)
+            logger.error(f"GuiServer: error handling client: {e}", exc_info=True)
         finally:
             conn.close()
 
@@ -150,7 +152,7 @@ class GuiServer(QObject):
             else:
                 return protocol.GuiErrorResponse(message=f"Unknown command: {command}").model_dump_json()
         except Exception as e:  # why: dispatch errors from unknown commands or buggy handlers
-            logging.error(f"GuiServer: error dispatching '{command}': {e}", exc_info=True)
+            logger.error(f"GuiServer: error dispatching '{command}': {e}", exc_info=True)
             return protocol.GuiErrorResponse(message=str(e)).model_dump_json()
 
     def _cmd_get_selection(self) -> str:

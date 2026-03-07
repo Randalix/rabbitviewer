@@ -1,5 +1,7 @@
 import logging
 
+logger = logging.getLogger(__name__)
+
 
 def run_script(api):
     paths = api.get_all_images()
@@ -8,7 +10,7 @@ def run_script(api):
 
     metadata = api.get_metadata_batch(paths)
     if not metadata:
-        logging.warning("sort_by_rating: no metadata available")
+        logger.warning("sort_by_rating: no metadata available")
         return
 
     def rating_key(p):

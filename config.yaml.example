@@ -39,8 +39,11 @@ hotkeys:
   script:delete_selected:
     description: Delete selected images
     extra_sequences:
-    - R
-    sequence: Del
+    - Del
+    sequence: Shift+R
+  menu:rotate:
+    description: Open rotate menu
+    sequence: R
   script:invert_selection:
     description: Invert the current selection
     sequence: Shift+I
@@ -84,6 +87,12 @@ ignore_patterns:
 inspector:
   zoom_factor: 0.5
 logging_level: INFO
+# Per-module log level overrides (module names match Python package paths):
+# logging_levels:
+#   core.rendermanager: DEBUG
+#   core.metadata_database: WARNING
+#   gui.thumbnail_view: WARNING
+#   plugins.cr3_plugin: DEBUG
 min_file_size: 8192
 system:
   socket_path: /tmp/rabbitviewer.sock

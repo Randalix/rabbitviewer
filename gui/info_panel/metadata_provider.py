@@ -68,6 +68,9 @@ class MetadataProvider(ContentProvider):
             exp_rows.append(("Shutter Speed", str(meta["shutter_speed"])))
         if _has(meta, "iso"):
             exp_rows.append(("ISO", str(meta["iso"])))
+        exif = meta.get("exif_data")
+        if isinstance(exif, dict) and exif.get("WhiteBalance"):
+            exp_rows.append(("White Balance", str(exif["WhiteBalance"])))
         if _has(meta, "date_taken"):
             try:
                 dt_str = datetime.fromtimestamp(float(meta["date_taken"])).strftime("%Y-%m-%d %H:%M:%S")

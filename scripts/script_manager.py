@@ -2,6 +2,8 @@ import os
 import importlib.util
 import logging
 from typing import Dict, Callable, Any
+
+logger = logging.getLogger(__name__)
 from scripts.script_api import ScriptAPI
 
 class Script:
@@ -20,7 +22,7 @@ class ScriptManager:
     def load_scripts(self, scripts_dir: str) -> None:
         """Scripts must have a 'run_script' function."""
         if not os.path.exists(scripts_dir):
-            logging.warning(f"Scripts directory not found: {scripts_dir}")
+            logger.warning(f"Scripts directory not found: {scripts_dir}")
             return
 
         for filename in os.listdir(scripts_dir):
@@ -38,12 +40,12 @@ class ScriptManager:
 
                     if hasattr(module, "run_script") and callable(module.run_script):
                         self.scripts[script_name] = Script(script_name, script_path, module)
-                        logging.info(f"Loaded script: {script_name}")
+                        logger.info(f"Loaded script: {script_name}")
                     else:
-                        logging.warning(f"Script '{script_name}' does not have a callable 'run_script' function.")
+                        logger.warning(f"Script '{script_name}' does not have a callable 'run_script' function.")
 
                 except Exception as e:  # why: user-supplied scripts may have import errors or syntax issues
-                    logging.error(f"Failed to load script {script_name} from {script_path}: {e}")
+                    logger.error(f"Failed to load script {script_name} from {script_path}: {e}")
 
     def run_script(self, script_name: str, *args: Any, **kwargs: Any) -> bool:
         """Returns True if found and run, False if not found or if execution raised."""
@@ -51,11 +53,11 @@ class ScriptManager:
         if script:
             try:
                 script.run_script(self.api, *args, **kwargs)
-                logging.debug(f"Executed script: {script_name}")
+                logger.debug(f"Executed script: {script_name}")
                 return True
             except Exception as e:  # why: user-supplied scripts may raise anything
-                logging.error(f"Error executing script '{script_name}': {e}")
+                logger.error(f"Error executing script '{script_name}': {e}")
                 return False
         else:
-            logging.warning(f"Script not found: {script_name}")
+            logger.warning(f"Script not found: {script_name}")
             return False

@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import logging
+logger = logging.getLogger(__name__)
 import hashlib
 from typing import Dict, Optional, List, Any
 import threading
@@ -26,7 +27,7 @@ class MetadataDatabase:
     """
     
     def __init__(self, db_path: str):
-        logging.info(f"Initializing MetadataDatabase with path: {db_path}")
+        logger.info(f"Initializing MetadataDatabase with path: {db_path}")
         self.db_path = db_path
         self._lock = Lock()
         
@@ -160,10 +161,10 @@ class MetadataDatabase:
 
                 self.conn.commit()
                 
-                logging.info(f"Metadata database initialized: {self.db_path}")
+                logger.info(f"Metadata database initialized: {self.db_path}")
                 
             except sqlite3.Error as e:
-                logging.error(f"Error initializing metadata database: {e}")
+                logger.error(f"Error initializing metadata database: {e}")
                 raise
                 
     def _get_metadata_hash(self, file_path: str, stat_result: Optional[os.stat_result] = None) -> Optional[str]:
@@ -173,7 +174,7 @@ class MetadataDatabase:
             info = f"{file_path}-{stat_info.st_size}-{stat_info.st_mtime_ns}"
             return hashlib.md5(info.encode('utf-8')).hexdigest()
         except OSError as e:
-            logging.warning(f"Could not stat file {file_path} to generate metadata hash: {e}")
+            logger.warning(f"Could not stat file {file_path} to generate metadata hash: {e}")
             return None
 
     @staticmethod
@@ -196,7 +197,7 @@ class MetadataDatabase:
                 )
                 self.conn.commit()
         except sqlite3.Error as e:
-            logging.debug(f"Error updating sidecars for {file_path}: {e}")
+            logger.debug(f"Error updating sidecars for {file_path}: {e}")
 
     def get_rating(self, file_path: str) -> int:
         metadata = self.get_metadata(file_path)
@@ -229,7 +230,7 @@ class MetadataDatabase:
                             metadata["exif_data"] = {}
                     results[metadata["file_path"]] = metadata
         except sqlite3.Error as e:
-            logging.debug(f"Error in get_metadata_batch: {e}")
+            logger.debug(f"Error in get_metadata_batch: {e}")
         return results
 
     def get_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
@@ -258,7 +259,7 @@ class MetadataDatabase:
                 return metadata
                 
         except sqlite3.Error as e:
-            logging.debug(f"Error getting metadata for {file_path}: {e}")
+            logger.debug(f"Error getting metadata for {file_path}: {e}")
             return None
             
     def extract_and_store_metadata(self, file_path: str):
@@ -269,11 +270,11 @@ class MetadataDatabase:
         try:
             st = os.stat(file_path)
         except OSError:
-            logging.warning(f"File not found for metadata extraction: {file_path}")
+            logger.warning(f"File not found for metadata extraction: {file_path}")
             return
         metadata = self._extract_metadata_from_file(file_path, file_size=st.st_size)
         self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
-        logging.debug(f"Metadata extracted and stored for: {file_path}")
+        logger.debug(f"Metadata extracted and stored for: {file_path}")
 
     def needs_full_metadata(self, file_path: str) -> bool:
         """Returns True if the row is missing rich EXIF fields (camera, dimensions, etc.)."""
@@ -301,7 +302,7 @@ class MetadataDatabase:
         try:
             plugin_meta = plugin.extract_metadata(file_path)
         except Exception as e:  # why: plugins are user-supplied; any exception must not abort the metadata pipeline
-            logging.debug(f"Fast metadata extraction failed for {file_path}: {e}")
+            logger.debug(f"Fast metadata extraction failed for {file_path}: {e}")
             return
         if plugin_meta is None:
             return
@@ -348,18 +349,18 @@ class MetadataDatabase:
                 self.conn.commit()
         except sqlite3.Error as e:
             self.conn.rollback()
-            logging.error(f"Error storing fast metadata for {file_path}: {e}")
+            logger.error(f"Error storing fast metadata for {file_path}: {e}")
 
     def extract_and_store_full_metadata(self, file_path: str):
         """Runs the exiftool path (skipping the plugin fast path) and stores all fields."""
         try:
             st = os.stat(file_path)
         except OSError:
-            logging.warning(f"File not found for full metadata extraction: {file_path}")
+            logger.warning(f"File not found for full metadata extraction: {file_path}")
             return
         metadata = self._extract_metadata_from_file(file_path, _use_plugin=False, file_size=st.st_size)
         self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
-        logging.debug(f"Full metadata extracted and stored for: {file_path}")
+        logger.debug(f"Full metadata extracted and stored for: {file_path}")
 
     def _extract_metadata_from_file(self, file_path: str, _use_plugin: bool = True, file_size: Optional[int] = None) -> Dict[str, Any]:
         """
@@ -373,7 +374,7 @@ class MetadataDatabase:
             try:
                 plugin_meta = plugin.extract_metadata(file_path)
                 if plugin_meta is not None:
-                    logging.debug(f"Using fast metadata extractor from plugin '{plugin.__class__.__name__}' for {os.path.basename(file_path)}")
+                    logger.debug(f"Using fast metadata extractor from plugin '{plugin.__class__.__name__}' for {os.path.basename(file_path)}")
                     # Initialize with defaults, then update with plugin data.
                     metadata = {
                         'rating': 0, 'file_size': 0, 'width': 0, 'height': 0,
@@ -393,7 +394,7 @@ class MetadataDatabase:
                             pass
                     return metadata
             except Exception as e:  # why: plugins are user-supplied; any exception must not abort the metadata pipeline
-                logging.error(f"Plugin extractor '{plugin.__class__.__name__}' failed for {file_path}: {e}. Falling back to default.")
+                logger.error(f"Plugin extractor '{plugin.__class__.__name__}' failed for {file_path}: {e}. Falling back to default.")
 
         # --- Default Exiftool Fallback ---
         metadata = {
@@ -510,7 +511,7 @@ class MetadataDatabase:
                 metadata['exif_data'] = data
 
         except (TimeoutError, RuntimeError, json.JSONDecodeError, ValueError, FileNotFoundError) as e:
-            logging.debug(f"Error extracting metadata from {file_path}: {e}")
+            logger.debug(f"Error extracting metadata from {file_path}: {e}")
 
         # Sidecar override: if FILENAME.ext.xmp exists, its rating/tags take precedence.
         from plugins.base_plugin import sidecar_path_for
@@ -540,7 +541,7 @@ class MetadataDatabase:
                             keywords.add(subject)
                         metadata['_keywords'] = list(keywords)
             except (TimeoutError, RuntimeError, json.JSONDecodeError) as e:
-                logging.debug(f"Error reading sidecar {xmp}: {e}")
+                logger.debug(f"Error reading sidecar {xmp}: {e}")
 
         return metadata
     
@@ -596,11 +597,11 @@ class MetadataDatabase:
                           st.st_mtime, current_time, current_time))
 
                 self.conn.commit()
-                logging.debug(f"Committed thumbnail paths for {file_path}. Rows affected: {cursor.rowcount}")
+                logger.debug(f"Committed thumbnail paths for {file_path}. Rows affected: {cursor.rowcount}")
                 return True
 
         except sqlite3.Error as e:
-            logging.error(f"Error setting thumbnail paths for {file_path}: {e}", exc_info=True)
+            logger.error(f"Error setting thumbnail paths for {file_path}: {e}", exc_info=True)
             return False
     
     def clear_thumbnail_paths(self, file_path: str) -> bool:
@@ -616,7 +617,7 @@ class MetadataDatabase:
                 self.conn.commit()
                 return cursor.rowcount > 0
         except sqlite3.Error as e:
-            logging.error(f"Error clearing thumbnail paths for {file_path}: {e}")
+            logger.error(f"Error clearing thumbnail paths for {file_path}: {e}")
             return False
 
     def get_thumbnail_paths(self, file_path: str) -> Dict[str, str]:
@@ -642,7 +643,7 @@ class MetadataDatabase:
                 }
 
         except sqlite3.Error as e:
-            logging.error(f"Error getting thumbnail paths for {file_path}: {e}")
+            logger.error(f"Error getting thumbnail paths for {file_path}: {e}")
             
         return {'thumbnail_path': None, 'view_image_path': None}
 
@@ -690,7 +691,7 @@ class MetadataDatabase:
                         'valid': bool(valid),
                     }
         except sqlite3.Error as e:
-            logging.error(f"Error in batch_get_thumbnail_validity: {e}")
+            logger.error(f"Error in batch_get_thumbnail_validity: {e}")
 
         return results
 
@@ -716,7 +717,7 @@ class MetadataDatabase:
                     'view_image_path': result[1],
                 }
         except sqlite3.Error as e:
-            logging.error(f"Error in get_cached_thumbnail_paths for {file_path}: {e}")
+            logger.error(f"Error in get_cached_thumbnail_paths for {file_path}: {e}")
         return None
 
     def batch_get_cached_thumbnail_validity(self, file_paths: List[str]) -> Dict[str, Dict]:
@@ -748,7 +749,7 @@ class MetadataDatabase:
                         'valid': valid,
                     }
         except sqlite3.Error as e:
-            logging.error(f"Error in batch_get_cached_thumbnail_validity: {e}")
+            logger.error(f"Error in batch_get_cached_thumbnail_validity: {e}")
 
         return results
 
@@ -787,7 +788,7 @@ class MetadataDatabase:
             # If os.stat fails, the file doesn't exist, so the thumbnail is not valid.
             return False
         except sqlite3.Error as e:
-            logging.error(f"Error checking thumbnail validity for {file_path}: {e}")
+            logger.error(f"Error checking thumbnail validity for {file_path}: {e}")
 
         return False
         
@@ -861,11 +862,11 @@ class MetadataDatabase:
                     ))
                 
                 self.conn.commit()
-                logging.debug(f"Committed full metadata for {file_path}. Rows affected: {cursor.rowcount}")
+                logger.debug(f"Committed full metadata for {file_path}. Rows affected: {cursor.rowcount}")
 
         except sqlite3.Error as e:
             self.conn.rollback()
-            logging.error(f"Error storing metadata for {file_path}: {e}", exc_info=True)
+            logger.error(f"Error storing metadata for {file_path}: {e}", exc_info=True)
 
         # Populate tag junction table from EXIF keywords (outside the main
         # transaction so a tag-write failure doesn't roll back metadata).
@@ -888,7 +889,7 @@ class MetadataDatabase:
                 
                 if cursor.fetchone():
                     # Update existing entry
-                    logging.debug(f"Updating rating for {os.path.basename(file_path)} to {rating} in DB.")
+                    logger.debug(f"Updating rating for {os.path.basename(file_path)} to {rating} in DB.")
                     cursor.execute('''
                         UPDATE image_metadata 
                         SET rating = ?, updated_at = ?
@@ -896,7 +897,7 @@ class MetadataDatabase:
                     ''', (rating, current_time, file_path))
                 else:
                     # Create new entry with minimal metadata
-                    logging.debug(f"Inserting new DB entry for {os.path.basename(file_path)} with rating {rating}.")
+                    logger.debug(f"Inserting new DB entry for {os.path.basename(file_path)} with rating {rating}.")
                     st = os.stat(file_path)
                     path_hash = self._get_metadata_hash(file_path, stat_result=st)
                     file_size = st.st_size
@@ -912,13 +913,13 @@ class MetadataDatabase:
                 rowcount = cursor.rowcount
                 
                 if rowcount > 0:
-                    logging.info(f"Successfully set rating for {os.path.basename(file_path)} to {rating}. Rows affected: {rowcount}.")
+                    logger.info(f"Successfully set rating for {os.path.basename(file_path)} to {rating}. Rows affected: {rowcount}.")
                 else:
-                    logging.warning(f"DB transaction for rating on {os.path.basename(file_path)} completed, but no rows were affected.")
+                    logger.warning(f"DB transaction for rating on {os.path.basename(file_path)} completed, but no rows were affected.")
                 return True
                 
         except sqlite3.Error as e:
-            logging.error(f"Error setting rating for {file_path} in database: {e}", exc_info=True)
+            logger.error(f"Error setting rating for {file_path} in database: {e}", exc_info=True)
             return False
 
     def get_orientation(self, file_path: str) -> int:
@@ -930,7 +931,7 @@ class MetadataDatabase:
                 row = cursor.fetchone()
                 return row[0] if row and row[0] else 1
         except sqlite3.Error as e:
-            logging.error(f"Error getting orientation for {file_path}: {e}")
+            logger.error(f"Error getting orientation for {file_path}: {e}")
             return 1
 
     def set_orientation(self, file_path: str, orientation: int) -> bool:
@@ -947,7 +948,7 @@ class MetadataDatabase:
                 self.conn.commit()
                 return cursor.rowcount > 0
         except sqlite3.Error as e:
-            logging.error(f"Error setting orientation for {file_path}: {e}")
+            logger.error(f"Error setting orientation for {file_path}: {e}")
             return False
 
     def batch_set_ratings(self, file_paths: List[str], rating: int) -> tuple:
@@ -989,7 +990,7 @@ class MetadataDatabase:
                                     current_time, current_time
                                 ))
                             except OSError as e:
-                                logging.warning(f"Could not stat file for batch insert: {path}, {e}")
+                                logger.warning(f"Could not stat file for batch insert: {path}, {e}")
                                 skipped += 1
 
                         if insert_data:
@@ -1000,10 +1001,10 @@ class MetadataDatabase:
                             ''', insert_data)
 
             written = len(paths_to_process) - skipped
-            logging.info(f"Successfully batch-set rating for {written}/{len(file_paths)} files to {rating}.")
+            logger.info(f"Successfully batch-set rating for {written}/{len(file_paths)} files to {rating}.")
             return (skipped == 0, written)
         except sqlite3.Error as e:
-            logging.error(f"Error in batch_set_ratings for {len(file_paths)} files: {e}", exc_info=True)
+            logger.error(f"Error in batch_set_ratings for {len(file_paths)} files: {e}", exc_info=True)
             return (False, 0)
             
     def get_files_by_rating(self, rating: int) -> List[str]:
@@ -1023,7 +1024,7 @@ class MetadataDatabase:
             return [row[0] for row in results]
 
         except sqlite3.Error as e:
-            logging.error(f"Error getting files by rating {rating}: {e}")
+            logger.error(f"Error getting files by rating {rating}: {e}")
             return []
 
     def search_by_camera(self, make: Optional[str] = None, model: Optional[str] = None) -> List[str]:
@@ -1048,7 +1049,7 @@ class MetadataDatabase:
             return [row[0] for row in results]
                 
         except sqlite3.Error as e:
-            logging.error(f"Error searching by camera: {e}")
+            logger.error(f"Error searching by camera: {e}")
             return []
             
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
@@ -1095,7 +1096,7 @@ class MetadataDatabase:
                 return [row[0] for row in results]
 
         except sqlite3.Error as e:
-            logging.error(f"Error getting filtered files: {e}", exc_info=True)
+            logger.error(f"Error getting filtered files: {e}", exc_info=True)
             return []
 
     def get_all_file_paths(self) -> List[str]:
@@ -1107,7 +1108,7 @@ class MetadataDatabase:
                 # fetchall returns a list of tuples, so we unpack them
                 return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
-            logging.error(f"Error getting all file paths from database: {e}")
+            logger.error(f"Error getting all file paths from database: {e}")
             return []
 
     def get_directory_files(self, directory_path: str, recursive: bool = False) -> List[str]:
@@ -1133,7 +1134,7 @@ class MetadataDatabase:
                 files = [row[0] for row in cursor.fetchall()]
                 return files
         except sqlite3.Error as e:
-            logging.error(f"Failed to get directory files for {directory_path} from DB: {e}")
+            logger.error(f"Failed to get directory files for {directory_path} from DB: {e}")
             return []
 
     def batch_ensure_records_exist(self, file_paths: List[str]):
@@ -1159,7 +1160,7 @@ class MetadataDatabase:
             return
 
         # Stat outside the lock to avoid blocking DB on NAS round-trips
-        logging.info(f"Batch inserting {len(new_paths)} new minimal records into database.")
+        logger.info(f"Batch inserting {len(new_paths)} new minimal records into database.")
         for path in new_paths:
             try:
                 st = os.stat(path)
@@ -1205,7 +1206,7 @@ class MetadataDatabase:
                         DELETE FROM image_metadata WHERE file_path IN ({placeholders})
                     ''', file_paths)
                     rows_affected = cursor.rowcount
-                    logging.info(f"Deleted {rows_affected} records from database for {len(file_paths)} files.")
+                    logger.info(f"Deleted {rows_affected} records from database for {len(file_paths)} files.")
 
             # 3. Delete associated cache files outside the DB lock
             for thumb_path, view_path in cache_paths_to_delete:
@@ -1213,16 +1214,16 @@ class MetadataDatabase:
                     if path:
                         try:
                             os.remove(path)
-                            logging.debug(f"Removed cache file: {path}")
+                            logger.debug(f"Removed cache file: {path}")
                         except FileNotFoundError:
                             pass
                         except OSError as e:
-                            logging.warning(f"Error removing cache file {path}: {e}")
+                            logger.warning(f"Error removing cache file {path}: {e}")
             
             return True
 
         except sqlite3.Error as e:
-            logging.error(f"Error removing records for {len(file_paths)} files: {e}", exc_info=True)
+            logger.error(f"Error removing records for {len(file_paths)} files: {e}", exc_info=True)
             return False
 
     def cleanup_missing_files(self):
@@ -1248,10 +1249,10 @@ class MetadataDatabase:
                         [(path,) for path in missing_paths]
                     )
                     self.conn.commit()
-                logging.info(f"Cleaned up {len(missing_paths)} missing files from metadata database")
+                logger.info(f"Cleaned up {len(missing_paths)} missing files from metadata database")
 
         except sqlite3.Error as e:
-            logging.error(f"Error cleaning up metadata database: {e}")
+            logger.error(f"Error cleaning up metadata database: {e}")
 
 
     def set_content_hash(self, file_path: str, content_hash: str) -> bool:
@@ -1271,12 +1272,12 @@ class MetadataDatabase:
 
                 self.conn.commit()
                 if cursor.rowcount > 0:
-                    logging.debug(f"Set content_hash for {os.path.basename(file_path)}")
+                    logger.debug(f"Set content_hash for {os.path.basename(file_path)}")
                 else:
-                    logging.warning(f"Could not set content_hash for {os.path.basename(file_path)}, file path not found in DB.")
+                    logger.warning(f"Could not set content_hash for {os.path.basename(file_path)}, file path not found in DB.")
                 return True
         except sqlite3.Error as e:
-            logging.error(f"Error setting content hash for {file_path}: {e}")
+            logger.error(f"Error setting content hash for {file_path}: {e}")
             return False
 
     def move_records(self, moves: List[Dict[str, str]]) -> int:
@@ -1304,9 +1305,9 @@ class MetadataDatabase:
                             (move["new_path"], current_time, move["old_path"]),
                         )
                         updated += cursor.rowcount
-            logging.info(f"move_records: updated {updated}/{len(moves)} rows.")
+            logger.info(f"move_records: updated {updated}/{len(moves)} rows.")
         except sqlite3.Error as e:
-            logging.error(f"Error in move_records: {e}", exc_info=True)
+            logger.error(f"Error in move_records: {e}", exc_info=True)
         return updated
 
     # ──────────────────────────────────────────────────────────────────────
@@ -1337,7 +1338,7 @@ class MetadataDatabase:
                             (file_path, tag_id),
                         )
         except sqlite3.Error as e:
-            logging.error(f"Error adding tags for {file_path}: {e}")
+            logger.error(f"Error adding tags for {file_path}: {e}")
 
     def remove_image_tags(self, file_path: str, tag_names: List[str]) -> None:
         """Removes specific tags from an image."""
@@ -1353,7 +1354,7 @@ class MetadataDatabase:
                           AND tag_id IN (SELECT id FROM tags WHERE name IN ({placeholders}))
                     ''', [file_path] + list(tag_names))
         except sqlite3.Error as e:
-            logging.error(f"Error removing tags for {file_path}: {e}")
+            logger.error(f"Error removing tags for {file_path}: {e}")
 
     def set_image_tags(self, file_path: str, tag_names: List[str]) -> None:
         """Replaces all tags for an image with the given list."""
@@ -1368,7 +1369,7 @@ class MetadataDatabase:
                             (file_path, tag_id),
                         )
         except sqlite3.Error as e:
-            logging.error(f"Error setting tags for {file_path}: {e}")
+            logger.error(f"Error setting tags for {file_path}: {e}")
 
     def batch_set_tags(self, file_paths: List[str], tag_names: List[str]) -> bool:
         """Adds tags to multiple images in a single transaction."""
@@ -1386,7 +1387,7 @@ class MetadataDatabase:
                             )
             return True
         except sqlite3.Error as e:
-            logging.error(f"Error in batch_set_tags: {e}")
+            logger.error(f"Error in batch_set_tags: {e}")
             return False
 
     def batch_remove_tags(self, file_paths: List[str], tag_names: List[str]) -> bool:
@@ -1405,7 +1406,7 @@ class MetadataDatabase:
                     ''', list(file_paths) + list(tag_names))
             return True
         except sqlite3.Error as e:
-            logging.error(f"Error in batch_remove_tags: {e}")
+            logger.error(f"Error in batch_remove_tags: {e}")
             return False
 
     def get_image_tags(self, file_path: str) -> List[str]:
@@ -1421,7 +1422,7 @@ class MetadataDatabase:
                 ''', (file_path,))
                 return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
-            logging.error(f"Error getting tags for {file_path}: {e}")
+            logger.error(f"Error getting tags for {file_path}: {e}")
             return []
 
     def batch_get_image_tags(self, file_paths: List[str]) -> Dict[str, List[str]]:
@@ -1443,7 +1444,7 @@ class MetadataDatabase:
                     result[file_path].append(tag_name)
                 return result
         except sqlite3.Error as e:
-            logging.error(f"Error batch getting tags: {e}")
+            logger.error(f"Error batch getting tags: {e}")
             return {fp: [] for fp in file_paths}
 
     def get_all_tags(self, kind: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1457,7 +1458,7 @@ class MetadataDatabase:
                     cursor.execute('SELECT id, name, kind FROM tags ORDER BY name')
                 return [{'id': r[0], 'name': r[1], 'kind': r[2]} for r in cursor.fetchall()]
         except sqlite3.Error as e:
-            logging.error(f"Error getting all tags: {e}")
+            logger.error(f"Error getting all tags: {e}")
             return []
 
     def get_directory_tags(self, directory_path: str) -> List[Dict[str, Any]]:
@@ -1474,7 +1475,7 @@ class MetadataDatabase:
                 ''', (search_path + '%',))
                 return [{'id': r[0], 'name': r[1], 'kind': r[2]} for r in cursor.fetchall()]
         except sqlite3.Error as e:
-            logging.error(f"Error getting directory tags for {directory_path}: {e}")
+            logger.error(f"Error getting directory tags for {directory_path}: {e}")
             return []
 
     def _touch_accessed_at(self, file_path: str) -> None:
@@ -1498,7 +1499,7 @@ class MetadataDatabase:
                 ''')
                 rows = cursor.fetchall()
         except sqlite3.Error as e:
-            logging.error(f"Error querying cache paths for size calculation: {e}")
+            logger.error(f"Error querying cache paths for size calculation: {e}")
             return 0
 
         total = 0
@@ -1523,7 +1524,7 @@ class MetadataDatabase:
                 ''')
                 rows = cursor.fetchall()
         except sqlite3.Error as e:
-            logging.error(f"Error querying for LRU eviction: {e}")
+            logger.error(f"Error querying for LRU eviction: {e}")
             return 0
 
         record_sizes: list[tuple[str, int]] = []
@@ -1552,7 +1553,7 @@ class MetadataDatabase:
             bytes_to_free += size
 
         if paths_to_remove:
-            logging.info(
+            logger.info(
                 f"Cache eviction: removing {len(paths_to_remove)} LRU records "
                 f"to free ~{bytes_to_free / (1024*1024):.1f} MB"
             )
@@ -1578,7 +1579,7 @@ class MetadataDatabase:
                 )
                 self.conn.commit()
         except sqlite3.Error as e:
-            logging.error(f"ledger_batch_insert failed: {e}")
+            logger.error(f"ledger_batch_insert failed: {e}")
 
     def ledger_mark_complete(self, file_path: str) -> None:
         """Mark a file as fully processed. No-op if the path isn't in the ledger."""
@@ -1590,7 +1591,7 @@ class MetadataDatabase:
                 )
                 self.conn.commit()
         except sqlite3.Error as e:
-            logging.error(f"ledger_mark_complete failed: {e}")
+            logger.error(f"ledger_mark_complete failed: {e}")
 
     def ledger_get_incomplete(self, scan_root: str) -> List[str]:
         """Return file paths that were discovered but not yet processed."""
@@ -1603,7 +1604,7 @@ class MetadataDatabase:
                 )
                 return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
-            logging.error(f"ledger_get_incomplete failed: {e}")
+            logger.error(f"ledger_get_incomplete failed: {e}")
             return []
 
     def ledger_get_walked_dirs(self, scan_root: str) -> set:
@@ -1622,7 +1623,7 @@ class MetadataDatabase:
                 )
                 return {os.path.dirname(row[0]) for row in cursor.fetchall()}
         except sqlite3.Error as e:
-            logging.error(f"ledger_get_walked_dirs failed: {e}")
+            logger.error(f"ledger_get_walked_dirs failed: {e}")
             return set()
 
     def ledger_prune_complete(self, scan_root: str) -> int:
@@ -1636,7 +1637,7 @@ class MetadataDatabase:
                 self.conn.commit()
                 return cursor.rowcount
         except sqlite3.Error as e:
-            logging.error(f"ledger_prune_complete failed: {e}")
+            logger.error(f"ledger_prune_complete failed: {e}")
             return 0
 
     def ledger_get_all_scan_roots(self) -> List[str]:
@@ -1648,7 +1649,7 @@ class MetadataDatabase:
                 )
                 return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
-            logging.error(f"ledger_get_all_scan_roots failed: {e}")
+            logger.error(f"ledger_get_all_scan_roots failed: {e}")
             return []
 
     def close(self):
@@ -1656,7 +1657,7 @@ class MetadataDatabase:
         with self._lock:
             if self.conn:
                 self.conn.close()
-                logging.info(f"Metadata database connection closed: {self.db_path}")
+                logger.info(f"Metadata database connection closed: {self.db_path}")
 
 # Global database instance
 _metadata_database: Optional[MetadataDatabase] = None

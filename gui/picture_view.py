@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QPointF, QSizeF, QPoint, QTimer
 from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QKeyEvent
 
 import logging
+logger = logging.getLogger(__name__)
 import os
 import time
 import threading
@@ -63,10 +64,10 @@ class PictureView(QWidget):
                     normalized_position=norm_pos
                 )
                 event_system.publish(event_data)
-                logging.debug(f"Published inspector event from picture view: {self._current_path} at {norm_pos.x():.2f}, {norm_pos.y():.2f}")
+                logger.debug(f"Published inspector event from picture view: {self._current_path} at {norm_pos.x():.2f}, {norm_pos.y():.2f}")
                     
         except Exception as e:  # why: called from mouse events; geometry errors must not crash the widget
-            logging.error(f"Error updating inspector in picture view: {e}", exc_info=True)
+            logger.error(f"Error updating inspector in picture view: {e}", exc_info=True)
 
     def loadImage(self, image_path: str, force_reload: bool = False) -> bool:
         """Load an image from the given path, preferring full resolution cached version."""
@@ -75,7 +76,7 @@ class PictureView(QWidget):
             return True  # Already loaded, and not forced to reload
         
         if not self.service:
-            logging.error("Service not initialized in PictureView.")
+            logger.error("Service not initialized in PictureView.")
             return False
 
         # Capture current view state before loading so we can restore it
@@ -90,7 +91,7 @@ class PictureView(QWidget):
         result = self.service.request_view_image(image_path)
 
         if result is None:
-            logging.warning(f"Failed to request view image (comm failure), will retry: {image_path}")
+            logger.warning(f"Failed to request view image (comm failure), will retry: {image_path}")
             self._picture_base.setImage(QImage())
             self._current_path = image_path
             event_system.publish(StatusMessageEventData(
@@ -182,7 +183,7 @@ class PictureView(QWidget):
 
             return True
         else:
-            logging.error(f"Failed to load image: {image_path}")
+            logger.error(f"Failed to load image: {image_path}")
             return False
         
     @property
@@ -198,7 +199,7 @@ class PictureView(QWidget):
                 if resp and path in resp:
                     rating = resp[path].get("rating", 0) or 0
             except Exception as e:  # why: service calls can raise errors; emit zero so status bar gets a value
-                logging.debug(f"Rating fetch failed for {path}: {e}")
+                logger.debug(f"Rating fetch failed for {path}: {e}")
         self._rating_ready.emit(path, int(rating))
 
     @Slot(str, int)
@@ -222,7 +223,7 @@ class PictureView(QWidget):
         # If this is the image we are waiting for, load it.
         view_ready = data.view_image_path or data.view_image_source == "memory"
         if view_ready and data.image_entry.path == self._current_path:
-            logging.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
+            logger.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
             self.loadImage(data.image_entry.path, force_reload=True)
 
     def _retry_load(self, image_path: str) -> None:

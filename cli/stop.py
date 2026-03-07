@@ -4,6 +4,8 @@ import errno
 import fcntl
 import logging
 import os
+
+logger = logging.getLogger(__name__)
 import signal
 import time
 
@@ -45,7 +47,7 @@ def kill_by_pid_file(pid_path: str, sig: int = signal.SIGTERM) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        logging.error("No permission to signal daemon PID %d", pid)
+        logger.error("No permission to signal daemon PID %d", pid)
         return False
 
 
@@ -64,26 +66,26 @@ def stop_daemon(timeout: float = 5.0) -> bool:
     pid_path = pid_file_path(config_manager)
 
     if not flock_is_held(pid_path):
-        logging.info("Daemon is not running (no PID lock).")
+        logger.info("Daemon is not running (no PID lock).")
         return True
 
-    logging.info("Daemon holds PID lock; sending SIGTERM...")
+    logger.info("Daemon holds PID lock; sending SIGTERM...")
     kill_by_pid_file(pid_path, signal.SIGTERM)
 
     if wait_for_flock_release(pid_path, timeout=timeout):
-        logging.info("Daemon exited cleanly.")
+        logger.info("Daemon exited cleanly.")
         return True
 
     # Escalate: SIGKILL
-    logging.warning("Daemon did not exit in %.1fs; sending SIGKILL...", timeout)
+    logger.warning("Daemon did not exit in %.1fs; sending SIGKILL...", timeout)
     kill_by_pid_file(pid_path, signal.SIGKILL)
     time.sleep(1.0)
 
     if not flock_is_held(pid_path):
-        logging.info("Daemon killed.")
+        logger.info("Daemon killed.")
         return True
 
-    logging.error("Failed to stop daemon even with SIGKILL.")
+    logger.error("Failed to stop daemon even with SIGKILL.")
     return False
 
 

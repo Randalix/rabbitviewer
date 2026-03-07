@@ -1,4 +1,5 @@
 import logging
+logger = logging.getLogger(__name__)
 import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List
@@ -80,7 +81,7 @@ class ModalMenu(QWidget):
         ctx = self._build_context()
         root = self._menus.get(menu_id)
         if not root:
-            logging.warning(f"ModalMenu: unknown menu '{menu_id}'")
+            logger.warning(f"ModalMenu: unknown menu '{menu_id}'")
             return
 
         self._context = ctx
@@ -98,7 +99,7 @@ class ModalMenu(QWidget):
             if child.visible is None or child.visible(self._context)
         ]
         self._key_map = {item.key.lower(): item for item in self._visible_items if item.key}
-        logging.debug(f"ModalMenu._show_node: {node.label}, {len(self._visible_items)} visible, keys={list(self._key_map.keys())}")
+        logger.debug(f"ModalMenu._show_node: {node.label}, {len(self._visible_items)} visible, keys={list(self._key_map.keys())}")
 
         if not self._visible_items:
             self._close()
@@ -160,14 +161,14 @@ class ModalMenu(QWidget):
             if isinstance(event, QMouseEvent):
                 global_pos = event.globalPosition().toPoint()
                 if not self.geometry().contains(global_pos):
-                    logging.debug("ModalMenu: click outside, dismissing")
+                    logger.debug("ModalMenu: click outside, dismissing")
                     self._close()
                     return True
 
         return False
 
     def _handle_key(self, event: QKeyEvent):
-        logging.debug(f"ModalMenu._handle_key: key={event.key()}, text='{event.text()}'")
+        logger.debug(f"ModalMenu._handle_key: key={event.key()}, text='{event.text()}'")
         if event.key() == Qt.Key_Escape:
             self._close()
             return
@@ -179,15 +180,15 @@ class ModalMenu(QWidget):
                 self._breadcrumb.append(item.label)
                 self._show_node(item)
             elif item.action:
-                logging.debug(f"ModalMenu: running action for '{item.label}'")
+                logger.debug(f"ModalMenu: running action for '{item.label}'")
                 self._close()
                 item.action()
             elif item.script:
-                logging.debug(f"ModalMenu: running script '{item.script}'")
+                logger.debug(f"ModalMenu: running script '{item.script}'")
                 self._close()
                 self._script_manager.run_script(item.script)
         else:
-            logging.debug(f"ModalMenu: unmapped key '{text}', dismissing")
+            logger.debug(f"ModalMenu: unmapped key '{text}', dismissing")
             self._close()
 
     # ------------------------------------------------------------------
@@ -231,7 +232,7 @@ class ModalMenu(QWidget):
     def _close(self):
         if not self._is_open:
             return
-        logging.debug("ModalMenu._close")
+        logger.debug("ModalMenu._close")
         self._is_open = False
         app = QApplication.instance()
         if app:

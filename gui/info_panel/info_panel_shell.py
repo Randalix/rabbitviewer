@@ -39,7 +39,8 @@ class InfoPanelShell(QWidget):
         self._current_path: Optional[str] = None
         self._pending_path: Optional[str] = None
         self._sections: dict[str, CollapsibleSection] = {}
-        self._collapsed_state: dict[str, bool] = {}
+        self._collapsed_state: dict[str, bool] = {"EXIF": True}
+        self._pending_rows: dict[str, list] = {}
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
@@ -72,7 +73,8 @@ class InfoPanelShell(QWidget):
 
     def _flush_pending_path(self):
         path = self._pending_path
-        if path and path != self._current_path:
+        if path:
+            self._pending_path = None
             self._current_path = path
             self._refresh_sections()
 
@@ -184,12 +186,13 @@ class InfoPanelShell(QWidget):
         # Keep last display — don't clear on leave
 
     def refresh_if_showing(self, path: str):
-        """Re-render sections if currently displaying this path."""
-        if path == self._current_path or path == self._pending_path:
-            self._current_path = path
-            self._pending_path = None
-            self._refresh_timer.stop()
-            self._refresh_sections()
+        # why: metadata fetch completed — schedule a debounced refresh so we
+        # don't force a synchronous section rebuild on every image change.
+        if path == self._current_path:
+            self._pending_path = path
+            self._refresh_timer.start()
+        elif path == self._pending_path:
+            pass  # timer already running for this path
 
     # -- Internal --
 
@@ -207,26 +210,34 @@ class InfoPanelShell(QWidget):
         sections = self._provider.get_sections(self._current_path)
         new_titles = {s.title for s in sections}
 
-        # Remove stale
         for title in list(self._sections.keys()):
             if title not in new_titles:
                 widget = self._sections.pop(title)
+                self._pending_rows.pop(title, None)
                 self._scroll_layout.removeWidget(widget)
                 widget.deleteLater()
 
-        # Update or create
         insert_idx = 0
         for section_data in sections:
+            is_collapsed = self._collapsed_state.get(section_data.title, False)
             if section_data.title in self._sections:
-                self._sections[section_data.title].set_rows(section_data.rows)
+                if is_collapsed:
+                    # why: defer row updates for collapsed sections — setText on
+                    # hundreds of hidden labels is the main perf bottleneck.
+                    self._pending_rows[section_data.title] = section_data.rows
+                else:
+                    self._pending_rows.pop(section_data.title, None)
+                    self._sections[section_data.title].set_rows(section_data.rows)
             else:
                 widget = CollapsibleSection(section_data.title)
-                widget.set_rows(section_data.rows)
-                if section_data.title in self._collapsed_state:
-                    widget.set_collapsed(self._collapsed_state[section_data.title])
+                if is_collapsed:
+                    widget.set_collapsed(True)
+                    self._pending_rows[section_data.title] = section_data.rows
+                else:
+                    widget.set_rows(section_data.rows)
                 widget.toggled.connect(
                     lambda collapsed, t=section_data.title:
-                        self._collapsed_state.__setitem__(t, collapsed)
+                        self._on_section_toggled(t, collapsed)
                 )
                 self._sections[section_data.title] = widget
                 self._scroll_layout.insertWidget(insert_idx, widget)
@@ -241,6 +252,12 @@ class InfoPanelShell(QWidget):
             self._pinned_path = None
             self._pin_button.setText("Pin")
         self._update_window_title()
+
+    def _on_section_toggled(self, title: str, collapsed: bool):
+        self._collapsed_state[title] = collapsed
+        if not collapsed and title in self._pending_rows:
+            # why: apply deferred rows now that the section is visible
+            self._sections[title].set_rows(self._pending_rows.pop(title))
 
     def _update_window_title(self):
         base = f"Info: {self._provider.provider_name}"

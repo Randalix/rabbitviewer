@@ -2,6 +2,7 @@ from PySide6.QtCore import QObject, QPointF
 from core.event_system import event_system, EventType, InspectorEventData
 import time
 import logging
+logger = logging.getLogger(__name__)
 
 
 class InspectorEventHandler(QObject):
@@ -26,8 +27,8 @@ class InspectorEventHandler(QObject):
                     normalized_position=norm_pos
                 )
                 event_system.publish(event_data)
-                logging.debug(f"Published inspector event from {self.source_name}: {image_path} at {norm_x:.2f}, {norm_y:.2f}")
+                logger.debug(f"Published inspector event from {self.source_name}: {image_path} at {norm_x:.2f}, {norm_y:.2f}")
                 
         except Exception as e:
             # why: guard against bad widget_size or event_system errors without crashing the caller
-            logging.error(f"Error publishing inspector event from {self.source_name}: {e}", exc_info=True)
+            logger.error(f"Error publishing inspector event from {self.source_name}: {e}", exc_info=True)

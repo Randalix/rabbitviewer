@@ -11,7 +11,8 @@ DEFAULT_CONFIG = {
     "inspector": {
         "zoom_factor": 3.0,
     },
-    "logging_level": "DEBUG",
+    "logging_level": "INFO",
+    "logging_levels": {},
     "gui": {
         "background_color": "#000000",
         "spacing": 1,
@@ -92,6 +93,19 @@ DEFAULT_CONFIG = {
         "menu:tags": {
             "sequence": "T",
             "description": "Open tags menu"
+        },
+        "menu:export": {
+            "sequence": "X",
+            "description": "Open export menu"
+        },
+        "menu:rotate": {
+            "sequence": "R",
+            "description": "Open rotate menu"
+        },
+        "script:delete_selected": {
+            "sequence": "Shift+R",
+            "description": "Delete selected images",
+            "extra_sequences": ["Del"]
         },
         "open_comfyui": {
             "sequence": "G",

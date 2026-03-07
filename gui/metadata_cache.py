@@ -1,4 +1,5 @@
 import logging
+logger = logging.getLogger(__name__)
 import threading
 from typing import Dict, Optional, List
 from collections import OrderedDict
@@ -55,5 +56,5 @@ class MetadataCache:
                 self.put_batch(resp)
                 return resp
         except Exception as e:
-            logging.debug(f"MetadataCache fetch failed: {e}")
+            logger.debug(f"MetadataCache fetch failed: {e}")
         return {}

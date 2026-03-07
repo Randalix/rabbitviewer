@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 import logging
+logger = logging.getLogger(__name__)
 
 from gui.components.tag_input import TagInput
 
@@ -32,7 +33,6 @@ class TagEditorDialog(QDialog):
         layout.addWidget(self._label)
 
         self.tag_input = TagInput()
-        self.tag_input.tags_changed.connect(self._on_confirm)
         self.tag_input.confirmed.connect(self._on_enter_confirmed)
         layout.addWidget(self.tag_input)
 
@@ -57,7 +57,7 @@ class TagEditorDialog(QDialog):
         to_add = sorted(current_set - self._original_tags)
         to_remove = sorted(self._original_tags - current_set)
         if to_add or to_remove:
-            logging.debug(f"TagEditor: add={to_add}, remove={to_remove}")
+            logger.debug(f"TagEditor: add={to_add}, remove={to_remove}")
             self.tags_confirmed.emit(to_add, to_remove)
             self._original_tags = current_set
 

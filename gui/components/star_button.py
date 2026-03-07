@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QPushButton, QApplication
 from PySide6.QtCore import Qt, Signal, QPoint
 import logging
+logger = logging.getLogger(__name__)
 from gui.components.star_drag_context import StarDragContext
 
 
@@ -56,7 +57,7 @@ class StarButton(QPushButton):
             self._drag.last_button = self
             self.set_state(self._drag.initial_state)
             event.accept()
-            logging.debug(f"Mouse press on button {self.index}, drag state: {self._drag.initial_state}")
+            logger.debug(f"Mouse press on button {self.index}, drag state: {self._drag.initial_state}")
         else:
             super().mousePressEvent(event)
 
@@ -68,7 +69,7 @@ class StarButton(QPushButton):
                 if self._drag.last_button != self:
                     self.set_state(self._drag.initial_state)
                     self._drag.last_button = self
-                    logging.debug(f"Dragged to button {self.index}, set state to {self._drag.initial_state}")
+                    logger.debug(f"Dragged to button {self.index}, set state to {self._drag.initial_state}")
             self._check_drag_on_siblings(global_pos)
             event.accept()
         else:
@@ -84,13 +85,13 @@ class StarButton(QPushButton):
                 if sibling.rect().contains(local_pos):
                     sibling.set_state(self._drag.initial_state)
                     self._drag.last_button = sibling
-                    logging.debug(f"Dragged to sibling button {sibling.index}, set state to {self._drag.initial_state}")
+                    logger.debug(f"Dragged to sibling button {sibling.index}, set state to {self._drag.initial_state}")
                     break
 
     def mouseReleaseEvent(self, event):
         """Handles mouse release events."""
         if event.button() == Qt.LeftButton:
-            logging.debug(f"Mouse release, ending drag operation")
+            logger.debug(f"Mouse release, ending drag operation")
             self._drag.is_active = False
             self._drag.last_button = None
             event.accept()
@@ -105,7 +106,7 @@ class StarButton(QPushButton):
                 if self._drag.last_button != self:
                     self.set_state(self._drag.initial_state)
                     self._drag.last_button = self
-                    logging.debug(f"Entered button {self.index} during drag, set state to {self._drag.initial_state}")
+                    logger.debug(f"Entered button {self.index} during drag, set state to {self._drag.initial_state}")
         super().enterEvent(event)
 
     def leaveEvent(self, event):

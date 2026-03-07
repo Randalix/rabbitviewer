@@ -2,6 +2,7 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QLab
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 import logging
+logger = logging.getLogger(__name__)
 
 from gui.components.star_button import StarButton, StarDragContext
 
@@ -82,13 +83,13 @@ class FilterDialog(QDialog):
     def _on_star_button_toggled(self, index: int, new_state: bool):
         # Qt signal delivers int; cast to bool for list consistency
         state_as_bool = bool(new_state)
-        logging.debug(f"Handler received: index={index}, new_state={new_state} (bool: {state_as_bool}). States BEFORE: {self.star_states}")
+        logger.debug(f"Handler received: index={index}, new_state={new_state} (bool: {state_as_bool}). States BEFORE: {self.star_states}")
         if 0 <= index < len(self.star_states):
             self.star_states[index] = state_as_bool
             self.stars_changed.emit(list(self.star_states))
-            logging.debug(f"Star button {index} toggled. States AFTER: {self.star_states}")
+            logger.debug(f"Star button {index} toggled. States AFTER: {self.star_states}")
         else:
-            logging.error(f"Invalid index {index} received in _on_star_button_toggled")
+            logger.error(f"Invalid index {index} received in _on_star_button_toggled")
 
     def hideEvent(self, event):
         if self.debounce_timer.isActive():

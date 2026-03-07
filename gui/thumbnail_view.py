@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import time
 import logging
+logger = logging.getLogger(__name__)
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, List, Set
@@ -111,7 +112,7 @@ class ThumbnailLabel(QLabel):
         except (AttributeError, TypeError) as e:
             # why: rect() can return garbage dimensions during widget teardown if a
             # mouse event fires after hide() but before deletion.
-            logging.error("Error queuing inspector event from thumbnail: %s", e, exc_info=True)
+            logger.error("Error queuing inspector event from thumbnail: %s", e, exc_info=True)
 
     def _flushInspectorEvent(self):
         pos = self._pending_norm_pos
@@ -136,7 +137,7 @@ class ThumbnailLabel(QLabel):
                 painter.end()
             except Exception:
                 # why: renderer crash must not leave QPainter open or break label rendering
-                logging.exception("[overlay] paintEvent error for idx %d", self._original_idx)
+                logger.exception("[overlay] paintEvent error for idx %d", self._original_idx)
 
     def setSelected(self, selected: bool):
         if self.selected != selected:
@@ -567,7 +568,7 @@ class ThumbnailViewWidget(QFrame):
         self._startup_first_scan_progress = False
         self._startup_first_previews_ready = False
         self._startup_inline_thumb_count = 0
-        logging.info("[startup] load_directory called for %s", directory_path)
+        logger.info("[startup] load_directory called for %s", directory_path)
         self.clear_layout()
         # Set scan state AFTER clear_layout() which resets _scan_active to False
         self._scan_batch_pending = False
@@ -587,7 +588,7 @@ class ThumbnailViewWidget(QFrame):
         self._load_directory_deferred(directory_path, recursive)
 
     def _load_directory_deferred(self, directory_path: str, recursive: bool = True):
-        logging.info("Querying daemon for files in: %s (Recursive: %s)", directory_path, recursive)
+        logger.info("Querying daemon for files in: %s (Recursive: %s)", directory_path, recursive)
         thread = threading.Thread(target=self._get_files_from_daemon, args=(directory_path, recursive), daemon=True)
         thread.start()
 
@@ -597,7 +598,7 @@ class ThumbnailViewWidget(QFrame):
             files = response.get('files', [])
             thumbnail_paths = response.get('thumbnail_paths', {})
             thumb_count = len(thumbnail_paths)
-            logging.info(
+            logger.info(
                 "[trace] daemon response: files=%d, thumbs=%d for %s",
                 len(files), thumb_count, directory_path,
             )
@@ -608,10 +609,10 @@ class ThumbnailViewWidget(QFrame):
             # Feed cached thumbnail paths directly into the preview pipeline
             # so the GUI loads QImages from local cache without a daemon round-trip.
             if thumbnail_paths:
-                logging.info("[startup] %d cached thumbnail paths from initial response", len(thumbnail_paths))
+                logger.info("[startup] %d cached thumbnail paths from initial response", len(thumbnail_paths))
                 self._initial_thumbs_signal.emit(thumbnail_paths)
         else:
-            logging.error("Failed to request file list for %s from daemon. Response: %s", directory_path, response)
+            logger.error("Failed to request file list for %s from daemon. Response: %s", directory_path, response)
 
     @Slot(list)
     def _on_initial_files_received(self, files: list):
@@ -622,7 +623,7 @@ class ThumbnailViewWidget(QFrame):
         self._folder_is_cached = len(files) > 0
         if self._folder_is_cached:
             self._is_loading = False
-        logging.info(
+        logger.info(
             "[trace] _on_initial_files_received: %d files, cached=%s, is_loading=%s",
             len(files), self._folder_is_cached, self._is_loading,
         )
@@ -665,7 +666,7 @@ class ThumbnailViewWidget(QFrame):
     def _on_overlay_event(self, event_data: ThumbnailOverlayEventData) -> None:
         action = event_data.action
         paths = event_data.paths
-        logging.debug("[overlay] _on_overlay_event: action=%s, paths=%d, renderer=%s",
+        logger.debug("[overlay] _on_overlay_event: action=%s, paths=%d, renderer=%s",
                       action, len(paths), event_data.renderer_name)
 
         if action == "show":
@@ -696,7 +697,7 @@ class ThumbnailViewWidget(QFrame):
                     if label:
                         label.update()
                         matched += 1
-            logging.debug("[overlay] show: %d/%d paths matched to labels", matched, len(paths))
+            logger.debug("[overlay] show: %d/%d paths matched to labels", matched, len(paths))
 
         elif action == "remove":
             for path in paths:
@@ -716,13 +717,13 @@ class ThumbnailViewWidget(QFrame):
 
     @Slot(object)
     def _on_previews_ready(self, data: PreviewsReadyData) -> None:
-        logging.debug("[trace] previews_ready: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        logger.debug("[trace] previews_ready: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
         if not self._startup_first_previews_ready and self._startup_t0 is not None:
             self._startup_first_previews_ready = True
             elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-            logging.info("[startup] first previews_ready: %.0f ms after load_directory", elapsed_ms)
+            logger.info("[startup] first previews_ready: %.0f ms after load_directory", elapsed_ms)
         image_path = data.image_entry.path
-        logging.info("ThumbnailViewWidget received notification: Previews ready for %s", image_path)
+        logger.info("ThumbnailViewWidget received notification: Previews ready for %s", image_path)
         if data.thumbnail_path:
             # Skip notifications for files not in the current directory.
             # Daemon background work (watchdog, previous sessions) can produce
@@ -737,18 +738,18 @@ class ThumbnailViewWidget(QFrame):
             if not self._preview_tick_timer.isActive():
                 self._preview_tick_timer.start()
         else:
-            logging.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
+            logger.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
 
     @Slot(object)
     def _on_scan_progress(self, data: ScanProgressData) -> None:
-        logging.debug("[trace] scan_progress: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        logger.debug("[trace] scan_progress: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
         try:
             first_batch = not self._startup_first_scan_progress
             if first_batch and self._startup_t0 is not None:
                 self._startup_first_scan_progress = True
                 elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                logging.info("[startup] first scan_progress: %.0f ms after load_directory (%d files in batch)", elapsed_ms, len(data.files))
-            logging.info("Received scan_progress batch for '%s' with %d files.", data.path, len(data.files))
+                logger.info("[startup] first scan_progress: %.0f ms after load_directory (%d files in batch)", elapsed_ms, len(data.files))
+            logger.info("Received scan_progress batch for '%s' with %d files.", data.path, len(data.files))
             self._add_image_batch(sorted(f.path for f in data.files))
             # Mark that the first layout after this batch should seed the
             # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
@@ -759,22 +760,22 @@ class ThumbnailViewWidget(QFrame):
         except Exception as e:
             # why: protocol extensions in future daemon versions may produce
             # unexpected field types; isolate to prevent notification loop crash.
-            logging.error("Unexpected exception in scan_progress handler: %s", e, exc_info=True)
+            logger.error("Unexpected exception in scan_progress handler: %s", e, exc_info=True)
 
     @Slot(object)
     def _on_files_removed(self, data: FilesRemovedData) -> None:
-        logging.debug("[trace] files_removed: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        logger.debug("[trace] files_removed: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
         if data.files:
-            logging.info("Removing %d ghost files from view.", len(data.files))
+            logger.info("Removing %d ghost files from view.", len(data.files))
             self.remove_images([f.path for f in data.files])
 
     @Slot(object)
     def _on_scan_complete(self, data: ScanCompleteData) -> None:
-        logging.debug("[trace] scan_complete: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        logger.debug("[trace] scan_complete: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
         if self._startup_t0 is not None:
             elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-            logging.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
-        logging.info(
+            logger.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
+        logger.info(
             "[virtual] scan_complete: all_files=%d, labels=%d, current_files(in layout)=%d",
             len(self.all_files), len(self.labels), len(self.current_files),
         )
@@ -789,7 +790,7 @@ class ThumbnailViewWidget(QFrame):
             # append-only fast path.  Do one final sorted reorder (no-op if
             # all_files is already sorted) and snap the container height.
             top_file = self._get_first_visible_file()
-            logging.info(
+            logger.info(
                 "[virtual] scan_complete: final sort, top_file=%s, all_files=%d",
                 os.path.basename(top_file) if top_file else None, len(self.all_files),
             )
@@ -816,7 +817,7 @@ class ThumbnailViewWidget(QFrame):
 
         new_files = [f for f in files if f not in self._all_files_set]
         if not new_files:
-            logging.debug("[virtual] _add_image_batch: all %d files already known, skipping", len(files))
+            logger.debug("[virtual] _add_image_batch: all %d files already known, skipping", len(files))
             return
 
         start_idx = len(self.all_files)
@@ -832,7 +833,7 @@ class ThumbnailViewWidget(QFrame):
                 thumb_path = self._initial_thumb_paths.pop(f)
                 self._thumb_path_cache[orig_idx] = thumb_path
 
-        logging.info(
+        logger.info(
             "[virtual] _add_image_batch: +%d new files (all_files=%d)",
             len(new_files), len(self.all_files),
         )
@@ -849,7 +850,7 @@ class ThumbnailViewWidget(QFrame):
                     self._original_to_visible_mapping[orig_idx] = vis_idx
                     self._visible_original_indices.append(orig_idx)
                 self._scan_batch_pending = True
-                logging.debug(
+                logger.debug(
                     "[virtual] _scan_active append: +%d files (current_files=%d, coalesce_active=%s)",
                     len(new_files), len(self.current_files), self._scan_coalesce_timer.isActive(),
                 )
@@ -885,7 +886,7 @@ class ThumbnailViewWidget(QFrame):
             return
         self._scan_batch_pending = False
         self._scan_first_batch_flushed = True
-        logging.info(
+        logger.info(
             "[virtual] _flush_scan_layout: current_files=%d, all_files=%d",
             len(self.current_files), len(self.all_files),
         )
@@ -1045,7 +1046,7 @@ class ThumbnailViewWidget(QFrame):
         except (KeyError, IndexError) as e:
             # why: index/path maps can desync if a watchdog removal races with an
             # in-progress remove_images call on the same set of paths.
-            logging.error("Error removing images: %s", e, exc_info=True)
+            logger.error("Error removing images: %s", e, exc_info=True)
 
     def reorder_files(self, ordered_paths: list):
         """Reorder all_files to match *ordered_paths* and refresh the layout.
@@ -1127,7 +1128,7 @@ class ThumbnailViewWidget(QFrame):
         """
         visible_idx = self._original_to_visible_mapping.get(original_idx)
         if visible_idx is None:
-            logging.debug("Original index %d not visible (filtered out)", original_idx)
+            logger.debug("Original index %d not visible (filtered out)", original_idx)
             return
 
         if self._virtual_grid:
@@ -1241,7 +1242,7 @@ class ThumbnailViewWidget(QFrame):
             pixmap = QPixmap.fromImage(image)
 
         if is_error:
-            logging.error("Thumbnail generation failed for %s", original_path, exc_info=bool(error))
+            logger.error("Thumbnail generation failed for %s", original_path, exc_info=bool(error))
 
         original_idx = self._path_to_idx.get(original_path, -1)
         if original_idx >= 0:
@@ -1255,7 +1256,7 @@ class ThumbnailViewWidget(QFrame):
             label = self.labels.get(original_idx)
             if label:
                 label.updateThumbnail(pixmap)
-                logging.debug("[thumb] applied thumbnail for %s (error=%s)", os.path.basename(original_path), is_error)
+                logger.debug("[thumb] applied thumbnail for %s (error=%s)", os.path.basename(original_path), is_error)
 
         if original_path in self.pending_thumbnails:
             self.pending_thumbnails.remove(original_path)
@@ -1296,7 +1297,7 @@ class ThumbnailViewWidget(QFrame):
                 self._thumb_path_cache[orig_idx] = thumbnail_path
                 self._thumbnail_generated_signal.emit(image_path, image, None)
             else:
-                logging.warning("Failed to load thumbnail: %s", thumbnail_path)
+                logger.warning("Failed to load thumbnail: %s", thumbnail_path)
 
         if not self._pending_previews:
             self._preview_tick_timer.stop()
@@ -1415,16 +1416,16 @@ class ThumbnailViewWidget(QFrame):
             if hovered_path:
                 self._restore_pre_click_selection()
                 self.doubleClicked.emit(hovered_path)
-                logging.debug("Double-clicked on thumbnail, emitting signal for path: %s", hovered_path)
+                logger.debug("Double-clicked on thumbnail, emitting signal for path: %s", hovered_path)
             else:
-                logging.debug("Double-click, but no image path hovered.")
+                logger.debug("Double-click, but no image path hovered.")
 
     def setHighlightedThumbnail(self, image_path: str):
         """Briefly highlight a thumbnail on return from picture view without changing selection."""
         try:
             original_idx = self._path_to_idx.get(image_path, -1)
             if original_idx < 0:
-                logging.warning("Image %s not found in all_files during highlight attempt.", image_path)
+                logger.warning("Image %s not found in all_files during highlight attempt.", image_path)
                 return
 
             if original_idx in self._original_to_visible_mapping:
@@ -1434,14 +1435,14 @@ class ThumbnailViewWidget(QFrame):
                     self.ensure_visible(original_idx, center=True)
                     QTimer.singleShot(1000, lambda: label_to_highlight.setSelected(False))
                 else:
-                    logging.debug("Label for original index %d not found.", original_idx)
+                    logger.debug("Label for original index %d not found.", original_idx)
             else:
-                logging.debug("Image %s (original index %d) not currently visible.", image_path, original_idx)
+                logger.debug("Image %s (original index %d) not currently visible.", image_path, original_idx)
 
         except (AttributeError, RuntimeError) as e:
             # why: label or scroll bar can be partially torn down if a directory
             # reload races with the highlight timer firing.
-            logging.error("Error highlighting thumbnail: %s", e, exc_info=True)
+            logger.error("Error highlighting thumbnail: %s", e, exc_info=True)
 
     def _get_thumbnail_at_pos(self, pos: QPoint) -> Optional[int]:
         if not self._virtual_grid:
@@ -1488,13 +1489,13 @@ class ThumbnailViewWidget(QFrame):
         filter is computed locally (fast path).  Otherwise the daemon is
         queried on a background thread so the GUI never blocks on I/O.
         """
-        logging.info(
+        logger.info(
             "[virtual] reapply_filters: is_loading=%s, all_files=%d, labels=%d",
             self._is_loading, len(self.all_files), len(self.labels),
         )
 
         if not self.all_files or not self.service:
-            logging.warning("Cannot apply filters: file list or service is not ready.")
+            logger.warning("Cannot apply filters: file list or service is not ready.")
             return
 
         if self._is_loading:
@@ -1525,12 +1526,12 @@ class ThumbnailViewWidget(QFrame):
             if response is not None:
                 self._filtered_paths_ready.emit(set(response))
             else:
-                logging.error("Failed to get filtered paths from daemon.")
+                logger.error("Failed to get filtered paths from daemon.")
                 self._filtered_paths_ready.emit(None)
         except Exception as e:
             # why: service calls can raise; broad guard ensures
             # _filtered_paths_ready always fires to unlock _filter_in_flight.
-            logging.error("Error fetching filtered paths: %s", e, exc_info=True)
+            logger.error("Error fetching filtered paths: %s", e, exc_info=True)
             self._filtered_paths_ready.emit(None)
 
     @Slot(object)
@@ -1558,7 +1559,7 @@ class ThumbnailViewWidget(QFrame):
         count_changed = len(self.all_files) != self._last_layout_file_count
         will_update = hidden_changed or count_changed
 
-        logging.info(
+        logger.info(
             "[virtual] _apply_filter_results: all_files=%d, visible_paths=%d, "
             "hidden=%d, hidden_changed=%s, count_changed=%s, will_update=%s",
             len(self.all_files), len(visible_paths), len(new_hidden_indices),
@@ -1569,7 +1570,7 @@ class ThumbnailViewWidget(QFrame):
             self._hidden_indices = new_hidden_indices
             self._update_filtered_layout()
             self._last_layout_file_count = len(self.all_files)
-            logging.info(
+            logger.info(
                 "[virtual] _update_filtered_layout done: current_files=%d, materialized_labels=%d",
                 len(self.current_files), len(self.labels),
             )
@@ -1826,7 +1827,7 @@ class ThumbnailViewWidget(QFrame):
                     # Loaded — no longer stale.
                     self._stale_request_ts.pop(p, None)
             if stale_evicted:
-                logging.info(
+                logger.info(
                     "[heatmap] re-requesting %d stale thumbnails", stale_evicted,
                 )
                 # Fall through to delta computation with the evicted entries.
@@ -1855,7 +1856,7 @@ class ThumbnailViewWidget(QFrame):
 
         # --- Send to daemon (with stale-request protection) ---
         if delta_upgrade or paths_to_downgrade or delta_fullres or fullres_to_cancel:
-            logging.debug(
+            logger.debug(
                 "[trace] heatmap IPC: upgrades=%d, downgrades=%d, fullres=%d, "
                 "fullres_cancel=%d, is_loading=%s",
                 len(delta_upgrade), len(paths_to_downgrade), len(delta_fullres),

@@ -3,6 +3,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal, QPointF, QSizeF, QRectF
 from PySide6.QtGui import QImage, QTransform
 import logging
+logger = logging.getLogger(__name__)
 from core.event_system import event_system, EventType, ZoomEventData, ZoomDragEventData, DoubleClickZoomEventData
 import time
 
@@ -152,7 +153,7 @@ class PictureBase(QObject):
         image = QImage(path_to_load)
         if not image.isNull():
             self.setImage(image)
-            logging.debug("Loaded image: %s", path_to_load)
+            logger.debug("Loaded image: %s", path_to_load)
             return True
         return False
 
@@ -160,7 +161,7 @@ class PictureBase(QObject):
         image = QImage()
         if image.loadFromData(data) and not image.isNull():
             self.setImage(image)
-            logging.debug("Loaded image from %d bytes", len(data))
+            logger.debug("Loaded image from %d bytes", len(data))
             return True
         return False
             
@@ -196,7 +197,7 @@ class PictureBase(QObject):
 
         result = QPointF(norm_x, norm_y)
 
-        logging.debug("screen coordinates: %s -> padded_space_pos: %s -> normalized: %s", screen_pos, padded_space_pos, result)
+        logger.debug("screen coordinates: %s -> padded_space_pos: %s -> normalized: %s", screen_pos, padded_space_pos, result)
         return result
             
     def normalizedToScreen(self, norm_pos: QPointF) -> QPointF:

@@ -2,6 +2,7 @@
 
 import enum
 import logging
+logger = logging.getLogger(__name__)
 import os
 import threading
 from typing import Optional
@@ -148,7 +149,7 @@ class InspectorView(QWidget):
         if not self.isVisible():
             return
 
-        logging.debug("Inspector update: %s at (%.3f, %.3f)",
+        logger.debug("Inspector update: %s at (%.3f, %.3f)",
                       event_data.image_path,
                       event_data.normalized_position.x(),
                       event_data.normalized_position.y())
@@ -237,7 +238,7 @@ class InspectorView(QWidget):
         except Exception as e:
             # why: service calls can raise on NAS drop or thread errors;
             # log and emit empty path to unblock GUI.
-            logging.error("Inspector: error fetching preview status for %s: %s", image_path, e)
+            logger.error("Inspector: error fetching preview status for %s: %s", image_path, e)
             view_image_path = ""
 
         if not self._fetch_cancelled:
@@ -297,7 +298,7 @@ class InspectorView(QWidget):
             if success:
                 self._current_image_path = original_image_path
                 self._view_image_ready = True
-                logging.info("Inspector displaying image: %s", original_image_path)
+                logger.info("Inspector displaying image: %s", original_image_path)
                 self._picture_base.setViewportSize(self.size())
                 if self._view_mode == _ViewMode.FIT:
                     self._picture_base.setFitMode(True)
@@ -305,7 +306,7 @@ class InspectorView(QWidget):
                     self._picture_base.setZoom(self._zoom_factor)
             else:
                 self._current_image_path = None
-                logging.warning("Inspector failed to load image: %s", original_image_path)
+                logger.warning("Inspector failed to load image: %s", original_image_path)
                 return
 
         if self._view_mode == _ViewMode.TRACKING:
@@ -494,7 +495,7 @@ class InspectorView(QWidget):
         try:
             import mpv as _mpv
         except Exception as e:  # why: mpv is an optional dependency; missing lib should not crash the worker thread
-            logging.error("Failed to import mpv for scrub worker: %s", e)
+            logger.error("Failed to import mpv for scrub worker: %s", e)
             return
 
         player = None
@@ -506,7 +507,7 @@ class InspectorView(QWidget):
                                hr_seek="yes", keep_open="yes",
                                pause=True)
         except Exception as e:  # why: mpv player creation can fail for GPU/driver/config reasons; degrade gracefully
-            logging.error("Failed to create scrub player: %s", e)
+            logger.error("Failed to create scrub player: %s", e)
             return
 
         import time as _time
@@ -561,7 +562,7 @@ class InspectorView(QWidget):
                     if not self._scrub_stop:
                         self._video_frame_ready.emit(qimg)
             except Exception as e:  # why: mpv seek/screenshot can fail on corrupt frames or driver errors; skip frame silently
-                logging.debug("Scrub worker frame grab failed: %s", e)
+                logger.debug("Scrub worker frame grab failed: %s", e)
 
         # Cleanup.
         try:

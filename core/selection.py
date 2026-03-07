@@ -1,4 +1,5 @@
 import logging
+logger = logging.getLogger(__name__)
 import time
 from abc import ABC, abstractmethod
 from typing import Set, List
@@ -47,11 +48,11 @@ class ReplaceSelectionCommand(SelectionCommand):
     def execute(self, state: SelectionState) -> None:
         self.previous_selection = state.selected_paths.copy()
         state.set_selection(self.paths)
-        logging.debug(f"Executed ReplaceSelection: {self.paths}")
+        logger.debug(f"Executed ReplaceSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
-        logging.debug(f"Undid ReplaceSelection, restored: {self.previous_selection}")
+        logger.debug(f"Undid ReplaceSelection, restored: {self.previous_selection}")
 
 
 class AddToSelectionCommand(SelectionCommand):
@@ -60,11 +61,11 @@ class AddToSelectionCommand(SelectionCommand):
     def execute(self, state: SelectionState) -> None:
         self.previous_selection = state.selected_paths.copy()
         state.add_to_selection(self.paths)
-        logging.debug(f"Executed AddToSelection: {self.paths}")
+        logger.debug(f"Executed AddToSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
-        logging.debug(f"Undid AddToSelection, restored: {self.previous_selection}")
+        logger.debug(f"Undid AddToSelection, restored: {self.previous_selection}")
 
 
 class RemoveFromSelectionCommand(SelectionCommand):
@@ -73,11 +74,11 @@ class RemoveFromSelectionCommand(SelectionCommand):
     def execute(self, state: SelectionState) -> None:
         self.previous_selection = state.selected_paths.copy()
         state.remove_from_selection(self.paths)
-        logging.debug(f"Executed RemoveFromSelection: {self.paths}")
+        logger.debug(f"Executed RemoveFromSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
-        logging.debug(f"Undid RemoveFromSelection, restored: {self.previous_selection}")
+        logger.debug(f"Undid RemoveFromSelection, restored: {self.previous_selection}")
 
 
 class ToggleSelectionCommand(SelectionCommand):
@@ -86,11 +87,11 @@ class ToggleSelectionCommand(SelectionCommand):
     def execute(self, state: SelectionState) -> None:
         self.previous_selection = state.selected_paths.copy()
         state.selected_paths.symmetric_difference_update(self.paths)
-        logging.debug(f"Executed ToggleSelection: {self.paths}")
+        logger.debug(f"Executed ToggleSelection: {self.paths}")
 
     def undo(self, state: SelectionState) -> None:
         state.set_selection(self.previous_selection)
-        logging.debug(f"Undid ToggleSelection, restored: {self.previous_selection}")
+        logger.debug(f"Undid ToggleSelection, restored: {self.previous_selection}")
 
 
 class SelectionProcessor:
@@ -121,7 +122,7 @@ class SelectionProcessor:
             selected_paths=final_selection
         )
         event_system.publish(change_event)
-        logging.debug(f"Published SELECTION_CHANGED with {len(final_selection)} items.")
+        logger.debug(f"Published SELECTION_CHANGED with {len(final_selection)} items.")
 
 
 class SelectionHistory:
@@ -138,7 +139,7 @@ class SelectionHistory:
         if isinstance(command, SelectionCommand):
             self.undo_stack.append(command)
             self.redo_stack.clear()
-            logging.debug(f"Pushed to undo stack. Size: {len(self.undo_stack)}")
+            logger.debug(f"Pushed to undo stack. Size: {len(self.undo_stack)}")
 
     def undo(self):
         """Undoes the last command and moves it to the redo stack."""
@@ -147,7 +148,7 @@ class SelectionHistory:
             # Process the command as an undo, which will trigger a SELECTION_CHANGED event
             self.processor.process_command(command, is_undo=True)
             self.redo_stack.append(command)
-            logging.info(f"Undoing command: {type(command).__name__}")
+            logger.info(f"Undoing command: {type(command).__name__}")
 
     def redo(self):
         """Redoes the last undone command."""
@@ -156,4 +157,4 @@ class SelectionHistory:
             # Re-executing the command will fire a new EXECUTE_SELECTION_COMMAND event,
             # which our `on_command_executed` handler will pick up to put it back on the undo stack.
             event_system.publish(command)
-            logging.info(f"Redoing command: {type(command).__name__}")
+            logger.info(f"Redoing command: {type(command).__name__}")

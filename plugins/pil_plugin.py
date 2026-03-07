@@ -1,5 +1,7 @@
 import logging
 from typing import Optional, List, Union
+
+logger = logging.getLogger(__name__)
 from PIL import Image, ImageOps
 from .base_plugin import BasePlugin
 import os
@@ -35,11 +37,11 @@ class PILPlugin(BasePlugin):
                 # Save as JPEG for viewing
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 img.save(output_path, 'JPEG', quality=95)
-                logging.debug(f"Generated view image: {output_path}")
+                logger.debug(f"Generated view image: {output_path}")
                 return True
                 
         except (OSError, ValueError) as e:
-            logging.error(f"Error generating view image for {image_path} (from {image_source}): {e}")
+            logger.error(f"Error generating view image for {image_path} (from {image_source}): {e}")
             return False
     
     def generate_thumbnail(self, image_path: str, image_source: Optional[Union[str, bytes]], orientation: int, output_path: str) -> bool:
@@ -62,11 +64,11 @@ class PILPlugin(BasePlugin):
                 # Save thumbnail
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 img.save(output_path, 'JPEG', quality=85)
-                logging.debug(f"Generated thumbnail: {output_path}")
+                logger.debug(f"Generated thumbnail: {output_path}")
                 return True
                 
         except (OSError, ValueError) as e:
-            logging.error(f"Error generating thumbnail for {image_path} (from {source}): {e}")
+            logger.error(f"Error generating thumbnail for {image_path} (from {source}): {e}")
             return False
     
     def process_thumbnail(self, image_path: str, md5_hash: str,

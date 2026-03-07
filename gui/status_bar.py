@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from typing import Optional
 import logging
+logger = logging.getLogger(__name__)
 
 from core.event_system import EventType, event_system
 from gui.components.scrolling_label import ScrollingLabel
@@ -75,7 +76,7 @@ class CustomStatusBar(QStatusBar):
             rating_font = QFont(font_family, font_size + 4)
             self._rating_label.setFont(rating_font)
         except Exception as e:  # why: config_manager is user-supplied; malformed config must not crash the status bar at startup
-            logging.warning(f"Could not apply status bar font settings: {e}")
+            logger.warning(f"Could not apply status bar font settings: {e}")
 
     # ------------------------------------------------------------------
     # Public API

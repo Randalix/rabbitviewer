@@ -1,5 +1,6 @@
 import math
 import logging
+logger = logging.getLogger(__name__)
 import threading
 import time
 
@@ -242,7 +243,7 @@ class CompareView(QWidget):
         try:
             split.fetch_image(path, self.service)
         except Exception as e:  # why: service/plugin errors must not crash the worker thread
-            logging.error(f"CompareView: failed to load {path}: {e}", exc_info=True)
+            logger.error(f"CompareView: failed to load {path}: {e}", exc_info=True)
 
     @property
     def _master(self) -> _CompareSplit | None:

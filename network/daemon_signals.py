@@ -8,6 +8,8 @@ thread (the main thread for all GUI subscribers).
 import logging
 from PySide6.QtCore import QObject, Signal
 
+logger = logging.getLogger(__name__)
+
 from core.notifications import (
     Notification,
     PreviewsReadyData,
@@ -61,9 +63,9 @@ class DaemonSignals(QObject):
                 case "comfyui_complete":
                     self.comfyui_complete.emit(ComfyUICompleteData.model_validate(data))
                 case _:
-                    logging.debug("DaemonSignals: unknown notification type %r", notification_type)
+                    logger.debug("DaemonSignals: unknown notification type %r", notification_type)
         except _ValidationErrors as e:
-            logging.error(
+            logger.error(
                 "DaemonSignals: failed to validate %r notification: %s",
                 notification_type, e,
             )

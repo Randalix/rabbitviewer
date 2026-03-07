@@ -5,6 +5,7 @@ import threading
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QApplication
 from PySide6.QtCore import Slot, QPointF, QTimer, Signal, QSettings
 import logging
+logger = logging.getLogger(__name__)
 import os
 import time
 
@@ -142,7 +143,7 @@ class MainWindow(QMainWindow):
         self._hover_metadata_ready.connect(self._on_hover_metadata_ready)
 
     def _handle_benchmark_result(self, operation: str, time: float):
-        logging.info(f"Benchmark - {operation}: {time:.3f} seconds")
+        logger.info(f"Benchmark - {operation}: {time:.3f} seconds")
 
     def _is_detail_view_active(self) -> bool:
         current = self.stacked_widget.currentWidget()
@@ -210,7 +211,7 @@ class MainWindow(QMainWindow):
             self._hover_rating_ready.emit(path, int(rating))
             self._hover_metadata_ready.emit(path)
         except Exception as e:  # why: background thread; IPC/socket failure must not crash the worker
-            logging.debug(f"Hover rating fetch failed for {path}: {e}")
+            logger.debug(f"Hover rating fetch failed for {path}: {e}")
 
     def notify_rating_set(self):
         self._last_rating_set_time = time.time()
@@ -276,7 +277,7 @@ class MainWindow(QMainWindow):
                 normalized_position=QPointF(0.5, 0.5),
             )
             inspector.prime(event_data)
-        logging.info("Opened new Inspector window.")
+        logger.info("Opened new Inspector window.")
 
     def _on_inspector_closed(self, inspector):
         try:
@@ -331,7 +332,7 @@ class MainWindow(QMainWindow):
         self.info_panels.append(panel)
         panel.closed.connect(lambda: self._on_info_panel_closed(panel))
         panel.show()
-        logging.info("Opened new Info panel.")
+        logger.info("Opened new Info panel.")
 
     def _on_info_panel_closed(self, panel):
         try:
@@ -358,21 +359,21 @@ class MainWindow(QMainWindow):
             self.filter_dialog.activateWindow()
 
     def _handle_filter_changed(self, filter_text: str):
-        logging.debug(f"Filter changed: {filter_text}")
+        logger.debug(f"Filter changed: {filter_text}")
         if self.thumbnail_view:
             self.thumbnail_view.apply_filter(filter_text)
         else:
-            logging.warning("Filter changed but no thumbnail_view available")
+            logger.warning("Filter changed but no thumbnail_view available")
             
     def _handle_stars_changed(self, star_states: list):
-        logging.debug(f"Stars changed: {star_states}")
+        logger.debug(f"Stars changed: {star_states}")
         if self.thumbnail_view:
             self.thumbnail_view.apply_star_filter(star_states)
         else:
-            logging.warning("Stars changed but no thumbnail_view available")
+            logger.warning("Stars changed but no thumbnail_view available")
 
     def _handle_tags_filter_changed(self, tag_names: list):
-        logging.debug(f"Tag filter changed: {tag_names}")
+        logger.debug(f"Tag filter changed: {tag_names}")
         if self.thumbnail_view:
             self.thumbnail_view.apply_tag_filter(tag_names)
 
@@ -408,7 +409,7 @@ class MainWindow(QMainWindow):
                 global_tags = [t['name'] for t in tags_resp.get('global_tags', [])]
                 self._tag_filter_ready.emit(dir_tags, global_tags)
         except Exception as e:  # why: background IPC; socket failure must not crash the worker
-            logging.debug(f"Tag filter fetch failed: {e}")
+            logger.debug(f"Tag filter fetch failed: {e}")
 
     @Slot(list, list)
     def _on_tag_filter_ready(self, dir_tags: list, global_tags: list):
@@ -468,7 +469,7 @@ class MainWindow(QMainWindow):
 
             self._tag_editor_ready.emit(len(selected), common_tags, dir_tags, global_tags)
         except Exception as e:  # why: background IPC; socket failure must not crash the worker
-            logging.debug(f"Tag editor fetch failed: {e}")
+            logger.debug(f"Tag editor fetch failed: {e}")
 
     @Slot(int, list, list, list)
     def _on_tag_editor_ready(self, count: int, common_tags: list, dir_tags: list, global_tags: list):
@@ -512,9 +513,9 @@ class MainWindow(QMainWindow):
             for path in image_paths:
                 task_id = self.service.comfyui_generate(path, workflow=workflow_json)
                 if task_id:
-                    logging.debug(f"ComfyUI generation queued: {task_id}")
+                    logger.debug(f"ComfyUI generation queued: {task_id}")
                 else:
-                    logging.warning(f"ComfyUI generate returned no task_id for {path}")
+                    logger.warning(f"ComfyUI generate returned no task_id for {path}")
 
         threading.Thread(target=_send, daemon=True).start()
 
@@ -566,7 +567,7 @@ class MainWindow(QMainWindow):
                 )
                 inspector.prime(event_data)
             except Exception as e:  # why: screenToNormalized may raise before first paint; priming is best-effort
-                logging.error(f"Error priming inspector: {e}", exc_info=True)
+                logger.error(f"Error priming inspector: {e}", exc_info=True)
 
             
     def dragEnterEvent(self, event):
@@ -599,7 +600,7 @@ class MainWindow(QMainWindow):
                 self.thumbnail_view.add_images(file_paths)
 
     def closeEvent(self, event):
-        logging.info("GUI close requested.")
+        logger.info("GUI close requested.")
         if self.service:
             self.service.prepare_for_shutdown()
         self._hover_clear_timer.stop()
@@ -651,7 +652,7 @@ class MainWindow(QMainWindow):
 
     def _handle_inspector_event(self, event_data):
         self.current_hovered_image = event_data.image_path
-        logging.debug(f"Hovered image updated: {self.current_hovered_image}")
+        logger.debug(f"Hovered image updated: {self.current_hovered_image}")
 
     def _setup_hotkeys(self):
         hotkeys_config = self.config_manager.get("hotkeys", {})
@@ -681,13 +682,13 @@ class MainWindow(QMainWindow):
         self._hotkey_help_overlay.toggle()
 
     def load_directory(self, directory_path: str, recursive: bool = True):
-        logging.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")
+        logger.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")
         self.last_known_directory = directory_path
-        logging.info("MainWindow: Calling thumbnail_view.load_directory...")
+        logger.info("MainWindow: Calling thumbnail_view.load_directory...")
         self.thumbnail_view.load_directory(directory_path, recursive)
-        logging.info("MainWindow: Directory loading completed, setting current widget...")
+        logger.info("MainWindow: Directory loading completed, setting current widget...")
         self.stacked_widget.setCurrentWidget(self.thumbnail_view)
-        logging.info("MainWindow: ThumbnailView is now the current widget")
+        logger.info("MainWindow: ThumbnailView is now the current widget")
 
     def get_removed_images(self) -> Set[str]:
         return set(self._removed_images)
@@ -750,7 +751,7 @@ class MainWindow(QMainWindow):
             self.stacked_widget.setCurrentWidget(self.video_view)
             self.video_view.setFocus()
         except Exception as e:  # why: python-mpv init may raise on missing libmpv or unsupported format
-            logging.error(f"Failed to open video view: {e}", exc_info=True)
+            logger.error(f"Failed to open video view: {e}", exc_info=True)
 
     def _open_picture_view(self, image_path: str):
         if self.video_view and self.stacked_widget.currentWidget() is self.video_view:
@@ -771,7 +772,7 @@ class MainWindow(QMainWindow):
             self.picture_view.setFocus()
             self._fetch_metadata_for_path(image_path)
         except Exception as e:  # why: loadImage delegates to format plugins which may raise arbitrarily
-            logging.error(f"Exception when opening Picture View: {e}", exc_info=True)
+            logger.error(f"Exception when opening Picture View: {e}", exc_info=True)
             
     def _handle_close_or_quit(self):
         if self.compare_view and self.stacked_widget.currentWidget() is self.compare_view:
@@ -796,7 +797,7 @@ class MainWindow(QMainWindow):
             self.close_video_view()
 
     def close_picture_view(self):
-        logging.debug("Closing picture view")
+        logger.debug("Closing picture view")
         try:
             if self.picture_view:
                 current_path = self.picture_view.current_path
@@ -809,10 +810,10 @@ class MainWindow(QMainWindow):
                 self.picture_view.close()
                 self.picture_view = None
         except RuntimeError as e:
-            logging.error(f"Error closing picture view: {e}", exc_info=True)
+            logger.error(f"Error closing picture view: {e}", exc_info=True)
 
     def close_video_view(self):
-        logging.debug("Closing video view")
+        logger.debug("Closing video view")
         try:
             if self.video_view:
                 current_path = self.video_view.current_path
@@ -822,7 +823,7 @@ class MainWindow(QMainWindow):
                 self.video_view.close()
                 self.video_view = None
         except RuntimeError as e:
-            logging.error(f"Error closing video view: {e}", exc_info=True)
+            logger.error(f"Error closing video view: {e}", exc_info=True)
 
     def _open_compare_view(self):
         selected = list(self.selection_state.selected_paths)
@@ -841,17 +842,17 @@ class MainWindow(QMainWindow):
             self.stacked_widget.setCurrentWidget(self.compare_view)
             self.compare_view.setFocus()
         except Exception as e:  # why: image loading may raise from plugins or socket errors
-            logging.error(f"Exception when opening Compare View: {e}", exc_info=True)
+            logger.error(f"Exception when opening Compare View: {e}", exc_info=True)
 
     def close_compare_view(self):
-        logging.debug("Closing compare view")
+        logger.debug("Closing compare view")
         try:
             if self.compare_view:
                 self.stacked_widget.setCurrentWidget(self.thumbnail_view)
                 self.compare_view.close()
                 self.compare_view = None
         except RuntimeError as e:
-            logging.error(f"Error closing compare view: {e}", exc_info=True)
+            logger.error(f"Error closing compare view: {e}", exc_info=True)
 
     def navigate_to_image(self, direction: str):
         current_path = None
@@ -866,7 +867,7 @@ class MainWindow(QMainWindow):
         try:
             current_idx = self.thumbnail_view.current_files.index(current_path)
         except ValueError:
-            logging.warning(f"Current media {current_path} not found in visible files")
+            logger.warning(f"Current media {current_path} not found in visible files")
             return
         num_visible = len(self.thumbnail_view.current_files)
         if num_visible == 0:

@@ -1,6 +1,7 @@
 import os
 import stat
 import logging
+logger = logging.getLogger(__name__)
 import time
 import fnmatch
 from dataclasses import dataclass, field
@@ -75,13 +76,13 @@ class DirectoryScanner:
         (including their subtrees).  Used by the daemon to avoid re-walking
         directories already recorded in the scan ledger.
         """
-        logging.info(f"Performing incremental scan for: {directory_path} (Recursive: {recursive}, batch_size={batch_size}, skip_dirs={len(skip_dirs) if skip_dirs else 0})")
+        logger.info(f"Performing incremental scan for: {directory_path} (Recursive: {recursive}, batch_size={batch_size}, skip_dirs={len(skip_dirs) if skip_dirs else 0})")
         current_batch = []
         total_yielded = 0
         scan_start = time.monotonic()
 
         if not os.path.isdir(directory_path):
-            logging.warning(f"Directory to scan does not exist: {directory_path}")
+            logger.warning(f"Directory to scan does not exist: {directory_path}")
             return
 
         try:
@@ -94,7 +95,7 @@ class DirectoryScanner:
                     if root in skip_dirs:
                         continue
                 walk_elapsed = time.monotonic() - walk_start
-                logging.info(f"[chunking] scan_incremental: entering dir '{root}' ({len(files)} entries, {walk_elapsed:.3f}s since last yield/start)")
+                logger.info(f"[chunking] scan_incremental: entering dir '{root}' ({len(files)} entries, {walk_elapsed:.3f}s since last yield/start)")
                 for filename in files:
                     try:
                         full_path = os.path.join(root, filename)
@@ -103,22 +104,22 @@ class DirectoryScanner:
                             if len(current_batch) >= batch_size:
                                 total_yielded += len(current_batch)
                                 elapsed = time.monotonic() - scan_start
-                                logging.info(f"[chunking] scan_incremental: yielding batch of {len(current_batch)} (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
+                                logger.info(f"[chunking] scan_incremental: yielding batch of {len(current_batch)} (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
                                 yield current_batch
                                 current_batch = []
                                 walk_start = time.monotonic()
                     except OSError as e:
-                        logging.debug(f"[chunking] scan_incremental: OSError on '{filename}': {e}")
+                        logger.debug(f"[chunking] scan_incremental: OSError on '{filename}': {e}")
                         continue
             if current_batch:
                 total_yielded += len(current_batch)
                 elapsed = time.monotonic() - scan_start
-                logging.info(f"[chunking] scan_incremental: yielding final batch of {len(current_batch)} (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
+                logger.info(f"[chunking] scan_incremental: yielding final batch of {len(current_batch)} (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
                 yield current_batch
             elapsed = time.monotonic() - scan_start
-            logging.info(f"[chunking] scan_incremental: generator exhausting for '{directory_path}' (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
+            logger.info(f"[chunking] scan_incremental: generator exhausting for '{directory_path}' (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
         except Exception as e:  # why: os.walk can raise PermissionError or unexpected filesystem errors; must not abort the generator and stall the SourceJob
-            logging.error(f"Error during directory scan of {directory_path}: {e}", exc_info=True)
+            logger.error(f"Error during directory scan of {directory_path}: {e}", exc_info=True)
 
     def scan_incremental_reconcile(self, directory_path: str, recursive: bool,
                                      ctx: ReconcileContext, batch_size: int = 10,

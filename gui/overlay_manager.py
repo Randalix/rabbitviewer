@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -57,7 +58,7 @@ class OverlayManager:
         self._renderers[name] = fn
 
     def show(self, idx: int, descriptor: OverlayDescriptor) -> None:
-        logging.debug("[overlay] show idx=%d renderer=%s duration=%s",
+        logger.debug("[overlay] show idx=%d renderer=%s duration=%s",
                       idx, descriptor.renderer_name, descriptor.duration)
         bucket = self._overlays.setdefault(idx, {})
 
@@ -114,7 +115,7 @@ class OverlayManager:
         for descriptor in bucket.values():
             renderer = self._renderers.get(descriptor.renderer_name)
             if renderer is None:
-                logging.warning("No renderer registered for %r", descriptor.renderer_name)
+                logger.warning("No renderer registered for %r", descriptor.renderer_name)
                 continue
             sub_rect = _compute_sub_rect(rect, descriptor.position)
             renderer(painter, sub_rect, descriptor.params)

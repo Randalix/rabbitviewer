@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from collections import deque
 from enum import Enum
 import logging
+logger = logging.getLogger(__name__)
 import threading
 import time
 
@@ -175,16 +176,16 @@ class EventSystem(QObject):
             if event_type not in self._subscribers:
                 self._subscribers[event_type] = []
             self._subscribers[event_type].append(callback)
-        logging.debug(f"Subscribed to {event_type.value}: {callback.__name__}")
+        logger.debug(f"Subscribed to {event_type.value}: {callback.__name__}")
 
     def unsubscribe(self, event_type: EventType, callback: Callable[[EventData], None]):
         with self._lock:
             if event_type in self._subscribers:
                 try:
                     self._subscribers[event_type].remove(callback)
-                    logging.debug(f"Unsubscribed from {event_type.value}: {callback.__name__}")
+                    logger.debug(f"Unsubscribed from {event_type.value}: {callback.__name__}")
                 except ValueError:
-                    logging.warning(f"Callback not found for {event_type.value}")
+                    logger.warning(f"Callback not found for {event_type.value}")
 
     def publish(self, event_data: EventData):
         with self._lock:
@@ -199,9 +200,9 @@ class EventSystem(QObject):
                 callback(event_data)
             except Exception as e:
                 # why: isolate handler crashes so one broken subscriber can't block others
-                logging.error(f"Error in event callback for {event_type.value}: {e}", exc_info=True)
+                logger.error(f"Error in event callback for {event_type.value}: {e}", exc_info=True)
 
-        logging.debug("Published event: %s from %s", event_type.value, event_data.source)
+        logger.debug("Published event: %s from %s", event_type.value, event_data.source)
         
     def get_event_history(self, event_type: Optional[EventType] = None) -> List[EventData]:
         if event_type:

@@ -1,6 +1,8 @@
 import os
 import logging
 import struct
+
+logger = logging.getLogger(__name__)
 import threading
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
@@ -55,11 +57,11 @@ class PluginRegistry:
         formats = plugin.get_supported_formats()
         for ext in formats:
             if ext in self.format_map:
-                logging.warning(f"Format {ext} already registered by {self.format_map[ext].__class__.__name__}, overriding with {plugin_name}")
+                logger.warning(f"Format {ext} already registered by {self.format_map[ext].__class__.__name__}, overriding with {plugin_name}")
             self.format_map[ext] = plugin
-            logging.debug(f"Registered format {ext} with plugin {plugin_name}")
+            logger.debug(f"Registered format {ext} with plugin {plugin_name}")
         
-        logging.info(f"Plugin {plugin_name} registered with formats: {', '.join(formats)}")
+        logger.info(f"Plugin {plugin_name} registered with formats: {', '.join(formats)}")
     
     def get_plugin_for_format(self, file_extension: str) -> Optional['BasePlugin']:
         """Get the plugin that handles a specific file format."""
@@ -76,7 +78,7 @@ class PluginRegistry:
         """
         Loads all plugins from a given directory and registers them.
         """
-        logging.info(f"Loading plugins from directory: {plugin_dir}")
+        logger.info(f"Loading plugins from directory: {plugin_dir}")
         # Add plugin directory to sys.path to allow direct imports
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
@@ -92,7 +94,7 @@ class PluginRegistry:
                     full_module_name = f"plugins.{module_name}"
                     spec = importlib.util.spec_from_file_location(full_module_name, file_path)
                     if spec is None:
-                        logging.warning(f"Could not create module spec for {filename}")
+                        logger.warning(f"Could not create module spec for {filename}")
                         continue
 
                     module = importlib.util.module_from_spec(spec)
@@ -108,9 +110,9 @@ class PluginRegistry:
                             # The BasePlugin constructor now handles logging and registration.
                             break # Assume one plugin class per file
                 except Exception as e:
-                    logging.error(f"Failed to load plugin {filename}: {e}")
-                    logging.exception(f"Detailed error loading plugin {filename}:")
-        logging.info("Finished loading plugins.")
+                    logger.error(f"Failed to load plugin {filename}: {e}")
+                    logger.exception(f"Detailed error loading plugin {filename}:")
+        logger.info("Finished loading plugins.")
 
 
 # Global plugin registry instance
@@ -134,9 +136,9 @@ class BasePlugin(ABC):
         # missing.  Plugins handle missing tools gracefully at use time.
         self.register_formats()
         if self.is_available():
-            logging.info(f"Plugin {self.__class__.__name__} loaded successfully")
+            logger.info(f"Plugin {self.__class__.__name__} loaded successfully")
         else:
-            logging.warning(f"Plugin {self.__class__.__name__} loaded (formats registered) but dependencies unavailable")
+            logger.warning(f"Plugin {self.__class__.__name__} loaded (formats registered) but dependencies unavailable")
     
     @abstractmethod
     def is_available(self) -> bool:
@@ -248,11 +250,11 @@ class BasePlugin(ABC):
                                 except (ValueError, TypeError):
                                     pass
                 except (IOError, ET.ParseError) as e:
-                    logging.warning("Sidecar parse failed for %s: %s", xmp, e)
+                    logger.warning("Sidecar parse failed for %s: %s", xmp, e)
 
             return results if results else None
         except (IOError, struct.error, ET.ParseError) as e:
-            logging.warning("Fast metadata parse failed for %s: %s", file_path, e)
+            logger.warning("Fast metadata parse failed for %s: %s", file_path, e)
             return None
 
     def get_view_image_path(self, md5_hash: str) -> str:
@@ -275,19 +277,19 @@ class BasePlugin(ABC):
     def write_rating(self, file_path: str, rating: int) -> bool:
         """Writes the rating to an XMP sidecar file next to the image."""
         if not 0 <= rating <= 5:
-            logging.error("Rating %d out of range [0..5] for %s", rating, file_path)
+            logger.error("Rating %d out of range [0..5] for %s", rating, file_path)
             return False
         xmp = sidecar_path_for(file_path)
         try:
             output = self._write_to_sidecar(xmp, [f"-XMP-xmp:Rating={rating}"], file_path)
             if self._sidecar_write_ok(output):
-                logging.info("Wrote rating %d to sidecar %s.", rating, xmp)
+                logger.info("Wrote rating %d to sidecar %s.", rating, xmp)
                 return True
-            logging.error("exiftool reported no update writing rating sidecar %s: %s",
+            logger.error("exiftool reported no update writing rating sidecar %s: %s",
                           xmp, output.decode("utf-8", "replace").strip())
             return False
         except (RuntimeError, TimeoutError) as e:
-            logging.error("Failed to write rating sidecar for %s: %s", file_path, e)
+            logger.error("Failed to write rating sidecar for %s: %s", file_path, e)
             return False
 
     def write_tags(self, file_path: str, tag_names: list) -> bool:
@@ -323,13 +325,13 @@ class BasePlugin(ABC):
                     else:
                         output = b"    1 image files updated"
             if self._sidecar_write_ok(output):
-                logging.info("Wrote %d tags to sidecar %s.", len(tag_names), xmp)
+                logger.info("Wrote %d tags to sidecar %s.", len(tag_names), xmp)
                 return True
-            logging.error("exiftool reported no update writing tags sidecar %s: %s",
+            logger.error("exiftool reported no update writing tags sidecar %s: %s",
                           xmp, output.decode("utf-8", "replace").strip())
             return False
         except (RuntimeError, TimeoutError) as e:
-            logging.error("Failed to write tags sidecar for %s: %s", file_path, e)
+            logger.error("Failed to write tags sidecar for %s: %s", file_path, e)
             return False
 
     def _write_to_sidecar(self, xmp_path: str, tag_args: list, image_path: str) -> bytes:
@@ -370,19 +372,19 @@ class BasePlugin(ABC):
     def write_rating_embedded(self, file_path: str, rating: int) -> bool:
         """Writes the rating directly into the image file's XMP metadata."""
         if not 0 <= rating <= 5:
-            logging.error("Rating %d out of range [0..5] for %s", rating, file_path)
+            logger.error("Rating %d out of range [0..5] for %s", rating, file_path)
             return False
         try:
             et = self._get_exiftool()
             output = et.execute([f"-XMP-xmp:Rating={rating}", "-overwrite_original", file_path])
             if self._embedded_write_ok(output):
-                logging.info("Wrote embedded rating %d to %s.", rating, file_path)
+                logger.info("Wrote embedded rating %d to %s.", rating, file_path)
                 return True
-            logging.error("exiftool reported no update writing embedded rating to %s: %s",
+            logger.error("exiftool reported no update writing embedded rating to %s: %s",
                           file_path, output.decode("utf-8", "replace").strip())
             return False
         except (RuntimeError, TimeoutError) as e:
-            logging.error("Failed to write embedded rating for %s: %s", file_path, e)
+            logger.error("Failed to write embedded rating for %s: %s", file_path, e)
             return False
 
     def write_tags_embedded(self, file_path: str, tag_names: list) -> bool:
@@ -400,13 +402,13 @@ class BasePlugin(ABC):
             else:
                 output = b"    1 image files updated"
             if self._embedded_write_ok(output):
-                logging.info("Wrote %d embedded tags to %s.", len(tag_names), file_path)
+                logger.info("Wrote %d embedded tags to %s.", len(tag_names), file_path)
                 return True
-            logging.error("exiftool reported no update writing embedded tags to %s: %s",
+            logger.error("exiftool reported no update writing embedded tags to %s: %s",
                           file_path, output.decode("utf-8", "replace").strip())
             return False
         except (RuntimeError, TimeoutError) as e:
-            logging.error("Failed to write embedded tags for %s: %s", file_path, e)
+            logger.error("Failed to write embedded tags for %s: %s", file_path, e)
             return False
 
     def write_orientation(self, file_path: str, orientation: int) -> bool:
@@ -418,13 +420,13 @@ class BasePlugin(ABC):
                 "-overwrite_original", file_path,
             ])
             if self._embedded_write_ok(output):
-                logging.info("Wrote orientation %d to %s.", orientation, file_path)
+                logger.info("Wrote orientation %d to %s.", orientation, file_path)
                 return True
-            logging.error("exiftool reported no update writing orientation to %s: %s",
+            logger.error("exiftool reported no update writing orientation to %s: %s",
                           file_path, output.decode("utf-8", "replace").strip())
             return False
         except (RuntimeError, TimeoutError) as e:
-            logging.error("Failed to write orientation for %s: %s", file_path, e)
+            logger.error("Failed to write orientation for %s: %s", file_path, e)
             return False
 
     def _apply_orientation(self, img: Image.Image, orientation: int) -> Image.Image:

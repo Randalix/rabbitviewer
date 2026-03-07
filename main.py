@@ -6,6 +6,10 @@ import signal
 import subprocess
 import time
 
+# why: __name__ is "__main__" at runtime; "rabbitviewer" is a stable name
+# reachable from logging_levels config overrides.
+logger = logging.getLogger("rabbitviewer")
+
 from config.config_manager import ConfigManager
 from core.metadata_database import get_metadata_database
 from core.thumbnail_manager import ThumbnailManager
@@ -15,7 +19,7 @@ from core.resource_lock import acquire_gui_lock, release_gui_lock, is_gui_active
 from filewatcher.watcher import WatchdogHandler
 
 
-def setup_logging(log_level, log_filename="rabbitviewer.log"):
+def setup_logging(log_level, log_filename="rabbitviewer.log", logging_levels=None):
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     log_dir = os.path.expanduser("~/.rabbitviewer")
     os.makedirs(log_dir, exist_ok=True)
@@ -34,6 +38,13 @@ def setup_logging(log_level, log_filename="rabbitviewer.log"):
     # PIL dumps every TIFF/EXIF tag at DEBUG, including raw binary values.
     logging.getLogger("PIL").setLevel(logging.INFO)
 
+    # Per-module log level overrides from config.
+    if logging_levels:
+        for module_name, level_str in logging_levels.items():
+            numeric = getattr(logging, level_str.upper(), None)
+            if numeric is not None:
+                logging.getLogger(module_name).setLevel(numeric)
+
 
 def _init_core(config_manager):
     """Initialize ThumbnailManager, WatchdogHandler, and supporting objects."""
@@ -49,7 +60,7 @@ def _init_core(config_manager):
     thumbnail_manager.render_manager.cache_size_manager = cache_size_manager
 
     thumbnail_manager.load_plugins()
-    logging.info("Plugins loaded.")
+    logger.info("Plugins loaded.")
 
     watch_paths = [os.path.expanduser(p) for p in config_manager.get("watch_paths", [])]
     watcher = WatchdogHandler(thumbnail_manager, watch_paths)
@@ -93,19 +104,21 @@ def _acquire_daemon_lock(pid_path):
         raise
 
 
-def _run_daemon(config_manager):
+def _run_daemon(config_manager, log_level_override=None):
     """Headless background indexer.  Pauses when the GUI holds the flock."""
     from core.background_indexer import BackgroundIndexer
 
-    setup_logging(config_manager.get("logging_level", "INFO"), log_filename="daemon.log")
+    log_level = log_level_override or config_manager.get("logging_level", "INFO")
+    setup_logging(log_level, log_filename="daemon.log",
+                  logging_levels=config_manager.get("logging_levels", {}))
 
     pid_path = _daemon_pid_path(config_manager)
     pid_fd = _acquire_daemon_lock(pid_path)
     if pid_fd is None:
-        logging.info("Another daemon is already running; exiting.")
+        logger.info("Another daemon is already running; exiting.")
         return
 
-    logging.info("Starting RabbitViewer daemon (headless indexer)")
+    logger.info("Starting RabbitViewer daemon (headless indexer)")
 
     thumbnail_manager, watcher, watch_paths = _init_core(config_manager)
     directory_scanner = DirectoryScanner(thumbnail_manager, config_manager)
@@ -122,11 +135,11 @@ def _run_daemon(config_manager):
     gui_was_active = False
 
     def _shutdown(signum=None, frame=None):
-        logging.info("Daemon shutting down...")
+        logger.info("Daemon shutting down...")
         watcher.stop()
         thumbnail_manager.shutdown()
         pid_fd.close()
-        logging.info("Daemon shutdown complete.")
+        logger.info("Daemon shutdown complete.")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -137,16 +150,16 @@ def _run_daemon(config_manager):
         try:
             gui_active = is_gui_active()
             if gui_active and not gui_was_active:
-                logging.info("GUI detected — pausing daemon workers.")
+                logger.info("GUI detected — pausing daemon workers.")
                 rm.pause()
                 gui_was_active = True
             elif not gui_active and gui_was_active:
-                logging.info("GUI gone — resuming daemon workers.")
+                logger.info("GUI gone — resuming daemon workers.")
                 rm.resume()
                 background_indexer.recover_orphans()
                 gui_was_active = False
-        except Exception as e:
-            logging.debug(f"GUI lock poll error: {e}")
+        except Exception as e:  # why: is_gui_active() can raise OSError on remote fs; must not crash poll loop
+            logger.debug("GUI lock poll error: %s", e)
         time.sleep(2)
 
 
@@ -163,7 +176,7 @@ def _launch_daemon():
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    logging.info("Launched daemon subprocess.")
+    logger.info("Launched daemon subprocess.")
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +223,10 @@ def _run_gui(args, config_manager):
     target_file = None
     recursive_scan = args.recursive
 
-    setup_logging(config_manager.get("logging_level", "INFO"))
-    logging.info("Starting RabbitViewer")
+    log_level = args.log_level or config_manager.get("logging_level", "INFO")
+    setup_logging(log_level,
+                  logging_levels=config_manager.get("logging_levels", {}))
+    logger.info("Starting RabbitViewer")
 
     # If the user (or macOS) passed a file instead of a directory,
     # open the parent directory and navigate to that file.
@@ -225,9 +240,9 @@ def _run_gui(args, config_manager):
     if args.cold_cache and target_dir:
         from benchmarks.bench_utils import cold_cache
         cold_dir = os.path.abspath(target_dir)
-        logging.info("--cold-cache: deleting cached metadata for %s", cold_dir)
+        logger.info("--cold-cache: deleting cached metadata for %s", cold_dir)
         rows, files = cold_cache(cold_dir)
-        logging.info("--cold-cache: %d DB rows deleted, %d cache files removed", rows, files)
+        logger.info("--cold-cache: %d DB rows deleted, %d cache files removed", rows, files)
 
     # Acquire the GUI flock — tells daemon to yield resources.
     gui_lock_fd = acquire_gui_lock()
@@ -256,7 +271,7 @@ def _run_gui(args, config_manager):
     app.setWindowIcon(QIcon(icon_path))
 
     if target_dir and not os.path.isdir(target_dir):
-        logging.error(f"Invalid directory provided: {target_dir}")
+        logger.error(f"Invalid directory provided: {target_dir}")
         release_gui_lock(gui_lock_fd)
         return 1
 
@@ -268,7 +283,7 @@ def _run_gui(args, config_manager):
         if event.type() == QEvent.Type.FileOpen:
             path = event.file()
             if path and os.path.isfile(path):
-                logging.info("QFileOpenEvent: %s", path)
+                logger.info("QFileOpenEvent: %s", path)
                 parent = os.path.dirname(path)
                 window.load_directory(parent, recursive=False)
                 window._open_media_view(path)
@@ -280,7 +295,7 @@ def _run_gui(args, config_manager):
 
     window.show()
     app.processEvents()
-    logging.info("[startup] window shown, services ready")
+    logger.info("[startup] window shown, services ready")
 
     if target_dir:
         def _load():
@@ -293,7 +308,7 @@ def _run_gui(args, config_manager):
 
     # Blocking shutdown runs after the event loop exits so the window
     # can close and repaint immediately rather than freezing.
-    logging.info("GUI closed. Shutting down workers...")
+    logger.info("GUI closed. Shutting down workers...")
     watcher.stop()
     thumbnail_manager.shutdown()
     release_gui_lock(gui_lock_fd)
@@ -301,7 +316,7 @@ def _run_gui(args, config_manager):
     # Launch daemon after releasing flock so it can start indexing immediately.
     _launch_daemon()
 
-    logging.info(f"Application exiting with code {exit_code}.")
+    logger.info(f"Application exiting with code {exit_code}.")
     return exit_code
 
 
@@ -343,6 +358,12 @@ def main():
         default=False,
         help='Stop the running daemon, then start a new one.',
     )
+    parser.add_argument(
+        '--log-level',
+        default=None,
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        help='Override logging level from config.',
+    )
     args = parser.parse_args()
 
     config_manager = ConfigManager()
@@ -356,13 +377,13 @@ def main():
         logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
         from cli.stop import stop_daemon
         if not stop_daemon():
-            logging.error("Could not stop existing daemon; aborting restart.")
+            logger.error("Could not stop existing daemon; aborting restart.")
             sys.exit(1)
-        logging.info("Restarting daemon...")
+        logger.info("Restarting daemon...")
         args.daemon = True
 
     if args.daemon:
-        _run_daemon(config_manager)
+        _run_daemon(config_manager, log_level_override=args.log_level)
     else:
         return _run_gui(args, config_manager)
 

@@ -2,6 +2,8 @@
 import itertools
 import logging
 import time
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import List, Optional, Set, Dict
 from core.event_system import event_system, EventType, StatusMessageEventData, StatusSection, ThumbnailOverlayEventData
@@ -71,7 +73,7 @@ class ScriptAPI:
             self._operation_stats['images_removed'] = len(image_paths)
 
         except Exception as e:
-            logging.error(f"Error in remove_images: {e}", exc_info=True)
+            logger.error(f"Error in remove_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
             self._operation_stats['remove_images_error'] = str(e)
 
@@ -90,12 +92,12 @@ class ScriptAPI:
             ops = [{"name": name, "file_paths": paths} for name, paths in operations]
             response = self.service.run_tasks(ops)
             if response is None:
-                logging.error("daemon_tasks failed: no response (connection issue)")
+                logger.error("daemon_tasks failed: no response (connection issue)")
                 return False
-            logging.info(f"Submitted {len(ops)} daemon task(s): {[op['name'] for op in ops]}")
+            logger.info(f"Submitted {len(ops)} daemon task(s): {[op['name'] for op in ops]}")
             return True
         except Exception as e:
-            logging.error(f"Error submitting daemon tasks: {e}", exc_info=True)
+            logger.error(f"Error submitting daemon tasks: {e}", exc_info=True)
             return False
 
     def add_images(self, image_paths: List[str]) -> None:
@@ -109,9 +111,9 @@ class ScriptAPI:
             self._last_operation_time = time.time() - start_time
             self._operation_stats['add_images_time'] = self._last_operation_time
             self._operation_stats['images_added'] = len(image_paths)
-            logging.debug(f"add_images: {len(image_paths)} images in {self._last_operation_time:.3f}s")
+            logger.debug(f"add_images: {len(image_paths)} images in {self._last_operation_time:.3f}s")
         except Exception as e:
-            logging.error(f"Error in add_images: {e}", exc_info=True)
+            logger.error(f"Error in add_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
             self._operation_stats['add_images_error'] = str(e)
 
@@ -129,14 +131,14 @@ class ScriptAPI:
         try:
             view = self.main_window.thumbnail_view
             if not view or not hasattr(view, 'all_files') or not view.all_files:
-                logging.warning("set_selected_images: Thumbnail view or files not available.")
+                logger.warning("set_selected_images: Thumbnail view or files not available.")
                 return
 
             # Normalize input paths to absolute paths and filter to known files
             paths_to_select = {str(Path(p).absolute()) for p in image_paths} & view._all_files_set
 
             if not paths_to_select:
-                logging.debug("set_selected_images: No valid paths to select from provided paths.")
+                logger.debug("set_selected_images: No valid paths to select from provided paths.")
                 return
 
             # Use the selection command system
@@ -160,10 +162,10 @@ class ScriptAPI:
             self._last_operation_time = time.time() - start_time
             self._operation_stats['set_selection_time'] = self._last_operation_time
             self._operation_stats['images_selected'] = len(paths_to_select)
-            logging.debug(f"set_selected_images: {len(paths_to_select)} images in {self._last_operation_time:.3f}s")
+            logger.debug(f"set_selected_images: {len(paths_to_select)} images in {self._last_operation_time:.3f}s")
             
         except Exception as e:
-            logging.error(f"Error in set_selected_images: {e}", exc_info=True)
+            logger.error(f"Error in set_selected_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
             self._operation_stats['set_selection_error'] = str(e)
 
@@ -183,7 +185,7 @@ class ScriptAPI:
             return [str(Path(path).absolute()) for path in view.current_files]
             
         except Exception as e:
-            logging.error(f"Error in get_all_images: {e}", exc_info=True)
+            logger.error(f"Error in get_all_images: {e}", exc_info=True)
             return []
 
     def set_image_order(self, ordered_paths: List[str]) -> None:
@@ -197,7 +199,7 @@ class ScriptAPI:
                 return
             view.reorder_files(ordered_paths)
         except Exception as e:  # why: user scripts may pass invalid paths or thumbnail_view may be mid-teardown
-            logging.error(f"Error in set_image_order: {e}", exc_info=True)
+            logger.error(f"Error in set_image_order: {e}", exc_info=True)
 
     def get_metadata_batch(self, image_paths: List[str]) -> dict:
         """Fetch metadata for a batch of images from the daemon.
@@ -209,7 +211,7 @@ class ScriptAPI:
             resp = self.service.get_metadata_batch(image_paths)
             return resp if resp else {}
         except Exception as e:  # why: service may raise on internal error
-            logging.error(f"Error in get_metadata_batch: {e}", exc_info=True)
+            logger.error(f"Error in get_metadata_batch: {e}", exc_info=True)
             return {}
 
     def set_rating_for_images(self, image_paths: List[str], rating: int) -> None:
@@ -221,15 +223,15 @@ class ScriptAPI:
             rating: The rating to set (0-5).
         """
         if not (0 <= rating <= 5):
-            logging.error(f"Invalid rating value: {rating}. Must be between 0 and 5.")
+            logger.error(f"Invalid rating value: {rating}. Must be between 0 and 5.")
             return
 
         if not image_paths:
-            logging.debug("set_rating_for_images: no images provided.")
+            logger.debug("set_rating_for_images: no images provided.")
             return
 
         num_images = len(image_paths)
-        logging.debug(f"set_rating_for_images: rating={rating} for {num_images} images.")
+        logger.debug(f"set_rating_for_images: rating={rating} for {num_images} images.")
         start_time = time.time()
 
         # The new API handles DB updates and file writes in one call
@@ -238,7 +240,7 @@ class ScriptAPI:
         duration = time.time() - start_time
 
         if success:
-            logging.debug(
+            logger.debug(
                 f"set_rating_for_images: {num_images} images rated in {duration:.2f}s."
             )
             event_system.publish(StatusMessageEventData(
@@ -254,7 +256,7 @@ class ScriptAPI:
             if tv and tv.filter_affects_rating():
                 tv.reapply_filters()
         else:
-            logging.error(f"ScriptAPI: Failed to set rating.")
+            logger.error(f"ScriptAPI: Failed to set rating.")
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message="Failed to set rating for images.", timeout=5000
@@ -281,7 +283,7 @@ class ScriptAPI:
         Updates EXIF Orientation cumulatively, regenerates cached thumbnails.
         """
         if degrees not in (90, 180, 270):
-            logging.error(f"Invalid rotation: {degrees}°. Must be 90, 180, or 270.")
+            logger.error(f"Invalid rotation: {degrees}°. Must be 90, 180, or 270.")
             return
 
         if not image_paths:
@@ -290,13 +292,13 @@ class ScriptAPI:
         self.invalidate_thumbnails(image_paths, clear_gui=False)
         success = self.service.rotate_images(image_paths, degrees)
         if success:
-            logging.info(f"Rotated {len(image_paths)} images by {degrees}°.")
+            logger.info(f"Rotated {len(image_paths)} images by {degrees}°.")
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message=f"Rotated {len(image_paths)} images {degrees}°.", timeout=3000
             ))
         else:
-            logging.error("Failed to rotate images.")
+            logger.error("Failed to rotate images.")
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message="Failed to rotate images.", timeout=5000
@@ -310,13 +312,13 @@ class ScriptAPI:
         self.invalidate_thumbnails(image_paths, clear_gui=False)
         success = self.service.reset_rotation(image_paths)
         if success:
-            logging.info(f"Reset rotation for {len(image_paths)} images.")
+            logger.info(f"Reset rotation for {len(image_paths)} images.")
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message=f"Reset rotation for {len(image_paths)} images.", timeout=3000
             ))
         else:
-            logging.error("Failed to reset rotation.")
+            logger.error("Failed to reset rotation.")
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message="Failed to reset rotation.", timeout=5000
@@ -328,9 +330,9 @@ class ScriptAPI:
             return
         success = self.service.set_tags(image_paths, tags)
         if success:
-            logging.debug(f"set_tags_for_images: {len(tags)} tags set on {len(image_paths)} images.")
+            logger.debug(f"set_tags_for_images: {len(tags)} tags set on {len(image_paths)} images.")
         else:
-            logging.error("ScriptAPI: Failed to set tags.")
+            logger.error("ScriptAPI: Failed to set tags.")
 
     def remove_tags_from_images(self, image_paths: List[str], tags: List[str]) -> None:
         """Removes tags from the given images via the daemon."""
@@ -338,9 +340,9 @@ class ScriptAPI:
             return
         success = self.service.remove_tags(image_paths, tags)
         if success:
-            logging.debug(f"remove_tags_from_images: {len(tags)} tags removed from {len(image_paths)} images.")
+            logger.debug(f"remove_tags_from_images: {len(tags)} tags removed from {len(image_paths)} images.")
         else:
-            logging.error("ScriptAPI: Failed to remove tags.")
+            logger.error("ScriptAPI: Failed to remove tags.")
 
     def get_image_tags(self, image_paths: List[str]) -> dict:
         """Returns {path: [tag_names]} for the given images."""

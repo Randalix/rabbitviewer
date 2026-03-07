@@ -1,7 +1,6 @@
 from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
 from typing import Dict, List, Optional
-import logging
 import os
 import queue
 import time

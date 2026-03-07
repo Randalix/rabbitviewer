@@ -56,7 +56,7 @@ class RenderManager:
             try:
                 cb(notification)
             except Exception as e:  # why: callbacks are user-supplied; one failure must not block other listeners
-                logging.warning(f"Notification callback failed: {e}", exc_info=True)
+                logger.warning(f"Notification callback failed: {e}", exc_info=True)
 
     def pause(self) -> None:
         """Pause all workers — they finish their current task then block."""
@@ -161,7 +161,7 @@ class RenderManager:
         the old task and queueing a new one, ensuring the queue order is updated.
         """
         if self._shutting_down.is_set():
-            logging.warning(f"RenderManager shutting down. Rejecting task '{task_id}'.")
+            logger.warning(f"RenderManager shutting down. Rejecting task '{task_id}'.")
             return False
 
         _result = True
@@ -181,9 +181,9 @@ class RenderManager:
                 if task.state in (TaskState.RUNNING, TaskState.COMPLETED, TaskState.FAILED):
                     logger.warning(f"Task '{task_id}' already exists with state {task.state.name}. Ignoring new submission.")
                     if priority > task.priority:
-                        logging.warning(f"Task '{task_id}' is {task.state.name}. Cannot re-submit with higher priority {priority.name}.")
+                        logger.warning(f"Task '{task_id}' is {task.state.name}. Cannot re-submit with higher priority {priority.name}.")
                     else:
-                        logging.debug(f"Task '{task_id}' is {task.state.name}. Ignoring new submission with lower/equal priority.")
+                        logger.debug(f"Task '{task_id}' is {task.state.name}. Ignoring new submission with lower/equal priority.")
                     if callback:
                         if task.state in (TaskState.COMPLETED, TaskState.FAILED):
                             # Task already done — schedule callback to fire after we release the
@@ -198,7 +198,7 @@ class RenderManager:
 
                 # Task is PENDING or PAUSED (queued). Upgrade its priority if the new one is higher.
                 elif priority > task.priority:
-                    logging.info(f"Upgrading priority for task '{task_id}' from {task.priority.name} to {priority.name}.")
+                    logger.info(f"Upgrading priority for task '{task_id}' from {task.priority.name} to {priority.name}.")
                     # Invalidate the old task. The worker will discard it when it's dequeued.
                     task.is_active = False
 
@@ -216,7 +216,7 @@ class RenderManager:
                     # Update args so the queued task runs with the latest values (e.g. latest rating).
                     task.args = args
                     task.kwargs = kwargs
-                    logging.debug(f"Task '{task_id}' pending — updated args in-place.")
+                    logger.debug(f"Task '{task_id}' pending — updated args in-place.")
                     if callback:
                         with self.task_callbacks_lock:
                             self.task_callbacks.setdefault(task_id, []).append(callback)
@@ -239,7 +239,7 @@ class RenderManager:
                         self.task_graph[dep_id].dependents.add(task_id)
                     else:
                         # This case should be handled by application logic; a dependency should be submitted first.
-                        logging.warning(f"Task '{task_id}' submitted with an unknown dependency '{dep_id}'.")
+                        logger.warning(f"Task '{task_id}' submitted with an unknown dependency '{dep_id}'.")
 
             if not _skip_graph_update:
                 # Priority Inheritance (propagate priority upwards to dependencies)
@@ -250,7 +250,7 @@ class RenderManager:
                     if dep_id in self.task_graph:
                         dep_task = self.task_graph[dep_id]
                         if task.priority > dep_task.priority:
-                            logging.debug(f"Inheritance: Upgrading '{dep_id}' from {dep_task.priority.name} to {priority.name}.")
+                            logger.debug(f"Inheritance: Upgrading '{dep_id}' from {dep_task.priority.name} to {priority.name}.")
                             dep_task.priority = priority
                             for sub_dep_id in dep_task.dependencies:
                                 if sub_dep_id not in visited:
@@ -261,7 +261,7 @@ class RenderManager:
                 # it as QUEUED inside the lock, then enqueue outside to avoid holding graph_lock
                 # while PriorityQueue acquires its internal mutex.
                 if not task.dependencies and task.state == TaskState.PENDING:
-                    logging.debug(f"Task '{task_id}' is runnable, adding to queue.")
+                    logger.debug(f"Task '{task_id}' is runnable, adding to queue.")
                     task.state = TaskState.QUEUED
                     _task_to_enqueue = task
 
@@ -275,7 +275,7 @@ class RenderManager:
             try:
                 _done_callback(task_id, None, None)
             except Exception as e:  # why: callbacks are user-supplied; exceptions must not re-enter the task graph
-                logging.error(f"Late callback for already-done task '{task_id}' failed: {e}", exc_info=True)
+                logger.error(f"Late callback for already-done task '{task_id}' failed: {e}", exc_info=True)
 
         if callback:
             with self.task_callbacks_lock:
@@ -407,7 +407,7 @@ class RenderManager:
                 try:
                     job.on_complete()
                 except Exception as e:  # why: on_complete is caller-supplied; exceptions must not abort the generator dispatch loop
-                    logging.error(f"on_complete callback for job '{job.job_id}' failed: {e}", exc_info=True)
+                    logger.error(f"on_complete callback for job '{job.job_id}' failed: {e}", exc_info=True)
             return
 
         # 5. Process the yielded item and create child tasks.
@@ -418,7 +418,7 @@ class RenderManager:
             try:
                 job.on_batch_discovered(items_to_process)
             except Exception as e:  # why: callback is caller-supplied; must not abort the generator dispatch
-                logging.warning(f"on_batch_discovered callback failed: {e}", exc_info=True)
+                logger.warning(f"on_batch_discovered callback failed: {e}", exc_info=True)
 
         _is_daemon_job = job.job_id.startswith("daemon_idx::")
         job_parts = job.job_id.split('::', 1)
@@ -484,7 +484,7 @@ class RenderManager:
                 if dependent_task:
                     dependent_task.dependencies.discard(task.task_id)
                     if not dependent_task.dependencies and dependent_task.state == TaskState.PENDING:
-                        logging.debug(f"Task '{task.task_id}' finished, unlocking '{dependent_id}'. Adding to queue.")
+                        logger.debug(f"Task '{task.task_id}' finished, unlocking '{dependent_id}'. Adding to queue.")
                         dependent_task.state = TaskState.QUEUED
                         dependents_to_enqueue.append(dependent_task)
 
@@ -509,7 +509,7 @@ class RenderManager:
         A unified worker that can execute both simple tasks and generators.
         """
         thread_name = threading.current_thread().name
-        logging.debug(f"RenderManager: Worker {worker_id} ({thread_name}) started.")
+        logger.debug(f"RenderManager: Worker {worker_id} ({thread_name}) started.")
         while self._running:
             # Block while paused (e.g. daemon yields to GUI).
             self._resume_event.wait()
@@ -525,7 +525,7 @@ class RenderManager:
                 
                 # Check if the task is a shutdown sentinel
                 if task.task_id == '_SHUTDOWN_':
-                    logging.debug(f"RenderManager: Worker {worker_id} ({thread_name}) received shutdown sentinel. Exiting.")
+                    logger.debug(f"RenderManager: Worker {worker_id} ({thread_name}) received shutdown sentinel. Exiting.")
                     break
 
                 # Mark task as running: set graph state first so other threads
@@ -542,7 +542,7 @@ class RenderManager:
                 # No tasks in queue within the timeout, continue waiting/checking shutdown flag
                 continue
             except Exception as e:  # why: worker loop guard; unexpected exceptions must not kill the thread
-                logging.error(f"RenderManager: Worker {worker_id} ({thread_name}) encountered general error: {e}", exc_info=True)
+                logger.error(f"RenderManager: Worker {worker_id} ({thread_name}) encountered general error: {e}", exc_info=True)
                 # task_done() is called unconditionally in the finally block below.
             finally:
                 if task:
@@ -573,7 +573,7 @@ class RenderManager:
             # --- EXECUTE THE ON-COMPLETE CALLBACK ---
             if task.on_complete_callback:
                 try:
-                    logging.debug(f"Executing on_complete_callback for task '{task.task_id}'.")
+                    logger.debug(f"Executing on_complete_callback for task '{task.task_id}'.")
                     task.on_complete_callback()
                 except Exception as e:  # why: on_complete_callback is caller-supplied; must not propagate into the worker
                     logger.error(f"on_complete_callback for '{task.task_id}' failed: {e}", exc_info=True)
@@ -582,7 +582,7 @@ class RenderManager:
         """Execute registered callbacks for a completed task."""
         task_id = task.task_id
         if self._shutting_down.is_set():
-            logging.debug(f"RenderManager shutting down, skipping callbacks for task '{task_id}'.")
+            logger.debug(f"RenderManager shutting down, skipping callbacks for task '{task_id}'.")
             with self.task_callbacks_lock:
                 self.task_callbacks.pop(task_id, None)
             return
@@ -598,7 +598,7 @@ class RenderManager:
                 else:
                     callback(task_id, None, error)
             except Exception as e:  # why: callbacks are user-supplied; one failure must not prevent remaining callbacks
-                logging.error(f"RenderManager: Callback for task '{task_id}' failed: {e}", exc_info=True)
+                logger.error(f"RenderManager: Callback for task '{task_id}' failed: {e}", exc_info=True)
 
     def prepare_for_shutdown(self):
         """

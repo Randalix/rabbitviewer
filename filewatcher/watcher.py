@@ -1,5 +1,7 @@
 import logging
 import os
+
+logger = logging.getLogger(__name__)
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -31,7 +33,7 @@ class WatchdogHandler(FileSystemEventHandler):
     def watch_paths(self, new_paths: list):
         """Setter for watch_paths, automatically restarts the observer."""
         if set(self._watch_paths) != set(new_paths):
-            logging.info(f"Watch paths changed from {self._watch_paths} to {new_paths}. Restarting observer.")
+            logger.info(f"Watch paths changed from {self._watch_paths} to {new_paths}. Restarting observer.")
             self._watch_paths = new_paths
             self.stop()
             self.start()
@@ -42,22 +44,22 @@ class WatchdogHandler(FileSystemEventHandler):
             self.observer.stop()
             self.observer.join(timeout=1.0)
             if self.observer.is_alive():
-                logging.warning("Previous Watchdog observer thread did not stop gracefully.")
+                logger.warning("Previous Watchdog observer thread did not stop gracefully.")
             self.observer = Observer()
 
         for path in self.watch_paths:
             if not os.path.exists(path):
-                logging.warning(f"Watch path does not exist: {path}")
+                logger.warning(f"Watch path does not exist: {path}")
                 continue
 
             self.observer.schedule(self, path=path, recursive=True)
-            logging.info(f"Watching {path} for changes...")
+            logger.info(f"Watching {path} for changes...")
 
         if self.watch_paths:
             self.observer.start()
-            logging.info("Watchdog observer started.")
+            logger.info("Watchdog observer started.")
         else:
-            logging.info("No watch paths configured, Watchdog observer not started.")
+            logger.info("No watch paths configured, Watchdog observer not started.")
 
     def stop(self):
         """Shut down the observer thread."""
@@ -65,8 +67,8 @@ class WatchdogHandler(FileSystemEventHandler):
             self.observer.stop()
             self.observer.join(timeout=1.0)
             if self.observer.is_alive():
-                logging.warning("Watchdog observer thread did not stop gracefully.")
-        logging.info("Watchdog observer stopped.")
+                logger.warning("Watchdog observer thread did not stop gracefully.")
+        logger.info("Watchdog observer stopped.")
 
     def set_gui_directory(self, path: str, recursive: bool = True):
         """Watch the directory the GUI is currently browsing.
@@ -82,7 +84,7 @@ class WatchdogHandler(FileSystemEventHandler):
                 return
             try:
                 self.observer.unschedule(old_watch)
-                logging.info("Unwatched previous GUI directory: %s", old_path)
+                logger.info("Unwatched previous GUI directory: %s", old_path)
             except Exception:
                 pass  # already unscheduled or observer restarted
             self._gui_watch = None
@@ -92,11 +94,11 @@ class WatchdogHandler(FileSystemEventHandler):
         rp = os.path.realpath(path)
         for wp in self._watch_paths:
             if rp == os.path.realpath(wp) or rp.startswith(os.path.realpath(wp) + os.sep):
-                logging.debug("GUI directory %s already covered by watch_path %s", path, wp)
+                logger.debug("GUI directory %s already covered by watch_path %s", path, wp)
                 return
         watch = self.observer.schedule(self, path=path, recursive=recursive)
         self._gui_watch = (watch, path)
-        logging.info("Watching GUI directory: %s (recursive=%s)", path, recursive)
+        logger.info("Watching GUI directory: %s (recursive=%s)", path, recursive)
 
     def _notify_scan_progress(self, file_path: str):
         """Emit a scan_progress notification so the GUI adds the file to its grid."""
@@ -128,7 +130,7 @@ class WatchdogHandler(FileSystemEventHandler):
         (delete + rename/create) so a single-use flag is insufficient.
         """
         deadline = time.monotonic() + _IGNORE_WINDOW_SECS
-        logging.debug(f"Watchdog: Ignoring events for {path} for {_IGNORE_WINDOW_SECS}s")
+        logger.debug(f"Watchdog: Ignoring events for {path} for {_IGNORE_WINDOW_SECS}s")
         self._ignore_until[path] = deadline
 
     def dispatch(self, event):
@@ -138,7 +140,7 @@ class WatchdogHandler(FileSystemEventHandler):
 
         # why: exiftool writes via atomic rename through a _exiftool_tmp sidecar; ignore the temp event
         if event.src_path.endswith("_exiftool_tmp"):
-            logging.debug(f"Watchdog: Ignoring temporary file creation/modification: {event.src_path}")
+            logger.debug(f"Watchdog: Ignoring temporary file creation/modification: {event.src_path}")
             return
 
         # why: exiftool -overwrite_original does delete-original + rename-tmp,
@@ -147,7 +149,7 @@ class WatchdogHandler(FileSystemEventHandler):
         deadline = self._ignore_until.get(event.src_path)
         if deadline is not None:
             if time.monotonic() < deadline:
-                logging.debug(f"Watchdog: Ignoring self-inflicted {event.event_type}: {event.src_path}")
+                logger.debug(f"Watchdog: Ignoring self-inflicted {event.event_type}: {event.src_path}")
                 return
             del self._ignore_until[event.src_path]
 
@@ -161,7 +163,7 @@ class WatchdogHandler(FileSystemEventHandler):
             supported = self.thumbnail_manager.plugin_registry.get_supported_formats()
             image_path = find_image_for_sidecar(event.src_path, supported)
             if image_path:
-                logging.debug(f"Watchdog: Sidecar changed for {image_path}, re-extracting metadata")
+                logger.debug(f"Watchdog: Sidecar changed for {image_path}, re-extracting metadata")
                 self.thumbnail_manager.render_manager.submit_task(
                     f"sidecar_reread::{image_path}",
                     Priority.LOW,
@@ -175,7 +177,7 @@ class WatchdogHandler(FileSystemEventHandler):
         elif event.event_type == 'moved':
             old_path = event.src_path
             new_path = event.dest_path
-            logging.debug(f"Watchdog: Submitting move task for {old_path} → {new_path}")
+            logger.debug(f"Watchdog: Submitting move task for {old_path} → {new_path}")
             self.thumbnail_manager._mem_cache_remove(old_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_move::{old_path}::{new_path}",
@@ -188,7 +190,7 @@ class WatchdogHandler(FileSystemEventHandler):
             # if plugins are available; if not, the DB record is still preserved.
             file_path = new_path
         elif event.event_type == 'deleted':
-            logging.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
+            logger.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
             self.thumbnail_manager._mem_cache_remove(event.src_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_cleanup_deleted::{event.src_path}",
@@ -204,20 +206,20 @@ class WatchdogHandler(FileSystemEventHandler):
             if os.path.exists(xmp):
                 try:
                     os.remove(xmp)
-                    logging.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
+                    logger.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
                 except OSError as e:
-                    logging.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
+                    logger.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
             return
         else:
             return
 
-        logging.debug(f"Watchdog: Submitting {event.event_type} task for {file_path}")
+        logger.debug(f"Watchdog: Submitting {event.event_type} task for {file_path}")
         self.thumbnail_manager._mem_cache_remove(file_path)
         try:
             tasks = self.thumbnail_manager.create_tasks_for_file(file_path, Priority.LOW)
         except Exception as e:
             # why: watchdog callbacks run on observer thread; plugin error must not crash the observer
-            logging.error(f"Watchdog: Error creating tasks for '{file_path}': {e}", exc_info=True)
+            logger.error(f"Watchdog: Error creating tasks for '{file_path}': {e}", exc_info=True)
             return
         if not tasks:
             return

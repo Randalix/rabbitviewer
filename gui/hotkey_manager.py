@@ -1,5 +1,6 @@
 from PySide6.QtGui import QKeySequence, QShortcut, QKeyEvent
 import logging
+logger = logging.getLogger(__name__)
 import time
 from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox
 from PySide6.QtCore import Qt, QObject
@@ -27,7 +28,7 @@ class HotkeyManager(QObject):
 			app.installEventFilter(self)
 			app.focusChanged.connect(self._on_focus_changed)
 		else:
-			logging.warning("HotkeyManager: QApplication instance not found, falling back to parent widget for event filter.")
+			logger.warning("HotkeyManager: QApplication instance not found, falling back to parent widget for event filter.")
 			parent_widget.installEventFilter(self)
 		
 	def _setup_built_in_action_handlers(self):
@@ -53,7 +54,7 @@ class HotkeyManager(QObject):
 		for shortcut_list in self.shortcuts.values():
 			for shortcut in shortcut_list:
 				shortcut.setEnabled(not should_suppress)
-		logging.debug(f"HotkeyManager: shortcuts {'suppressed' if should_suppress else 'restored'} (focus → {type(new).__name__})")
+		logger.debug(f"HotkeyManager: shortcuts {'suppressed' if should_suppress else 'restored'} (focus → {type(new).__name__})")
 
 	def eventFilter(self, obj, event):
 		if not isinstance(event, QKeyEvent):
@@ -89,13 +90,13 @@ class HotkeyManager(QObject):
 				self.add_hotkey_shortcut(definition)
 			except Exception as e:
 				# why: skip malformed config entries without aborting the whole load
-				logging.error(f"Error loading hotkey config for {action_name}: {e}")
+				logger.error(f"Error loading hotkey config for {action_name}: {e}")
 
 	def add_hotkey_shortcut(self, definition: HotkeyDefinition):
 		if not definition.sequences:
 			return
 
-		logging.debug(f"Setting up hotkey: {definition.action_name} ({definition.sequences})")
+		logger.debug(f"Setting up hotkey: {definition.action_name} ({definition.sequences})")
 		
 		self.definitions[definition.action_name] = definition
 		self.shortcuts[definition.action_name] = []
@@ -110,16 +111,16 @@ class HotkeyManager(QObject):
 
 	def add_action(self, action_name: str, callback: Callable):
 		self.actions[action_name] = callback
-		logging.debug(f"Registered action '{action_name}' with callback {callback}")
+		logger.debug(f"Registered action '{action_name}' with callback {callback}")
 
 	def on_shortcut_triggered(self, action_name: str):
-		logging.debug(f"HotkeyManager.on_shortcut_triggered: '{action_name}' (shortcuts enabled: {any(s.isEnabled() for sl in self.shortcuts.values() for s in sl)})")
+		logger.debug(f"HotkeyManager.on_shortcut_triggered: '{action_name}' (shortcuts enabled: {any(s.isEnabled() for sl in self.shortcuts.values() for s in sl)})")
 		handler = self.actions.get(action_name)
 		if handler:
 			try:
 				handler()
 			except Exception as e:
 				# why: isolate handler crashes so one broken action can't break other shortcuts
-				logging.error(f"Error executing action {action_name}: {e}")
+				logger.error(f"Error executing action {action_name}: {e}")
 		else:
-			logging.error(f"No handler found for action: {action_name}")
+			logger.error(f"No handler found for action: {action_name}")
