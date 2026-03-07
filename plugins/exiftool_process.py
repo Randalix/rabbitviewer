@@ -5,13 +5,14 @@ One ExifToolProcess per worker thread eliminates per-file Perl startup overhead
 (~200-500 ms on cold NAS paths). Numbered execute IDs make sentinel detection
 safe for arbitrary binary output.
 """
-import functools
 import logging
+import os
 import select
+import shutil
 import subprocess
 import threading
 import time
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +20,45 @@ logger = logging.getLogger(__name__)
 _all_processes: List["ExifToolProcess"] = []
 _registry_lock = threading.Lock()
 
+# Resolved absolute path to the exiftool binary (cached after first success).
+_exiftool_path: Optional[str] = None
 
-@functools.lru_cache(maxsize=1)
+# Common install locations to check when exiftool is not on PATH
+# (e.g. GUI apps launched from Dock inherit a minimal PATH).
+_EXTRA_SEARCH_DIRS = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/opt/local/bin",
+]
+
+
+def _resolve_exiftool() -> Optional[str]:
+    global _exiftool_path
+    if _exiftool_path is not None:
+        return _exiftool_path
+
+    found = shutil.which("exiftool")
+    if found:
+        _exiftool_path = found
+        return found
+
+    for d in _EXTRA_SEARCH_DIRS:
+        candidate = os.path.join(d, "exiftool")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            _exiftool_path = candidate
+            return candidate
+
+    return None
+
+
 def is_exiftool_available() -> bool:
-    """Return True if exiftool is on PATH. Result is cached after the first call."""
-    try:
-        subprocess.run(["exiftool", "-ver"], capture_output=True, check=True, timeout=5)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        logger.warning("exiftool not found or unavailable.")
-        return False
+    """Return True if exiftool can be found.
+
+    Positive results are cached permanently (exiftool won't vanish
+    mid-session).  Negative results are retried each call so a late
+    PATH fix or brew install takes effect without restarting.
+    """
+    return _resolve_exiftool() is not None
 
 
 class ExifToolProcess:
@@ -41,8 +71,11 @@ class ExifToolProcess:
             _all_processes.append(self)
 
     def _spawn(self) -> subprocess.Popen:
+        path = _resolve_exiftool()
+        if path is None:
+            raise FileNotFoundError("exiftool not found on PATH or in common install directories")
         return subprocess.Popen(
-            ["exiftool", "-stay_open", "True", "-@", "-"],
+            [path, "-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

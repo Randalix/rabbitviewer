@@ -129,12 +129,14 @@ class BasePlugin(ABC):
         os.makedirs(self.thumbnail_cache_dir, exist_ok=True)
         os.makedirs(self.image_cache_dir, exist_ok=True)
         
-        # Check availability and register if available
+        # Always register formats so the directory scanner discovers files
+        # even when optional dependencies (e.g. exiftool) are temporarily
+        # missing.  Plugins handle missing tools gracefully at use time.
+        self.register_formats()
         if self.is_available():
-            self.register_formats()
             logging.info(f"Plugin {self.__class__.__name__} loaded successfully")
         else:
-            logging.warning(f"Plugin {self.__class__.__name__} not available - missing dependencies")
+            logging.warning(f"Plugin {self.__class__.__name__} loaded (formats registered) but dependencies unavailable")
     
     @abstractmethod
     def is_available(self) -> bool:
