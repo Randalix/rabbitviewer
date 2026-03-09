@@ -22,6 +22,7 @@ class _CompareSplit(QWidget):
         self._picture_base = PictureBase()
         self._picture_base.viewStateChanged.connect(self.update)
         self._current_path = None
+        self._service = None
         self._is_panning = False
         self._last_mouse_pos = QPoint()
         self._interacting = False
@@ -35,6 +36,7 @@ class _CompareSplit(QWidget):
     def fetch_image(self, image_path: str, service):
         if not service:
             return
+        self._service = service
         result = service.request_view_image(image_path)
         if result is None:
             return
@@ -53,8 +55,19 @@ class _CompareSplit(QWidget):
 
     def _on_image_ready(self, image: QImage):
         self._picture_base.setImage(image)
+        self._apply_orientation()
         self._picture_base.setFitMode(True)
         self.update()
+
+    def _apply_orientation(self) -> None:
+        if not self._service or not self._current_path:
+            return
+        try:
+            resp = self._service.get_metadata_batch([self._current_path])
+            orientation = resp.get(self._current_path, {}).get('orientation', 1) or 1
+        except Exception:  # why: service unavailable or NAS drop; orientation is best-effort
+            return
+        self._picture_base.setOrientationFromExif(orientation)
 
     def apply_view_state(self, center: QPointF, zoom: float, fit_mode: bool):
         if fit_mode:

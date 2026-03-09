@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional
-from PySide6.QtCore import QObject, Signal, QPointF, QSizeF, QRectF
+from PySide6.QtCore import QObject, Signal, QPointF, QSizeF, QRectF, Qt
 from PySide6.QtGui import QImage, QTransform
 import logging
 logger = logging.getLogger(__name__)
@@ -22,13 +22,18 @@ class PictureBase(QObject):
     _MIN_ZOOM = 0.01
     _MAX_ZOOM = 50.0
 
+    # EXIF Orientation tag → clockwise rotation degrees (non-mirror values).
+    _EXIF_ORIENTATION_DEGREES = {1: 0, 3: 180, 6: 90, 8: 270}
+
     # Signals for state changes
     viewStateChanged = Signal(ViewState)
     imageLoaded = Signal()
-    
+
     def __init__(self):
         super().__init__()
+        self._raw_image: Optional[QImage] = None
         self._image: Optional[QImage] = None
+        self._orientation_degrees: int = 0
         self._view_state = ViewState(
             center=QPointF(0.5, 0.5),  # Start at center
             zoom=1.0,
@@ -144,11 +149,47 @@ class PictureBase(QObject):
         return self._image if self.has_image() else None
 
     def setImage(self, image: QImage) -> None:
+        self._raw_image = image
+        self._orientation_degrees = 0
         self._image = image
         if image and not image.isNull():
             self._updatePaddingRect()
             self.imageLoaded.emit()
-            
+
+    def _apply_orientation(self) -> None:
+        # why: always re-derives from _raw_image to avoid cumulative interpolation loss.
+        if not self._raw_image or self._raw_image.isNull():
+            return
+        if self._orientation_degrees == 0:
+            self._image = self._raw_image
+        else:
+            self._image = self._raw_image.transformed(
+                QTransform().rotate(self._orientation_degrees),
+                Qt.SmoothTransformation,
+            )
+        self._updatePaddingRect()
+
+    def setOrientation(self, degrees: int) -> None:
+        degrees = degrees % 360
+        if degrees == self._orientation_degrees:
+            return
+        self._orientation_degrees = degrees
+        self._apply_orientation()
+        if self._view_state.fit_mode:
+            self._view_state.zoom = self.calculateFitZoom()
+            self._view_state.center = QPointF(0.5, 0.5)
+        self._transform_dirty = True
+        self.viewStateChanged.emit(self._view_state)
+
+    def setOrientationFromExif(self, exif_value: int) -> None:
+        self.setOrientation(self._EXIF_ORIENTATION_DEGREES.get(exif_value, 0))
+
+    def rotateBy(self, degrees: int) -> None:
+        self.setOrientation(self._orientation_degrees + degrees)
+
+    def orientation(self) -> int:
+        return self._orientation_degrees
+
     def loadImageFromPath(self, path_to_load: str) -> bool:
         image = QImage(path_to_load)
         if not image.isNull():

@@ -40,11 +40,34 @@ if 'PySide6' not in sys.modules:
         Key_Down = 0x01000015
         Window = 0x00000001
         Tool = 0x0000000c
+        SmoothTransformation = 1
+        KeepAspectRatio = 1
+
+    class _QSizeF:
+        def __init__(self, w=0.0, h=0.0): self._w = w; self._h = h
+        def width(self): return self._w
+        def height(self): return self._h
+        def isEmpty(self): return self._w <= 0 or self._h <= 0
+        def __eq__(self, other):
+            if isinstance(other, _QSizeF): return self._w == other._w and self._h == other._h
+            return NotImplemented
+        def __ne__(self, other):
+            eq = self.__eq__(other)
+            return eq if eq is NotImplemented else not eq
+
+    class _QRectF:
+        def __init__(self, x=0.0, y=0.0, w=0.0, h=0.0): self._x = x; self._y = y; self._w = w; self._h = h
+        def left(self): return self._x
+        def top(self): return self._y
+        def width(self): return self._w
+        def height(self): return self._h
 
     _qtcore = types.ModuleType('PySide6.QtCore')
     _qtcore.QObject = _QObject        # type: ignore[attr-defined]
     _qtcore.Signal = _Signal          # type: ignore[attr-defined]
     _qtcore.QPointF = _QPointF        # type: ignore[attr-defined]
+    _qtcore.QSizeF = _QSizeF          # type: ignore[attr-defined]
+    _qtcore.QRectF = _QRectF          # type: ignore[attr-defined]
     _qtcore.Qt = _Qt                  # type: ignore[attr-defined]
 
     # Permissive stub class: any attribute access returns a no-op callable / nested stub.

@@ -278,6 +278,7 @@ class InspectorView(QWidget):
         if image_path != self._current_image_path:
             success = self._picture_base.loadImageFromBytes(image_bytes)
             if success:
+                self._apply_orientation(image_path)
                 self._current_image_path = image_path
                 self._view_image_ready = True
                 self._picture_base.setViewportSize(self.size())
@@ -296,6 +297,7 @@ class InspectorView(QWidget):
             success = self._picture_base.loadImageFromPath(view_image_path)
 
             if success:
+                self._apply_orientation(original_image_path)
                 self._current_image_path = original_image_path
                 self._view_image_ready = True
                 logger.info("Inspector displaying image: %s", original_image_path)
@@ -311,6 +313,16 @@ class InspectorView(QWidget):
 
         if self._view_mode == _ViewMode.TRACKING:
             self.set_center(norm_pos)
+
+    def _apply_orientation(self, image_path: str) -> None:
+        if not self.service:
+            return
+        try:
+            resp = self.service.get_metadata_batch([image_path])
+            orientation = resp.get(image_path, {}).get('orientation', 1) or 1
+        except Exception:  # why: service unavailable or NAS drop; orientation is best-effort
+            return
+        self._picture_base.setOrientationFromExif(orientation)
 
     def set_center(self, norm_pos: QPointF):
         if self._current_image_path:

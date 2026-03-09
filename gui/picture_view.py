@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, Signal, Slot, QPointF, QSizeF, QPoint, QTimer
-from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QKeyEvent, QTransform
+from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QKeyEvent
 
 import logging
 logger = logging.getLogger(__name__)
@@ -221,11 +221,7 @@ class PictureView(QWidget):
         self._daemon_signals = daemon_signals
         daemon_signals.previews_ready.connect(self._on_previews_ready)
 
-    # EXIF orientation → clockwise rotation degrees (non-mirror orientations).
-    _ORIENTATION_DEGREES = {1: 0, 3: 180, 6: 90, 8: 270}
-
     def _apply_db_orientation(self, image_path: str) -> None:
-        """Apply the DB orientation as a visual rotation after loading a cached image."""
         if not self.service:
             return
         orientation = 1
@@ -233,22 +229,14 @@ class PictureView(QWidget):
             resp = self.service.get_metadata_batch([image_path])
             if resp and image_path in resp:
                 orientation = resp[image_path].get('orientation', 1) or 1
-        except Exception:
+        except Exception:  # why: service unavailable or NAS drop; orientation is best-effort
             pass
-        degrees = self._ORIENTATION_DEGREES.get(orientation, 0)
-        if degrees:
-            img = self._picture_base.get_image()
-            if img and not img.isNull():
-                rotated = img.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
-                self._picture_base.setImage(rotated)
+        self._picture_base.setOrientationFromExif(orientation)
 
     def rotate_current_image(self, degrees: int) -> None:
-        """Apply a visual rotation to the currently displayed image immediately."""
-        img = self._picture_base.get_image()
-        if img is None or img.isNull():
+        if not self._picture_base.has_image():
             return
-        rotated = img.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
-        self._picture_base.setImage(rotated)
+        self._picture_base.rotateBy(degrees)
         self._picture_base.setFitMode(True)
         self.update()
 

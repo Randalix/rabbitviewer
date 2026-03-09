@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 _ValidationErrors = (ValueError, TypeError, KeyError)
+from gui.picture_base import PictureBase
 from gui.components.virtual_grid_manager import VirtualGridManager
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, RemoveFromSelectionCommand
 from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, StatusMessageEventData
@@ -1125,9 +1126,6 @@ class ThumbnailViewWidget(QFrame):
                     label.clear()
                     label.loaded = False
 
-    # EXIF orientation → clockwise rotation degrees (pure rotations only).
-    _ORIENTATION_DEGREES = {1: 0, 3: 180, 6: 90, 8: 270}
-
     def _apply_db_orientation(self, image: QImage, image_path: str) -> QImage:
         """Apply DB orientation as a visual QImage transform."""
         if not self.service:
@@ -1137,7 +1135,7 @@ class ThumbnailViewWidget(QFrame):
             orientation = resp.get(image_path, {}).get('orientation', 1) or 1
         except Exception:
             return image
-        degrees = self._ORIENTATION_DEGREES.get(orientation, 0)
+        degrees = PictureBase._EXIF_ORIENTATION_DEGREES.get(orientation, 0)
         if degrees:
             return image.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
         return image
