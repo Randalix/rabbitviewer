@@ -675,6 +675,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("zoom_in", lambda: self._handle_hotkey_zoom(1))
         self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
         self.hotkey_manager.add_action("compare_view", self._open_compare_view)
+        self.hotkey_manager.add_action("toggle_group_mode", self._toggle_group_mode)
 
     def _toggle_hotkey_help(self):
         if not hasattr(self, '_hotkey_help_overlay') or self._hotkey_help_overlay is None:
@@ -683,6 +684,10 @@ class MainWindow(QMainWindow):
             self._hotkey_help_overlay = HotkeyHelpOverlay(
                 self, self.hotkey_manager.definitions, trigger_key)
         self._hotkey_help_overlay.toggle()
+
+    def _toggle_group_mode(self):
+        if self.thumbnail_view:
+            self.thumbnail_view.toggle_group_mode()
 
     def load_directory(self, directory_path: str, recursive: bool = True):
         logger.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")

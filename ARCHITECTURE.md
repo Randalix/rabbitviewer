@@ -282,6 +282,14 @@ Pure-function module (no Qt or daemon dependencies) for Manhattan ring-distance 
 
 `compute_heatmap(center_row, center_col, columns, total_visible, loaded_set)` returns `(thumb_pairs, fullres_pairs)` as `[(visible_idx, priority), ...]`. Uses bounding-box clipping to avoid scanning the entire grid.
 
+### File Grouping — `core/file_grouping.py`
+
+Pure-function module (no Qt, no daemon deps) for RAW+JPG filename-stem grouping. `FileGroup(primary, raw_files)` pairs a JPG with its RAW counterparts. `build_group_map(file_paths)` groups by `(directory, stem)` and returns `(group_map, hidden_raw_paths)`. `expand_paths_for_group(paths, group_map)` expands primary paths to include paired RAWs for operations like delete and rating.
+
+Toggled by the `J` hotkey. When active, `ThumbnailViewWidget` hides grouped RAW paths via `_hidden_indices` (same pipeline as text/star/tag filters). Rating and delete operations cascade to paired RAWs through `ScriptAPI.expand_group_paths()`. Scripts that need the RAW specifically use `ScriptAPI.get_selected_groups()` and `FileGroup.raw_files`.
+
+---
+
 ### DirectoryScanner — `core/directory_scanner.py`
 
 Yields file paths from a directory walk. Applies ignore patterns (glob) and min-size filtering. Supported extensions are cached at construction time from the plugin registry. `scan_incremental` is the generator used by `scan_directory` and directly by `socket_thumbnailer.py`; it yields batches of 10 paths for cooperative use in SourceJobs (small batches improve priority responsiveness). `scan_incremental_reconcile` wraps `scan_incremental` with a `ReconcileContext`: discards found files from `db_file_set`, accumulates all paths in `discovered_files` for post-scan task creation, and leaves `ghost_files` (DB entries missing from disk) after exhaustion. Uses batches of 50.

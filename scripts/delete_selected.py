@@ -11,18 +11,21 @@ def run_script(api: ScriptAPI):
         return
 
     selected_list = sorted(list(selected))
-    count = len(selected_list)
+
+    # Expand to include paired RAW files when group mode is active.
+    all_paths = api.expand_group_paths(selected_list)
+    count = len(all_paths)
 
     logger.info(f"Removing {count} images:")
-    for path in selected_list:
+    for path in all_paths:
         logger.info(f"  - {path}")
 
     # 1. Remove from view for immediate UI feedback.
-    api.remove_images(selected_list)
+    api.remove_images(all_paths)
 
     # 2. Delegate filesystem + DB cleanup to the daemon (non-blocking).
     if not api.daemon_tasks([
-        ("send2trash", selected_list),
-        ("remove_records", selected_list),
+        ("send2trash", all_paths),
+        ("remove_records", all_paths),
     ]):
         logger.error("Failed to queue daemon deletion tasks")

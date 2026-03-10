@@ -135,6 +135,10 @@ DEFAULT_CONFIG = {
         "redo_selection": {
             "sequence": "Ctrl+Shift+Z",
             "description": "Redo selection"
+        },
+        "toggle_group_mode": {
+            "sequence": "J",
+            "description": "Toggle RAW+JPG grouping"
         }
     },
     "comfyui": {

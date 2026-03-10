@@ -26,6 +26,7 @@ from core.priority import Priority
 from core.event_system import ThumbnailOverlayEventData
 from gui.overlay_manager import OverlayManager, OverlayDescriptor, BULK_THRESHOLD
 from gui.overlay_renderers import render_stars, render_badge
+from core.file_grouping import FileGroup, build_group_map, expand_paths_for_group
 
 from dataclasses import dataclass
 
@@ -232,6 +233,12 @@ class ThumbnailViewWidget(QFrame):
         self._stale_request_ts: dict[str, float] = {}  # path → monotonic time first seen unloaded after request
         self._STALE_THRESHOLD_S = 5.0  # seconds before re-requesting an unloaded thumbnail
         self._viewport_generation: int = 0  # monotonic counter; stale IPC calls check this
+
+        # RAW+JPG group mode state
+        self._group_mode: bool = False
+        self._group_map: Dict[str, FileGroup] = {}       # primary_path → FileGroup
+        self._grouped_raw_paths: Set[str] = set()       # RAW paths hidden by grouping
+        self._raw_to_primary: Dict[str, str] = {}       # raw_path → primary_path
 
         self.image_states: Dict[int, ImageState] = {}
 
@@ -839,7 +846,9 @@ class ThumbnailViewWidget(QFrame):
             "[virtual] _add_image_batch: +%d new files (all_files=%d)",
             len(new_files), len(self.all_files),
         )
-        if not self._hidden_indices:
+        if self._group_mode:
+            self._rebuild_group_map()
+        if not self._hidden_indices and not self._group_mode:
             if self._scan_active:
                 # Active scan (cached or uncached): append new files to end.
                 # Existing items never shift — only the scrollbar range grows.
@@ -980,12 +989,29 @@ class ThumbnailViewWidget(QFrame):
             self._pixmap_cache = new_pixmap_cache
             self._thumb_path_cache = new_thumb_path_cache
 
-            # -- 4. Shift _hidden_indices to match new original indices ------
+            # -- 4a. Rebuild group map if group mode is active ----------------
+            if self._group_mode:
+                self._rebuild_group_map()
+
+            # -- 4b. Shift _hidden_indices to match new original indices ------
+            #
+            # Filter-hidden paths come from old_hidden_paths (excluding any
+            # that were group-hidden — those are rebuilt from scratch below).
+            # Group-hidden paths come purely from the freshly rebuilt group map
+            # so that dissolving a group (e.g. JPG primary deleted) correctly
+            # un-hides the orphaned RAW.
             self._hidden_indices = set()
             for hp in old_hidden_paths:
+                if self._group_mode and hp in self._raw_to_primary:
+                    continue  # handled by group map below
                 new_idx = self._path_to_idx.get(hp)
                 if new_idx is not None:
                     self._hidden_indices.add(new_idx)
+            if self._group_mode:
+                for raw_path in self._grouped_raw_paths:
+                    idx = self._path_to_idx.get(raw_path)
+                    if idx is not None:
+                        self._hidden_indices.add(idx)
 
             # -- 5. Rebuild visible ↔ original mappings inline ---------------
             self.current_files = []
@@ -1593,6 +1619,8 @@ class ThumbnailViewWidget(QFrame):
         for i, file_path in enumerate(self.all_files):
             if file_path not in visible_paths:
                 new_hidden_indices.add(i)
+            elif self._group_mode and file_path in self._grouped_raw_paths:
+                new_hidden_indices.add(i)
 
         hidden_changed = self._hidden_indices != new_hidden_indices
         count_changed = len(self.all_files) != self._last_layout_file_count
@@ -1926,4 +1954,49 @@ class ThumbnailViewWidget(QFrame):
 
     def has_active_tag_filter(self) -> bool:
         return bool(self._current_tag_filter)
+
+    # -- RAW+JPG group mode ------------------------------------------------
+
+    @property
+    def group_mode(self) -> bool:
+        return self._group_mode
+
+    @property
+    def group_map(self) -> Dict[str, FileGroup]:
+        return self._group_map
+
+    def toggle_group_mode(self):
+        self._group_mode = not self._group_mode
+        if self._group_mode:
+            self._rebuild_group_map()
+        else:
+            self._group_map.clear()
+            self._grouped_raw_paths.clear()
+            self._raw_to_primary.clear()
+        self.reapply_filters()
+        state = "ON" if self._group_mode else "OFF"
+        hidden = len(self._grouped_raw_paths) if self._group_mode else 0
+        msg = f"RAW+JPG grouping: {state}"
+        if hidden:
+            msg += f" ({hidden} RAW files grouped)"
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE, source="thumbnail_view",
+            timestamp=time.time(), message=msg, timeout=3000,
+        ))
+
+    def _rebuild_group_map(self):
+        self._group_map, self._grouped_raw_paths = build_group_map(self.all_files)
+        self._raw_to_primary = {}
+        for primary, group in self._group_map.items():
+            for raw in group.raw_files:
+                self._raw_to_primary[raw] = primary
+
+    def get_group_for_path(self, path: str) -> Optional[FileGroup]:
+        group = self._group_map.get(path)
+        if group:
+            return group
+        primary = self._raw_to_primary.get(path)
+        if primary:
+            return self._group_map.get(primary)
+        return None
 

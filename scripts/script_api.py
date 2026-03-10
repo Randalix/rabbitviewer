@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import List, Optional, Set, Dict
 from core.event_system import event_system, EventType, StatusMessageEventData, StatusSection, ThumbnailOverlayEventData
+from core.file_grouping import FileGroup, expand_paths_for_group
 
 _overlay_id_counter = itertools.count()
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand
@@ -230,12 +231,14 @@ class ScriptAPI:
             logger.debug("set_rating_for_images: no images provided.")
             return
 
-        num_images = len(image_paths)
+        # Cascade rating to paired RAW files when group mode is active.
+        all_paths = self.expand_group_paths(image_paths)
+        num_images = len(all_paths)
         logger.debug(f"set_rating_for_images: rating={rating} for {num_images} images.")
         start_time = time.time()
 
         # The new API handles DB updates and file writes in one call
-        success = self.service.set_rating(image_paths, rating)
+        success = self.service.set_rating(all_paths, rating)
 
         duration = time.time() - start_time
 
@@ -369,6 +372,39 @@ class ScriptAPI:
             paths=list(image_paths),
             overlay_id=overlay_id,
         ))
+
+    # -- RAW+JPG group mode helpers ----------------------------------------
+
+    def is_group_mode(self) -> bool:
+        view = self.main_window.thumbnail_view
+        return bool(view and view.group_mode)
+
+    def get_selected_groups(self) -> List[FileGroup]:
+        """Return a FileGroup for each selected image.
+
+        When group mode is off (or a file has no group), a synthetic
+        single-file group is returned so callers always get a uniform type.
+        """
+        view = self.main_window.thumbnail_view
+        selected = self.get_selected_images()
+        groups: List[FileGroup] = []
+        seen_primaries: Set[str] = set()
+        for path in sorted(selected):
+            group = view.get_group_for_path(path) if view else None
+            if group:
+                if group.primary not in seen_primaries:
+                    seen_primaries.add(group.primary)
+                    groups.append(group)
+            else:
+                groups.append(FileGroup(primary=path, raw_files=()))
+        return groups
+
+    def expand_group_paths(self, paths: List[str]) -> List[str]:
+        """Expand primary paths to include paired RAW files (group mode only)."""
+        view = self.main_window.thumbnail_view
+        if not view or not view.group_mode:
+            return list(paths)
+        return expand_paths_for_group(paths, view.group_map)
 
     def _update_status_bar_rating_if_visible(self, image_paths: List[str], rating: int) -> None:
         """If the currently displayed image was just rated, push the new rating to the status bar."""
