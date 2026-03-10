@@ -471,6 +471,10 @@ class ThumbnailViewWidget(QFrame):
                 self._selection_mode = "add"
             else:
                 self._selection_mode = "replace"
+                # Seed the preview tracker with the current selection so that
+                # delta tracking in _update_selection_preview will unhighlight
+                # previously-selected labels on the first preview call.
+                self._last_preview_selected = set(self._selected_indices)
 
             self._update_selection_preview(start_index, start_index)
 
