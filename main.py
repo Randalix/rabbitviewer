@@ -175,6 +175,7 @@ def _run_daemon(config_manager, log_level_override=None):
                 logger.info("GUI gone — resuming daemon workers.")
                 rm.resume()
                 background_indexer.recover_orphans()
+                thumbnail_manager.recover_pending_writes()
                 gui_was_active = False
         except Exception as e:  # why: is_gui_active() can raise OSError on remote fs; must not crash poll loop
             logger.debug("GUI lock poll error: %s", e)
@@ -293,6 +294,9 @@ def _run_gui(args, config_manager):
     directory_scanner = DirectoryScanner(thumbnail_manager, config_manager,
                                         source_cache=thumbnail_manager.source_cache)
     service = ThumbnailService(thumbnail_manager, directory_scanner)
+    recovered = service.recover_pending_writes()
+    if recovered:
+        logger.info(f"Recovered {recovered} pending file writes from prior session")
 
     watcher.start()
 

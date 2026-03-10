@@ -76,6 +76,7 @@ class MetadataDatabase:
                         view_image_path TEXT,  -- Path to the cached image for display
                         exif_data TEXT,  -- JSON string for full EXIF data
                         mtime REAL NOT NULL,
+                        birthtime REAL,
                         created_at REAL NOT NULL,
                         updated_at REAL NOT NULL
                     )
@@ -124,6 +125,12 @@ class MetadataDatabase:
                     pass  # Column already exists
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_accessed_at ON image_metadata(accessed_at)')
 
+                # Migration: add birthtime column for file creation time sorting
+                try:
+                    cursor.execute("ALTER TABLE image_metadata ADD COLUMN birthtime REAL")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
                 # Tag system: normalized junction table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS tags (
@@ -157,6 +164,18 @@ class MetadataDatabase:
                 cursor.execute('''
                     CREATE INDEX IF NOT EXISTS idx_ledger_root_status
                     ON scan_ledger(scan_root, status)
+                ''')
+
+                # Write-intent ledger: tracks in-flight file writes (rating,
+                # orientation, tags) so they survive application restart.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS pending_writes (
+                        file_path   TEXT NOT NULL,
+                        write_type  TEXT NOT NULL,
+                        payload     TEXT NOT NULL,
+                        created_at  REAL NOT NULL,
+                        PRIMARY KEY (file_path, write_type)
+                    )
                 ''')
 
                 self.conn.commit()
@@ -273,7 +292,8 @@ class MetadataDatabase:
             logger.warning(f"File not found for metadata extraction: {file_path}")
             return
         metadata = self._extract_metadata_from_file(file_path, file_size=st.st_size)
-        self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
+        self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st,
+                             birthtime=getattr(st, 'st_birthtime', None))
         logger.debug(f"Metadata extracted and stored for: {file_path}")
 
     def needs_full_metadata(self, file_path: str) -> bool:
@@ -316,6 +336,7 @@ class MetadataDatabase:
 
         orientation = plugin_meta.get('orientation', 1)
         rating = plugin_meta.get('rating', 0)
+        birthtime = getattr(st, 'st_birthtime', None)
         path_hash = self._get_metadata_hash(file_path, stat_result=st)
         current_time = time.time()
 
@@ -335,18 +356,19 @@ class MetadataDatabase:
                     cursor.execute('''
                         UPDATE image_metadata SET
                             path_hash = ?, file_size = ?, orientation = ?,
-                            rating = ?, mtime = ?, updated_at = ?
+                            rating = ?, mtime = ?,
+                            birthtime = COALESCE(?, birthtime), updated_at = ?
                         WHERE id = ?
                     ''', (path_hash, file_size, orientation, rating, mtime,
-                          current_time, existing[0]))
+                          birthtime, current_time, existing[0]))
                 else:
                     cursor.execute('''
                         INSERT INTO image_metadata
                         (file_path, path_hash, file_size, orientation, rating,
-                         mtime, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         mtime, birthtime, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (file_path, path_hash, file_size, orientation, rating,
-                          mtime, current_time, current_time))
+                          mtime, birthtime, current_time, current_time))
                 self.conn.commit()
         except sqlite3.Error as e:
             self.conn.rollback()
@@ -360,7 +382,8 @@ class MetadataDatabase:
             logger.warning(f"File not found for full metadata extraction: {file_path}")
             return
         metadata = self._extract_metadata_from_file(file_path, _use_plugin=False, file_size=st.st_size)
-        self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st)
+        self._store_metadata(file_path, metadata, st.st_mtime, stat_result=st,
+                             birthtime=getattr(st, 'st_birthtime', None))
         logger.debug(f"Full metadata extracted and stored for: {file_path}")
 
     def _extract_metadata_from_file(self, file_path: str, _use_plugin: bool = True, file_size: Optional[int] = None) -> Dict[str, Any]:
@@ -592,10 +615,11 @@ class MetadataDatabase:
                     cursor.execute('''
                         INSERT INTO image_metadata
                         (file_path, path_hash, file_size, thumbnail_path, view_image_path,
-                         mtime, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         mtime, birthtime, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (file_path, path_hash, st.st_size, thumbnail_path, view_image_path,
-                          st.st_mtime, current_time, current_time))
+                          st.st_mtime, getattr(st, 'st_birthtime', None),
+                          current_time, current_time))
 
                 self.conn.commit()
                 logger.debug(f"Committed thumbnail paths for {file_path}. Rows affected: {cursor.rowcount}")
@@ -793,7 +817,7 @@ class MetadataDatabase:
 
         return False
 
-    def _store_metadata(self, file_path: str, metadata: Dict[str, Any], mtime: float, stat_result: Optional[os.stat_result] = None):
+    def _store_metadata(self, file_path: str, metadata: Dict[str, Any], mtime: float, stat_result: Optional[os.stat_result] = None, birthtime: Optional[float] = None):
         """Stores metadata in the database."""
         try:
             path_hash = self._get_metadata_hash(file_path, stat_result=stat_result)
@@ -835,7 +859,8 @@ class MetadataDatabase:
                             rating = ?,
                             camera_make = ?, camera_model = ?, lens_model = ?, focal_length = ?, aperture = ?,
                             shutter_speed = ?, iso = ?, date_taken = ?, orientation = ?, color_space = ?,
-                            thumbnail_path = ?, view_image_path = ?, exif_data = ?, mtime = ?, updated_at = ?
+                            thumbnail_path = ?, view_image_path = ?, exif_data = ?, mtime = ?,
+                            birthtime = COALESCE(?, birthtime), updated_at = ?
                         WHERE id = ?
                     ''', (
                         path_hash, metadata.get('content_hash'), metadata.get('file_size', 0), metadata.get('width', 0), metadata.get('height', 0),
@@ -844,20 +869,21 @@ class MetadataDatabase:
                         metadata.get('lens_model'), metadata.get('focal_length'), metadata.get('aperture'),
                         metadata.get('shutter_speed'), metadata.get('iso'), metadata.get('date_taken'),
                         metadata.get('orientation', 1), metadata.get('color_space'), metadata.get('thumbnail_path'),
-                        metadata.get('view_image_path'), exif_json, mtime, current_time, existing_row[0]
+                        metadata.get('view_image_path'), exif_json, mtime,
+                        birthtime, current_time, existing_row[0]
                     ))
                 else:
                     # INSERT a new row
                     cursor.execute('''
                         INSERT INTO image_metadata
-                        (file_path, path_hash, content_hash, file_size, width, height, rating, camera_make, camera_model, lens_model, focal_length, aperture, shutter_speed, iso, date_taken, orientation, color_space, thumbnail_path, view_image_path, exif_data, mtime, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (file_path, path_hash, content_hash, file_size, width, height, rating, camera_make, camera_model, lens_model, focal_length, aperture, shutter_speed, iso, date_taken, orientation, color_space, thumbnail_path, view_image_path, exif_data, mtime, birthtime, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         file_path, path_hash, metadata.get('content_hash'), metadata.get('file_size', 0), metadata.get('width', 0), metadata.get('height', 0),
                         metadata.get('rating', 0), metadata.get('camera_make'), metadata.get('camera_model'), metadata.get('lens_model'),
                         metadata.get('focal_length'), metadata.get('aperture'), metadata.get('shutter_speed'), metadata.get('iso'),
                         metadata.get('date_taken'), metadata.get('orientation', 1), metadata.get('color_space'),
-                        metadata.get('thumbnail_path'), metadata.get('view_image_path'), exif_json, mtime, current_time, current_time
+                        metadata.get('thumbnail_path'), metadata.get('view_image_path'), exif_json, mtime, birthtime, current_time, current_time
                     ))
 
                 self.conn.commit()
@@ -904,9 +930,10 @@ class MetadataDatabase:
 
                     cursor.execute('''
                         INSERT INTO image_metadata
-                        (file_path, path_hash, file_size, rating, mtime, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (file_path, path_hash, file_size, rating, mtime, current_time, current_time))
+                        (file_path, path_hash, file_size, rating, mtime, birthtime, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (file_path, path_hash, file_size, rating, mtime,
+                          getattr(st, 'st_birthtime', None), current_time, current_time))
 
                 self.conn.commit()
                 rowcount = cursor.rowcount
@@ -986,6 +1013,7 @@ class MetadataDatabase:
                                 path_hash = hashlib.md5(info.encode('utf-8')).hexdigest()
                                 insert_data.append((
                                     path, path_hash, stat.st_size, rating, stat.st_mtime,
+                                    getattr(stat, 'st_birthtime', None),
                                     current_time, current_time
                                 ))
                             except OSError as e:
@@ -995,8 +1023,8 @@ class MetadataDatabase:
                         if insert_data:
                             cursor.executemany('''
                                 INSERT INTO image_metadata
-                                (file_path, path_hash, file_size, rating, mtime, created_at, updated_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                (file_path, path_hash, file_size, rating, mtime, birthtime, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             ''', insert_data)
 
             written = len(paths_to_process) - skipped
@@ -1166,6 +1194,7 @@ class MetadataDatabase:
                 path_hash = self._get_metadata_hash(path, stat_result=st)
                 records_to_insert.append((
                     path, path_hash, st.st_size, st.st_mtime,
+                    getattr(st, 'st_birthtime', None),
                     current_time, current_time
                 ))
             except OSError:
@@ -1176,8 +1205,8 @@ class MetadataDatabase:
                 with self.conn:
                     cursor = self.conn.cursor()
                     cursor.executemany("""
-                        INSERT OR IGNORE INTO image_metadata (file_path, path_hash, file_size, mtime, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT OR IGNORE INTO image_metadata (file_path, path_hash, file_size, mtime, birthtime, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, records_to_insert)
 
     def remove_records(self, file_paths: List[str]) -> bool:
@@ -1205,6 +1234,12 @@ class MetadataDatabase:
                         DELETE FROM image_metadata WHERE file_path IN ({placeholders})
                     ''', file_paths)
                     rows_affected = cursor.rowcount
+
+                    # 3. Clean up any pending writes for deleted files
+                    cursor.execute(f'''
+                        DELETE FROM pending_writes WHERE file_path IN ({placeholders})
+                    ''', file_paths)
+
                     logger.info(f"Deleted {rows_affected} records from database for {len(file_paths)} files.")
 
             # 3. Delete associated cache files outside the DB lock
@@ -1559,6 +1594,68 @@ class MetadataDatabase:
             self.remove_records(paths_to_remove)
 
         return bytes_to_free
+
+    # ------------------------------------------------------------------
+    #  Write-intent ledger — pending file writes survive restarts
+    # ------------------------------------------------------------------
+
+    def pending_write_insert(self, file_path: str, write_type: str, payload: dict) -> None:
+        """Record a file-write intent. INSERT OR REPLACE so the latest value wins."""
+        try:
+            with self._lock:
+                self.conn.execute(
+                    'INSERT OR REPLACE INTO pending_writes '
+                    '(file_path, write_type, payload, created_at) VALUES (?, ?, ?, ?)',
+                    (file_path, write_type, json.dumps(payload), time.time()),
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"pending_write_insert failed: {e}")
+
+    def pending_write_remove(self, file_path: str, write_type: str, payload: dict) -> None:
+        """Delete a completed write intent only if the payload matches.
+
+        A stale completion (from a superseded task) is a no-op because the
+        stored payload will have been replaced by INSERT OR REPLACE.
+        """
+        try:
+            with self._lock:
+                self.conn.execute(
+                    'DELETE FROM pending_writes '
+                    'WHERE file_path = ? AND write_type = ? AND payload = ?',
+                    (file_path, write_type, json.dumps(payload)),
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"pending_write_remove failed: {e}")
+
+    def pending_write_remove_for_file(self, file_path: str) -> None:
+        """Remove all pending writes for a file (used when the file is deleted)."""
+        try:
+            with self._lock:
+                self.conn.execute(
+                    'DELETE FROM pending_writes WHERE file_path = ?',
+                    (file_path,),
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"pending_write_remove_for_file failed: {e}")
+
+    def pending_write_get_all(self) -> List[dict]:
+        """Return all pending writes for recovery."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    'SELECT file_path, write_type, payload FROM pending_writes'
+                )
+                return [
+                    {'file_path': row[0], 'write_type': row[1],
+                     'payload': json.loads(row[2])}
+                    for row in cursor.fetchall()
+                ]
+        except sqlite3.Error as e:
+            logger.error(f"pending_write_get_all failed: {e}")
+            return []
 
     # ------------------------------------------------------------------
     #  Scan ledger — orphan recovery across GUI/daemon restarts

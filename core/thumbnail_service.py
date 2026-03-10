@@ -234,6 +234,7 @@ class ThumbnailService:
         success, _count = self.db.batch_set_ratings(image_paths, rating)
         if success:
             for path in image_paths:
+                self.db.pending_write_insert(path, 'rating', {'rating': rating})
                 self.rm.submit_task(
                     f"write_rating::{path}",
                     Priority.NORMAL,
@@ -263,6 +264,8 @@ class ThumbnailService:
             current = self.db.get_orientation(path)
             new_orientation = table.get(current, table.get(1, 1))
             self.db.set_orientation(path, new_orientation)
+            self.db.pending_write_insert(
+                path, 'orientation', {'orientation': new_orientation})
             # Remove any existing write_orientation task (regardless of state)
             # so the new submission with the latest orientation is not ignored.
             task_id = f"write_orientation::{path}"
@@ -314,6 +317,7 @@ class ThumbnailService:
     def _queue_tag_write_tasks(self, image_paths: List[str]) -> None:
         all_tags_map = self.db.batch_get_image_tags(image_paths)
         for path, path_tags in all_tags_map.items():
+            self.db.pending_write_insert(path, 'tags', {'tags': path_tags})
             self.rm.submit_task(
                 f"write_tags::{path}",
                 Priority.NORMAL,
@@ -377,6 +381,10 @@ class ThumbnailService:
     # ------------------------------------------------------------------
     #  Lifecycle
     # ------------------------------------------------------------------
+
+    def recover_pending_writes(self) -> int:
+        """Resubmit pending file writes from a prior session."""
+        return self.tm.recover_pending_writes()
 
     def shutdown(self):
         self.tm.shutdown()

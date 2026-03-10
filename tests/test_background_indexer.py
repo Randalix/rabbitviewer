@@ -57,6 +57,9 @@ class _StubLedger:
     def ledger_prune_complete(self, scan_root):
         return 0
 
+    def pending_write_get_all(self):
+        return []
+
 
 class _StubThumbnailManager:
 
@@ -68,6 +71,9 @@ class _StubThumbnailManager:
     def create_all_tasks_for_file(self, path, priority):
         self.all_calls.append(path)
         return []
+
+    def recover_pending_writes(self):
+        return 0
 
 
 class _MockRenderManager:

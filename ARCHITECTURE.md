@@ -38,10 +38,11 @@ Daemon startup:
   1. Acquire daemon PID lock (~/.rabbitviewer/cache/daemon.pid)
   2. Init core: ThumbnailManager, WatchdogHandler, DirectoryScanner
   3. Start BackgroundIndexer:
-     a. Phase 1 — recover orphans from scan_ledger at ORPHAN_SCAN(15)
-     b. Phase 2 — walk un-walked directories at BACKGROUND_SCAN(10)
+     a. Phase 0 — recover pending file writes (rating, orientation, tags) from pending_writes ledger
+     b. Phase 1 — recover orphans from scan_ledger at ORPHAN_SCAN(15)
+     c. Phase 2 — walk un-walked directories at BACKGROUND_SCAN(10)
   4. Poll GUI flock every 2s — pause workers when GUI active, resume when gone
-     On GUI disconnect: resume workers, then recover_orphans() again
+     On GUI disconnect: resume workers, recover_orphans(), recover_pending_writes()
 ```
 
 ---
@@ -56,6 +57,16 @@ Wires together:
 - `WatchdogHandler` (filesystem monitor)
 
 Coordinated with the GUI via flock: the daemon polls `is_gui_active()` every 2 s and pauses/resumes its `RenderManager` workers accordingly, so both processes never compete for resources. Signal handlers (`SIGTERM`, `SIGINT`) trigger graceful shutdown.
+
+### Write-Intent Ledger — `pending_writes` table in MetadataDatabase
+
+Tracks in-flight file write tasks (rating, orientation, tags) so they survive application restart.
+
+- **Schema:** `file_path TEXT`, `write_type TEXT` (`'rating'`, `'orientation'`, `'tags'`), `payload TEXT` (JSON), `created_at REAL`. PK: `(file_path, write_type)`.
+- **Write path:** `ThumbnailService` inserts before queuing the `RenderManager` task. `INSERT OR REPLACE` ensures only the latest value is stored (rapid re-edits collapse).
+- **Clear path:** `ThumbnailManager.write_*_to_file()` deletes the row after the plugin write succeeds, with a payload-match guard to avoid clearing superseded writes (e.g. rotation A completing after rotation B was queued).
+- **Recovery:** On GUI or daemon startup, `ThumbnailManager.recover_pending_writes()` queries all rows and resubmits tasks at `NORMAL` priority. Daemon also recovers on GUI disconnect (alongside `recover_orphans`).
+- **Cleanup:** `remove_records()` deletes pending writes for deleted files.
 
 ### Scan Ledger — `scan_ledger` table in MetadataDatabase
 

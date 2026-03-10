@@ -72,6 +72,11 @@ class BackgroundIndexer:
     # ------------------------------------------------------------------
 
     def start_indexing(self):
+        # Phase 0: recover pending file writes (rating, orientation, tags).
+        recovered = self.thumbnail_manager.recover_pending_writes()
+        if recovered:
+            logger.info(f"BackgroundIndexer: recovered {recovered} pending file writes")
+
         # Phase 1: recover orphaned files at ORPHAN_SCAN(15).
         self.recover_orphans()
 

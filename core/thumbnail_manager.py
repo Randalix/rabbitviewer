@@ -766,7 +766,10 @@ class ThumbnailManager:
                 success = plugin.write_rating_embedded(file_path, rating)
             else:
                 success = plugin.write_rating(file_path, rating)
-            if not success:
+            if success:
+                self.metadata_db.pending_write_remove(
+                    file_path, 'rating', {'rating': rating})
+            else:
                 logger.error(f"Plugin failed to write rating for {file_path}")
             return success
 
@@ -798,7 +801,10 @@ class ThumbnailManager:
                 success = plugin.write_tags_embedded(file_path, tag_names)
             else:
                 success = plugin.write_tags(file_path, tag_names)
-            if not success:
+            if success:
+                self.metadata_db.pending_write_remove(
+                    file_path, 'tags', {'tags': tag_names})
+            else:
                 logger.error(f"Plugin failed to write tags for {file_path}")
             return success
 
@@ -822,8 +828,13 @@ class ThumbnailManager:
         plugin = self.plugin_registry.get_plugin_for_format(ext)
         if plugin and plugin.is_available():
             if mode == "embedded":
-                return plugin.write_orientation_embedded(file_path, orientation)
-            return plugin.write_orientation(file_path, orientation)
+                success = plugin.write_orientation_embedded(file_path, orientation)
+            else:
+                success = plugin.write_orientation(file_path, orientation)
+            if success:
+                self.metadata_db.pending_write_remove(
+                    file_path, 'orientation', {'orientation': orientation})
+            return success
 
         logger.warning(f"No plugin found for format {ext} to write orientation for {file_path}")
         return False
@@ -1154,4 +1165,46 @@ class ThumbnailManager:
             file_path=file_path,
             rating=rating
         )
+
+    # ------------------------------------------------------------------
+    #  Pending-write recovery
+    # ------------------------------------------------------------------
+
+    def recover_pending_writes(self) -> int:
+        """Resubmit pending file writes from a prior session. Returns count."""
+        pending = self.metadata_db.pending_write_get_all()
+        if not pending:
+            return 0
+
+        count = 0
+        for row in pending:
+            fp = row['file_path']
+            wt = row['write_type']
+            payload = row['payload']
+
+            if wt == 'rating':
+                self.render_manager.submit_task(
+                    f"write_rating::{fp}", Priority.NORMAL,
+                    self.write_rating_to_file, fp, payload['rating'],
+                    task_type=TaskType.SIMPLE,
+                )
+            elif wt == 'orientation':
+                self.render_manager.submit_task(
+                    f"write_orientation::{fp}", Priority.NORMAL,
+                    self.write_orientation_to_file, fp, payload['orientation'],
+                    task_type=TaskType.SIMPLE,
+                )
+            elif wt == 'tags':
+                self.render_manager.submit_task(
+                    f"write_tags::{fp}", Priority.NORMAL,
+                    self.write_tags_to_file, fp, payload['tags'],
+                    task_type=TaskType.SIMPLE,
+                )
+            else:
+                logger.warning(f"Unknown pending write type: {wt} for {fp}")
+                continue
+            count += 1
+
+        logger.info(f"Recovered {count} pending file writes from prior session")
+        return count
 
