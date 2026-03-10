@@ -92,6 +92,19 @@ A floating info panel (`I`) shows structured metadata for the hovered or pinned 
 
 Generate AI-edited variants of selected images using a local ComfyUI server (`G`). RabbitViewer dynamically builds form controls from any ComfyUI API workflow JSON. Ships with a built-in Flux Kontext workflow. Multi-image batches run in a background thread with cooperative cancellation.
 
+### Color Management
+
+Point RabbitViewer at your monitor's ICC profile and all images — thumbnails, full-resolution views, comparisons, inspector — are converted from sRGB to your calibrated color space at display time.
+
+Set it in `~/.config/rabbitviewer/config.yaml`:
+
+```yaml
+color_management:
+  icc_profile_path: /Library/ColorSync/Profiles/YourMonitor.icc
+```
+
+No cache rebuild required. Leave the path empty to disable.
+
 ### Full Image Viewer
 
 * Smooth zoom

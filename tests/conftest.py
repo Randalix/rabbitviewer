@@ -79,10 +79,22 @@ if 'PySide6' not in sys.modules:
 
     # QtGui stubs — enough for overlay_renderers and thumbnail_view imports
     _qtgui = types.ModuleType('PySide6.QtGui')
-    for _name in ('QPixmap', 'QImage', 'QColor', 'QMouseEvent', 'QKeyEvent',
+    for _name in ('QImage', 'QColor', 'QMouseEvent', 'QKeyEvent',
                    'QCursor', 'QPainter', 'QFont', 'QPainterPath', 'QPen',
                    'QTransform'):
         setattr(_qtgui, _name, type(_name, (_Stub,), {}))
+
+    class _QPixmap(_Stub):
+        @staticmethod
+        def fromImage(image): return _QPixmap()
+    _qtgui.QPixmap = _QPixmap  # type: ignore[attr-defined]
+
+    class _QColorSpace(_Stub):
+        SRgb = 0
+        @staticmethod
+        def fromIccProfile(data): return _QColorSpace()
+        def isValid(self): return False
+    _qtgui.QColorSpace = _QColorSpace  # type: ignore[attr-defined]
 
     # QtWidgets stubs
     _qtwidgets = types.ModuleType('PySide6.QtWidgets')

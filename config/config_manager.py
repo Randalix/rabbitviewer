@@ -141,6 +141,9 @@ DEFAULT_CONFIG = {
             "description": "Toggle RAW+JPG grouping"
         }
     },
+    "color_management": {
+        "icc_profile_path": "",  # path to monitor ICC profile; empty = disabled
+    },
     "comfyui": {
         "host": "192.168.50.4",
         "port": 8188,

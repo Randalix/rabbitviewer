@@ -5,6 +5,7 @@ from PySide6.QtGui import QImage, QTransform
 import logging
 logger = logging.getLogger(__name__)
 from core.event_system import event_system, EventType, ZoomEventData, ZoomDragEventData, DoubleClickZoomEventData
+from gui.color_profile import apply_profile
 import time
 
 @dataclass
@@ -149,6 +150,7 @@ class PictureBase(QObject):
         return self._image if self.has_image() else None
 
     def setImage(self, image: QImage) -> None:
+        image = apply_profile(image)
         self._raw_image = image
         self._orientation_degrees = 0
         self._image = image

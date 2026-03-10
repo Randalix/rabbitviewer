@@ -317,8 +317,7 @@ class TestInitialThumbsUpdate:
         mock_pixmap = MagicMock()
 
         with patch("gui.thumbnail_view.QImage", return_value=mock_image), \
-             patch("gui.thumbnail_view.QPixmap") as MockPixmap:
-            MockPixmap.fromImage.return_value = mock_pixmap
+             patch("gui.thumbnail_view.apply_profile_pixmap", return_value=mock_pixmap):
             ThumbnailViewWidget._on_initial_thumbs_received(view, {
                 "/img/a.jpg": "/cache/a_thumb.jpg",
                 "/img/b.jpg": "/cache/b_thumb.jpg",
@@ -370,8 +369,7 @@ class TestInitialThumbsUpdate:
         mock_pixmap = MagicMock()
 
         with patch("gui.thumbnail_view.QImage", return_value=mock_image), \
-             patch("gui.thumbnail_view.QPixmap") as MockPixmap:
-            MockPixmap.fromImage.return_value = mock_pixmap
+             patch("gui.thumbnail_view.apply_profile_pixmap", return_value=mock_pixmap):
             ThumbnailViewWidget._on_initial_thumbs_received(view, {
                 "/img/a.jpg": "/cache/a_thumb.jpg",
                 "/img/b.jpg": "/cache/b_thumb.jpg",

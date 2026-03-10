@@ -10,6 +10,7 @@ from PySide6.QtCore import (
     Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QEvent, Slot
 )
 from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QCursor, QPainter, QTransform
+from gui.color_profile import apply_profile_pixmap
 from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QScrollArea, QWidget, QFrame
 )
@@ -659,7 +660,7 @@ class ThumbnailViewWidget(QFrame):
                 image = QImage(thumb_path)
                 if not image.isNull():
                     image = self._apply_db_orientation(image, source_path)
-                    pixmap = QPixmap.fromImage(image)
+                    pixmap = apply_profile_pixmap(image)
                     self._pixmap_cache[orig_idx] = pixmap
                     label.updateThumbnail(pixmap)
                     label.loaded = True
@@ -1303,7 +1304,7 @@ class ThumbnailViewWidget(QFrame):
             _err_img.fill(QColor(255, 0, 0))
             pixmap = QPixmap.fromImage(_err_img)
         else:
-            pixmap = QPixmap.fromImage(image)
+            pixmap = apply_profile_pixmap(image)
 
         if is_error:
             logger.error("Thumbnail generation failed for %s", original_path, exc_info=bool(error))
@@ -1730,7 +1731,7 @@ class ThumbnailViewWidget(QFrame):
                 image = QImage(thumb_path)
                 if not image.isNull():
                     image = self._apply_db_orientation(image, file_path)
-                    pixmap = QPixmap.fromImage(image)
+                    pixmap = apply_profile_pixmap(image)
                     self._pixmap_cache[original_idx] = pixmap
         if pixmap:
             label.updateThumbnail(pixmap)
