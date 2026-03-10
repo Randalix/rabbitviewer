@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from filewatcher.watcher import WatchdogHandler, _IGNORE_WINDOW_SECS
+from filewatcher.watcher import WatchdogHandler, _IGNORE_WINDOW_SECS, _DELETE_DEFER_SECS
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +106,8 @@ class TestIgnoreWindow:
         handler._ignore_until[path] = time.monotonic() - 1.0
 
         handler.dispatch(_make_event("deleted", path))
+        # Delete is deferred via threading.Timer; wait for it.
+        time.sleep(_DELETE_DEFER_SECS + 0.05)
 
         tm.render_manager.submit_task.assert_called_once()
         call_args = tm.render_manager.submit_task.call_args
@@ -292,9 +294,11 @@ class TestExiftoolAtomicReplace:
         # Deliberately do NOT call ignore_next_modification.
 
         handler.dispatch(_make_event("deleted", path))
+        # Delete is deferred; wait for the timer to fire before asserting.
+        time.sleep(_DELETE_DEFER_SECS + 0.05)
         handler.dispatch(_make_event("created", path))
 
-        # File still exists on disk → delete handler treats it as a
+        # File still exists on disk → deferred delete handler treats it as a
         # replacement, not a real deletion.  Tags are preserved.
         assert db.get_image_tags(path) == ["animal"]
 

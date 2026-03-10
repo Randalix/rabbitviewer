@@ -522,6 +522,13 @@ class ThumbnailViewWidget(QFrame):
             self._selected_indices = new_indices
             self._current_selection = selected_paths
 
+    def _recompute_selected_indices(self):
+        """Rebuild _selected_indices from the path-based _current_selection after an index remap."""
+        self._selected_indices = {
+            self._path_to_idx[p] for p in self._current_selection
+            if p in self._path_to_idx
+        }
+
     def _label_to_original_idx(self, label: ThumbnailLabel) -> Optional[int]:
         idx = label._original_idx
         return idx if idx >= 0 else None
@@ -1064,9 +1071,12 @@ class ThumbnailViewWidget(QFrame):
                     self._hovered_label = None
                     self.thumbnailLeft.emit()
 
-            # -- 8. Clear selection ------------------------------------------
-            cmd = ReplaceSelectionCommand(paths=set(), source="thumbnail_view", timestamp=time.time())
-            event_system.publish(cmd)
+            # -- 8. Preserve selection of surviving files ----------------------
+            surviving_selection = self._current_selection - paths_set
+            if surviving_selection != self._current_selection:
+                cmd = ReplaceSelectionCommand(paths=surviving_selection, source="thumbnail_view", timestamp=time.time())
+                event_system.publish(cmd)
+            self._recompute_selected_indices()
 
             # -- 9. Fill any new gaps at viewport edges ----------------------
             self._last_layout_file_count = len(self.all_files)
@@ -1115,6 +1125,7 @@ class ThumbnailViewWidget(QFrame):
         self.image_states = new_image_states
         self._pixmap_cache = new_pixmap_cache
         self._thumb_path_cache = new_thumb_path_cache
+        self._recompute_selected_indices()
 
         self._update_filtered_layout()
 

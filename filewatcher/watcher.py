@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 
 logger = logging.getLogger(__name__)
 import time
@@ -7,6 +8,8 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from core.thumbnail_manager import ThumbnailManager
 from core.rendermanager import Priority
+
+_DELETE_DEFER_SECS = 0.1
 
 _IGNORE_WINDOW_SECS = 2.0
 
@@ -123,6 +126,43 @@ class WatchdogHandler(FileSystemEventHandler):
         )
         self.thumbnail_manager.render_manager.notify(notification)
 
+    def _handle_deleted(self, src_path: str):
+        """Process a deferred delete event after the atomic-rename window."""
+        if os.path.exists(src_path):  # disk-io: replacement check
+            logger.debug(f"Watchdog: File replaced (not deleted), re-indexing: {src_path}")
+            self.thumbnail_manager.source_cache.invalidate(src_path)
+            self.thumbnail_manager._mem_cache_remove(src_path)
+            try:
+                tasks = self.thumbnail_manager.create_tasks_for_file(src_path, Priority.LOW)
+            except Exception as e:
+                logger.error(f"Watchdog: Error creating tasks for '{src_path}': {e}", exc_info=True)
+                return
+            for task in tasks:
+                self.thumbnail_manager.render_manager.submit_task(
+                    task.task_id, task.priority, task.func, *task.args,
+                    dependencies=task.dependencies, task_type=task.task_type,
+                    on_complete_callback=task.on_complete_callback, **task.kwargs
+                )
+        else:
+            logger.debug(f"Watchdog: Submitting deleted task for {src_path}")
+            self.thumbnail_manager.source_cache.invalidate(src_path)
+            self.thumbnail_manager._mem_cache_remove(src_path)
+            self.thumbnail_manager.render_manager.submit_task(
+                f"db_cleanup_deleted::{src_path}",
+                Priority.HIGH,
+                self.thumbnail_manager.metadata_db.remove_records,
+                [src_path],
+            )
+            self._notify_files_removed([src_path])
+            from core.priority import xmp_sidecar_path
+            xmp = xmp_sidecar_path(src_path)
+            if os.path.exists(xmp):  # disk-io: orphan sidecar cleanup
+                try:
+                    os.remove(xmp)
+                    logger.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
+                except OSError as e:
+                    logger.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
+
     def ignore_next_modification(self, path: str):
         """Suppress watchdog events for *path* for a short window after a self-inflicted EXIF write.
 
@@ -191,37 +231,10 @@ class WatchdogHandler(FileSystemEventHandler):
             # if plugins are available; if not, the DB record is still preserved.
             file_path = new_path
         elif event.event_type == 'deleted':
-            # exiftool -overwrite_original replaces via atomic rename, producing
-            # a DELETE event for the old inode while the new file exists at the
-            # same path.  Don't nuke the DB record for a file that still exists.
-            if os.path.exists(event.src_path):  # disk-io: replacement check
-                logger.debug(f"Watchdog: File replaced (not deleted), re-indexing: {event.src_path}")
-                self.thumbnail_manager.source_cache.invalidate(event.src_path)
-                self.thumbnail_manager._mem_cache_remove(event.src_path)
-                file_path = event.src_path
-                # Fall through to re-index below.
-            else:
-                logger.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
-                self.thumbnail_manager.source_cache.invalidate(event.src_path)
-                self.thumbnail_manager._mem_cache_remove(event.src_path)
-                self.thumbnail_manager.render_manager.submit_task(
-                    f"db_cleanup_deleted::{event.src_path}",
-                    Priority.HIGH,
-                    self.thumbnail_manager.metadata_db.remove_records,
-                    [event.src_path],
-                )
-                self._notify_files_removed([event.src_path])
-                # Clean up orphaned XMP sidecar (our sidecars only contain
-                # rating/tags we wrote — useless without the image).
-                from core.priority import xmp_sidecar_path
-                xmp = xmp_sidecar_path(event.src_path)
-                if os.path.exists(xmp):  # disk-io: orphan sidecar cleanup
-                    try:
-                        os.remove(xmp)
-                        logger.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
-                    except OSError as e:
-                        logger.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
-                return
+            # Defer to let atomic rename (exiftool -overwrite_original) complete
+            # before checking whether the file still exists.
+            threading.Timer(_DELETE_DEFER_SECS, self._handle_deleted, args=[event.src_path]).start()
+            return
         else:
             return
 
