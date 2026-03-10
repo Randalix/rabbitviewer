@@ -36,4 +36,7 @@ def build_menus() -> dict:
         MenuNode("180°", key="1", script="rotate_180"),
         MenuNode("270° CW", key="2", script="rotate_270"),
     ])
-    return {"sort": sort_menu, "tags": tag_menu, "export": export_menu, "rotate": rotate_menu}
+    open_with_menu = MenuNode("Open with", children=[
+        MenuNode("vkdt", key="v", script="open_in_vkdt"),
+    ])
+    return {"sort": sort_menu, "tags": tag_menu, "export": export_menu, "rotate": rotate_menu, "open_with": open_with_menu}

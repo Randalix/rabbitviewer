@@ -105,6 +105,9 @@ hotkeys:
   "menu:tags":
     sequence: T
     description: Open tags menu
+  "menu:open_with":
+    sequence: Space
+    description: Open with external application
   open_comfyui:
     sequence: G
     description: Open ComfyUI generation dialog

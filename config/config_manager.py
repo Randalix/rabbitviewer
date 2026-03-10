@@ -103,6 +103,10 @@ DEFAULT_CONFIG = {
             "sequence": "R",
             "description": "Open rotate menu"
         },
+        "menu:open_with": {
+            "sequence": "Space",
+            "description": "Open with external application"
+        },
         "script:delete_selected": {
             "sequence": "Shift+R",
             "description": "Delete selected images",
