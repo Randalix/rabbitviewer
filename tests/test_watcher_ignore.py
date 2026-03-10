@@ -277,8 +277,10 @@ class TestExiftoolAtomicReplace:
         tm.shutdown()
 
     def test_without_ignore_tags_are_lost(self, tmp_env, sample_images):
-        """Proves the bug: without ignore_next_modification, the delete event
-        wipes the image_metadata row and cascades to image_tags."""
+        """Without ignore_next_modification, the delete event is handled by
+        the os.path.exists() safety check.  If the file still exists (atomic
+        rename, i.e. exiftool -overwrite_original), the DB record is preserved.
+        Only a genuine deletion (file gone) wipes the row."""
         db = tmp_env["db"]
         path = sample_images[0]
 
@@ -292,10 +294,10 @@ class TestExiftoolAtomicReplace:
         handler.dispatch(_make_event("deleted", path))
         handler.dispatch(_make_event("created", path))
 
-        # The delete event wiped the image_metadata row (CASCADE → image_tags).
-        assert db.get_image_tags(path) == []
+        # File still exists on disk → delete handler treats it as a
+        # replacement, not a real deletion.  Tags are preserved.
+        assert db.get_image_tags(path) == ["animal"]
 
-        # Filter must NOT find it anymore.
         star_filter = [True, True, True, True, True, True]
         filtered = db.get_filtered_file_paths("", star_filter, tag_names=["animal"])
-        assert path not in filtered
+        assert path in filtered

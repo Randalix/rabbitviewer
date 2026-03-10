@@ -93,7 +93,6 @@ class RawPlugin(BasePlugin):
             return False
         try:
             img = Image.open(io.BytesIO(cast(bytes, image_source)))
-            img = self._apply_orientation(img, orientation)
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             img.save(output_path, "JPEG", quality=85)
             return True
@@ -107,7 +106,6 @@ class RawPlugin(BasePlugin):
             return False
         try:
             img = Image.open(io.BytesIO(cast(bytes, image_source)))
-            img = self._apply_orientation(img, orientation)
             if img.width > self.thumbnail_size or img.height > self.thumbnail_size:
                 img.thumbnail((self.thumbnail_size, self.thumbnail_size), Image.Resampling.LANCZOS)
             os.makedirs(os.path.dirname(output_path), exist_ok=True)

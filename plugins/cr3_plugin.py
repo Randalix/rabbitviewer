@@ -171,7 +171,8 @@ class CR3Plugin(BasePlugin):
 
         try:
             img = Image.open(io.BytesIO(cast(bytes, image_source)))
-            img = self._apply_orientation(img, orientation)
+            # Orientation is NOT baked in here — the GUI applies it from the DB
+            # via _apply_db_orientation() to avoid double-rotation after EXIF writes.
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             img.save(output_path, "JPEG", quality=85)
             logger.debug(f"Successfully processed and saved view image {output_path}")
@@ -190,7 +191,6 @@ class CR3Plugin(BasePlugin):
 
         try:
             img = Image.open(io.BytesIO(cast(bytes, image_source)))
-            img = self._apply_orientation(img, orientation)
 
             # Resize to desired thumbnail_size if necessary
             if img.width > self.thumbnail_size or img.height > self.thumbnail_size:

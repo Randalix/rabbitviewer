@@ -191,27 +191,37 @@ class WatchdogHandler(FileSystemEventHandler):
             # if plugins are available; if not, the DB record is still preserved.
             file_path = new_path
         elif event.event_type == 'deleted':
-            logger.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
-            self.thumbnail_manager.source_cache.invalidate(event.src_path)
-            self.thumbnail_manager._mem_cache_remove(event.src_path)
-            self.thumbnail_manager.render_manager.submit_task(
-                f"db_cleanup_deleted::{event.src_path}",
-                Priority.HIGH,
-                self.thumbnail_manager.metadata_db.remove_records,
-                [event.src_path],
-            )
-            self._notify_files_removed([event.src_path])
-            # Clean up orphaned XMP sidecar (our sidecars only contain
-            # rating/tags we wrote — useless without the image).
-            from core.priority import xmp_sidecar_path
-            xmp = xmp_sidecar_path(event.src_path)
-            if os.path.exists(xmp):  # disk-io: orphan sidecar cleanup
-                try:
-                    os.remove(xmp)
-                    logger.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
-                except OSError as e:
-                    logger.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
-            return
+            # exiftool -overwrite_original replaces via atomic rename, producing
+            # a DELETE event for the old inode while the new file exists at the
+            # same path.  Don't nuke the DB record for a file that still exists.
+            if os.path.exists(event.src_path):  # disk-io: replacement check
+                logger.debug(f"Watchdog: File replaced (not deleted), re-indexing: {event.src_path}")
+                self.thumbnail_manager.source_cache.invalidate(event.src_path)
+                self.thumbnail_manager._mem_cache_remove(event.src_path)
+                file_path = event.src_path
+                # Fall through to re-index below.
+            else:
+                logger.debug(f"Watchdog: Submitting deleted task for {event.src_path}")
+                self.thumbnail_manager.source_cache.invalidate(event.src_path)
+                self.thumbnail_manager._mem_cache_remove(event.src_path)
+                self.thumbnail_manager.render_manager.submit_task(
+                    f"db_cleanup_deleted::{event.src_path}",
+                    Priority.HIGH,
+                    self.thumbnail_manager.metadata_db.remove_records,
+                    [event.src_path],
+                )
+                self._notify_files_removed([event.src_path])
+                # Clean up orphaned XMP sidecar (our sidecars only contain
+                # rating/tags we wrote — useless without the image).
+                from core.priority import xmp_sidecar_path
+                xmp = xmp_sidecar_path(event.src_path)
+                if os.path.exists(xmp):  # disk-io: orphan sidecar cleanup
+                    try:
+                        os.remove(xmp)
+                        logger.debug(f"Watchdog: Removed orphaned sidecar {xmp}")
+                    except OSError as e:
+                        logger.warning(f"Watchdog: Failed to remove orphaned sidecar {xmp}: {e}")
+                return
         else:
             return
 

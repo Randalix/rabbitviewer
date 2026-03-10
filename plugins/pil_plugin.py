@@ -2,7 +2,7 @@ import logging
 from typing import Optional, List, Union
 
 logger = logging.getLogger(__name__)
-from PIL import Image, ImageOps
+from PIL import Image
 from .base_plugin import BasePlugin
 import os
 
@@ -29,12 +29,11 @@ class PILPlugin(BasePlugin):
         """
         try:
             with Image.open(image_source) as img:  # disk-io: source image read
-                img = ImageOps.exif_transpose(img)
                 # Convert to RGB if necessary
                 if img.mode in ('RGBA', 'LA', 'P'):
                     img = img.convert('RGB')
 
-                # Save as JPEG for viewing
+                # Save as JPEG for viewing (orientation applied by GUI, not here)
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 img.save(output_path, 'JPEG', quality=95)
                 logger.debug(f"Generated view image: {output_path}")
@@ -53,12 +52,11 @@ class PILPlugin(BasePlugin):
         source = image_source if image_source else image_path
         try:
             with Image.open(source) as img:  # disk-io: source image read
-                img = ImageOps.exif_transpose(img)
                 # Convert to RGB if necessary
                 if img.mode in ('RGBA', 'LA', 'P'):
                     img = img.convert('RGB')
 
-                # Create thumbnail
+                # Create thumbnail (orientation applied by GUI, not here)
                 img.thumbnail((self.thumbnail_size, self.thumbnail_size), Image.Resampling.LANCZOS)
 
                 # Save thumbnail
