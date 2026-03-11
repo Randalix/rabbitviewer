@@ -301,6 +301,12 @@ Toggled by the `J` hotkey. When active, `ThumbnailViewWidget` hides grouped RAW 
 
 ---
 
+### Color Profile — `gui/color_profile.py`
+
+Display color management via ICC monitor profiles. Converts images from sRGB (the assumed color space of all cached images) to the user's monitor ICC profile before display. The profile path is read from `color_management.icc_profile_path` in config. `apply_profile(image)` and `apply_profile_pixmap(image)` are the public API; called once per image at load time in `PictureBase.setImage()`. Disabled (no-op) when no profile is configured. GUI thread only.
+
+---
+
 ### DirectoryScanner — `core/directory_scanner.py`
 
 Yields file paths from a directory walk. Applies ignore patterns (glob) and min-size filtering. Supported extensions are cached at construction time from the plugin registry. `scan_incremental` is the generator used by `scan_directory` and directly by `socket_thumbnailer.py`; it yields batches of 10 paths for cooperative use in SourceJobs (small batches improve priority responsiveness). `scan_incremental_reconcile` wraps `scan_incremental` with a `ReconcileContext`: discards found files from `db_file_set`, accumulates all paths in `discovered_files` for post-scan task creation, and leaves `ghost_files` (DB entries missing from disk) after exhaustion. Uses batches of 50.
