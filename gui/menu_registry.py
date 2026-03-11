@@ -39,4 +39,8 @@ def build_menus() -> dict:
     open_with_menu = MenuNode("Open with", children=[
         MenuNode("vkdt", key="v", script="open_in_vkdt"),
     ])
-    return {"sort": sort_menu, "tags": tag_menu, "export": export_menu, "rotate": rotate_menu, "open_with": open_with_menu}
+    compare_menu = MenuNode("Compare", children=[
+        MenuNode("Grid", key="g", action=_publish(EventType.OPEN_COMPARE_GRID)),
+        MenuNode("Split line", key="s", action=_publish(EventType.OPEN_COMPARE_SPLIT)),
+    ])
+    return {"sort": sort_menu, "tags": tag_menu, "export": export_menu, "rotate": rotate_menu, "open_with": open_with_menu, "compare": compare_menu}

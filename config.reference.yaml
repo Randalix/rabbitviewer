@@ -97,9 +97,9 @@ hotkeys:
   "menu:sort":
     sequence: S
     description: Open sort menu
-  compare_view:
-    sequence: C
-    description: Compare selected images side by side
+  "menu:compare":
+    sequence: V
+    description: Compare selected images
   show_hotkey_help:
     sequence: "?"
     description: Show keyboard shortcuts
@@ -133,6 +133,7 @@ hotkeys:
   toggle_group_mode:
     sequence: J
     description: Toggle RAW+JPG grouping
+
 
 comfyui:
   host: 192.168.50.4

@@ -424,6 +424,9 @@ class MainWindow(QMainWindow):
             path = self.picture_view.current_path
             return [path] if path else []
 
+        if self.compare_view and self.stacked_widget.currentWidget() is self.compare_view:
+            return self.compare_view.selected_paths
+
         selected = list(self.selection_state.selected_paths)
         if not selected and self.thumbnail_view:
             hovered = self.thumbnail_view.get_hovered_image_path()
@@ -641,6 +644,8 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_FILTER, lambda _: self.open_filter_dialog())
         event_system.subscribe(EventType.OPEN_TAG_EDITOR, lambda _: self.open_tag_editor())
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
+        event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
+        event_system.subscribe(EventType.OPEN_COMPARE_SPLIT, lambda _: self._open_compare_view("split"))
 
     def _handle_status_message(self, event_data: StatusMessageEventData):
         if not self.status_bar:
@@ -674,7 +679,6 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("open_comfyui", self.open_comfyui_dialog)
         self.hotkey_manager.add_action("zoom_in", lambda: self._handle_hotkey_zoom(1))
         self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
-        self.hotkey_manager.add_action("compare_view", self._open_compare_view)
         self.hotkey_manager.add_action("toggle_group_mode", self._toggle_group_mode)
 
     def _toggle_hotkey_help(self):
@@ -833,7 +837,7 @@ class MainWindow(QMainWindow):
         except RuntimeError as e:
             logger.error(f"Error closing video view: {e}", exc_info=True)
 
-    def _open_compare_view(self):
+    def _open_compare_view(self, mode: str = "split"):
         selected = list(self.selection_state.selected_paths)
         if len(selected) < 2:
             return
@@ -845,7 +849,7 @@ class MainWindow(QMainWindow):
                 self.compare_view.escapePressed.connect(self.close_compare_view)
                 self.compare_view.set_service(self.service)
                 self.stacked_widget.addWidget(self.compare_view)
-            self.compare_view.load_images(selected)
+            self.compare_view.load_images(selected, mode=mode)
             self._hover_clear_timer.stop()
             self.stacked_widget.setCurrentWidget(self.compare_view)
             self.compare_view.setFocus()

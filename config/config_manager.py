@@ -79,9 +79,9 @@ DEFAULT_CONFIG = {
             "sequence": "S",
             "description": "Open sort menu"
         },
-        "compare_view": {
-            "sequence": "C",
-            "description": "Compare selected images side by side"
+        "menu:compare": {
+            "sequence": "V",
+            "description": "Compare selected images"
         },
         "show_hotkey_help": {
             "sequence": "?",
