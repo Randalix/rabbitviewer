@@ -10,12 +10,7 @@ class PILPlugin(BasePlugin):
     """Plugin for handling standard image formats using PIL/Pillow."""
 
     def is_available(self) -> bool:
-        """Check if PIL is importable. Exiftool is optional (metadata/ratings only)."""
-        try:
-            from PIL import Image
-            return True
-        except ImportError:
-            return False
+        return True  # PIL imported unconditionally at module top
 
     def get_supported_formats(self) -> List[str]:
         """Return list of supported file extensions."""

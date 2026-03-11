@@ -104,13 +104,13 @@ class CR3Plugin(BasePlugin):
                             try:
                                 Image.open(io.BytesIO(candidate)).verify()
                                 return candidate
-                            except Exception:
+                            except Exception:  # why: PIL.verify() raises undocumented exceptions for malformed JPEG
                                 logger.debug("CR3 buffer extraction: candidate bytes are not a valid JPEG; discarding.")
                                 return None
                         inner += isz
                     break   # moov processed; thumbnail not found
                 pos += box_size
-        except struct.error:
+        except struct.error:  # why: malformed ISOBMFF box stream; fall through to exiftool
             pass
         return None
 
