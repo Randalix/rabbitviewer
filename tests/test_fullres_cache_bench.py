@@ -346,7 +346,7 @@ class TestProcessViewImagePerformance:
         stats_mem = _bench(lambda: tm.request_view_image(src), iterations=200)
 
         # Setup: move to disk cache, clear mem cache
-        tm._mem_cache_remove(src)
+        tm.invalidate_mem_cache(src)
         disk_path = str(cache_dir / "images" / "bench_view.jpg")
         with open(disk_path, "wb") as f:
             f.write(jpeg_bytes)
@@ -562,7 +562,7 @@ class TestScalingWithImageSize:
                 timings = []
                 for _ in range(iters):
                     # Clear caches so each iteration is a fresh generation.
-                    tm._mem_cache_remove(src)
+                    tm.invalidate_mem_cache(src)
                     db.set_thumbnail_paths(src, view_image_path=None)
 
                     t0 = time.perf_counter()

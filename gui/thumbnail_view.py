@@ -1175,7 +1175,7 @@ class ThumbnailViewWidget(QFrame):
         try:
             resp = self.service.get_metadata_batch([image_path])
             orientation = resp.get(image_path, {}).get('orientation', 1) or 1
-        except Exception:
+        except Exception:  # why: service unavailable or NAS drop; orientation is best-effort
             return image
         degrees = PictureBase._EXIF_ORIENTATION_DEGREES.get(orientation, 0)
         if degrees:

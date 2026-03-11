@@ -88,8 +88,8 @@ class WatchdogHandler(FileSystemEventHandler):
             try:
                 self.observer.unschedule(old_watch)
                 logger.info("Unwatched previous GUI directory: %s", old_path)
-            except Exception:
-                pass  # already unscheduled or observer restarted
+            except Exception:  # why: observer.unschedule() raises if watch already removed (e.g. after observer restart)
+                pass
             self._gui_watch = None
         if not path or not os.path.isdir(path):  # disk-io: directory validation
             return
@@ -131,10 +131,10 @@ class WatchdogHandler(FileSystemEventHandler):
         if os.path.exists(src_path):  # disk-io: replacement check
             logger.debug(f"Watchdog: File replaced (not deleted), re-indexing: {src_path}")
             self.thumbnail_manager.source_cache.invalidate(src_path)
-            self.thumbnail_manager._mem_cache_remove(src_path)
+            self.thumbnail_manager.invalidate_mem_cache(src_path)
             try:
                 tasks = self.thumbnail_manager.create_tasks_for_file(src_path, Priority.LOW)
-            except Exception as e:
+            except Exception as e:  # why: plugin error on observer thread must not crash the deferred delete callback
                 logger.error(f"Watchdog: Error creating tasks for '{src_path}': {e}", exc_info=True)
                 return
             for task in tasks:
@@ -146,7 +146,7 @@ class WatchdogHandler(FileSystemEventHandler):
         else:
             logger.debug(f"Watchdog: Submitting deleted task for {src_path}")
             self.thumbnail_manager.source_cache.invalidate(src_path)
-            self.thumbnail_manager._mem_cache_remove(src_path)
+            self.thumbnail_manager.invalidate_mem_cache(src_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_cleanup_deleted::{src_path}",
                 Priority.HIGH,
@@ -219,7 +219,7 @@ class WatchdogHandler(FileSystemEventHandler):
             new_path = event.dest_path
             logger.debug(f"Watchdog: Submitting move task for {old_path} → {new_path}")
             self.thumbnail_manager.source_cache.invalidate(old_path)
-            self.thumbnail_manager._mem_cache_remove(old_path)
+            self.thumbnail_manager.invalidate_mem_cache(old_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_move::{old_path}::{new_path}",
                 Priority.HIGH,
@@ -239,7 +239,7 @@ class WatchdogHandler(FileSystemEventHandler):
             return
 
         logger.debug(f"Watchdog: Submitting {event.event_type} task for {file_path}")
-        self.thumbnail_manager._mem_cache_remove(file_path)
+        self.thumbnail_manager.invalidate_mem_cache(file_path)
         try:
             tasks = self.thumbnail_manager.create_tasks_for_file(file_path, Priority.LOW)
         except Exception as e:

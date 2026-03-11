@@ -146,7 +146,7 @@ class ThumbnailManager:
                 self._fullres_mem_cache.move_to_end(image_path)
             return data
 
-    def _mem_cache_remove(self, image_path: str) -> None:
+    def invalidate_mem_cache(self, image_path: str) -> None:
         with self._fullres_mem_cache_lock:
             data = self._fullres_mem_cache.pop(image_path, None)
             if data is not None:
@@ -892,7 +892,7 @@ class ThumbnailManager:
                     logger.debug("Removed cached %s: %s", key, cached)
                 except OSError as e:
                     logger.warning("Failed to remove cached %s: %s", cached, e)
-        self._mem_cache_remove(file_path)
+        self.invalidate_mem_cache(file_path)
         self.metadata_db.clear_thumbnail_paths(file_path)
 
     def get_cached_thumbnail_path(self, md5_hash: str) -> str:
