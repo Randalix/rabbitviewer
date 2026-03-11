@@ -1258,7 +1258,7 @@ class MetadataDatabase:
 
                     logger.info(f"Deleted {rows_affected} records from database for {len(file_paths)} files.")
 
-            # 3. Delete associated cache files outside the DB lock
+            # 4. Delete associated cache files outside the DB lock
             for thumb_path, view_path in cache_paths_to_delete:
                 for path in (thumb_path, view_path):
                     if path:
@@ -1644,18 +1644,6 @@ class MetadataDatabase:
                 self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"pending_write_remove failed: {e}")
-
-    def pending_write_remove_for_file(self, file_path: str) -> None:
-        """Remove all pending writes for a file (used when the file is deleted)."""
-        try:
-            with self._lock:
-                self.conn.execute(
-                    'DELETE FROM pending_writes WHERE file_path = ?',
-                    (file_path,),
-                )
-                self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"pending_write_remove_for_file failed: {e}")
 
     def pending_write_get_all(self) -> List[dict]:
         try:
