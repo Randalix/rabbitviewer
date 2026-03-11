@@ -645,6 +645,22 @@ class MetadataDatabase:
             logger.error(f"Error clearing thumbnail paths for {file_path}: {e}")
             return False
 
+    def clear_all_thumbnail_paths(self) -> int:
+        """NULL all thumbnail_path and view_image_path columns. Returns rows affected."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE image_metadata
+                    SET thumbnail_path = NULL, view_image_path = NULL, updated_at = ?
+                    WHERE thumbnail_path IS NOT NULL OR view_image_path IS NOT NULL
+                ''', (time.time(),))
+                self.conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logger.error("Error clearing all thumbnail paths: %s", e)
+            return 0
+
     def get_thumbnail_paths(self, file_path: str) -> Dict[str, str]:
         """
         Gets the thumbnail and view image paths for a file.
@@ -1642,17 +1658,21 @@ class MetadataDatabase:
             logger.error(f"pending_write_remove_for_file failed: {e}")
 
     def pending_write_get_all(self) -> List[dict]:
-        """Return all pending writes for recovery."""
         try:
             with self._lock:
                 cursor = self.conn.execute(
                     'SELECT file_path, write_type, payload FROM pending_writes'
                 )
-                return [
-                    {'file_path': row[0], 'write_type': row[1],
-                     'payload': json.loads(row[2])}
-                    for row in cursor.fetchall()
-                ]
+                results = []
+                for row in cursor.fetchall():
+                    try:
+                        payload = json.loads(row[2])
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.error("Skipping corrupt pending_write row %s: %s", row[0], e)
+                        continue
+                    results.append({'file_path': row[0], 'write_type': row[1],
+                                    'payload': payload})
+                return results
         except sqlite3.Error as e:
             logger.error(f"pending_write_get_all failed: {e}")
             return []
