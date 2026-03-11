@@ -23,8 +23,9 @@ class PictureBase(QObject):
     _MIN_ZOOM = 0.01
     _MAX_ZOOM = 50.0
 
-    # EXIF Orientation tag → clockwise rotation degrees (non-mirror values).
-    _EXIF_ORIENTATION_DEGREES = {1: 0, 3: 180, 6: 90, 8: 270}
+    # why: only simple rotations supported; mirror orientations (2, 4, 5, 7) are
+    # rare in camera output and silently default to 0 (no rotation).
+    EXIF_ORIENTATION_DEGREES = {1: 0, 3: 180, 6: 90, 8: 270}
 
     # Signals for state changes
     viewStateChanged = Signal(ViewState)
@@ -184,7 +185,7 @@ class PictureBase(QObject):
         self.viewStateChanged.emit(self._view_state)
 
     def setOrientationFromExif(self, exif_value: int) -> None:
-        self.setOrientation(self._EXIF_ORIENTATION_DEGREES.get(exif_value, 0))
+        self.setOrientation(self.EXIF_ORIENTATION_DEGREES.get(exif_value, 0))
 
     def rotateBy(self, degrees: int) -> None:
         self.setOrientation(self._orientation_degrees + degrees)

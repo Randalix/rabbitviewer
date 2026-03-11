@@ -109,4 +109,4 @@ class TestRotateBy:
 
 class TestExifOrientationDegreesConstant:
     def test_accessible_from_class(self):
-        assert PictureBase._EXIF_ORIENTATION_DEGREES == {1: 0, 3: 180, 6: 90, 8: 270}
+        assert PictureBase.EXIF_ORIENTATION_DEGREES == {1: 0, 3: 180, 6: 90, 8: 270}

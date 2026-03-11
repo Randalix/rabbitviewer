@@ -1177,7 +1177,7 @@ class ThumbnailViewWidget(QFrame):
             orientation = resp.get(image_path, {}).get('orientation', 1) or 1
         except Exception:  # why: service unavailable or NAS drop; orientation is best-effort
             return image
-        degrees = PictureBase._EXIF_ORIENTATION_DEGREES.get(orientation, 0)
+        degrees = PictureBase.EXIF_ORIENTATION_DEGREES.get(orientation, 0)
         if degrees:
             return image.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
         return image
