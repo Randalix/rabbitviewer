@@ -9,60 +9,27 @@ Workflow:
     2. rsync each file to the destination (with progress), then delete the source.
     3. Update the daemon's database with the new paths.
     4. Remove the images from the GUI view.
-
-Self-contained: only stdlib + rsync. No project imports, no pydantic.
 """
 
-import json
-import socket
 import subprocess
 import sys
 from pathlib import Path
 
-GUI_SOCKET_PATH = "/tmp/rabbitviewer_gui.sock"
+from cli._socket import GUI_SOCKET_PATH, call
 
-
-# ---------------------------------------------------------------------------
-# Minimal framed-socket helpers (4-byte big-endian length prefix + UTF-8 JSON)
-# ---------------------------------------------------------------------------
-
-def _recv_exactly(sock: socket.socket, n: int) -> bytes:
-    data = bytearray()
-    while len(data) < n:
-        chunk = sock.recv(n - len(data))
-        if not chunk:
-            raise ConnectionError("Socket closed before all bytes received")
-        data.extend(chunk)
-    return bytes(data)
-
-
-def _call(socket_path: str, payload: dict, timeout: float = 5.0) -> dict:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(timeout)
-        sock.connect(socket_path)
-        data = json.dumps(payload).encode()
-        sock.sendall(len(data).to_bytes(4, "big") + data)
-        length = int.from_bytes(_recv_exactly(sock, 4), "big")
-        return json.loads(_recv_exactly(sock, length).decode())
-
-
-# ---------------------------------------------------------------------------
-# GUI / daemon helpers
-# ---------------------------------------------------------------------------
 
 def get_selection() -> list[str]:
-    resp = _call(GUI_SOCKET_PATH, {"command": "get_selection"})
+    resp = call(GUI_SOCKET_PATH, {"command": "get_selection"})
     raw = resp.get("paths", [])
-    # Protocol now returns ImageEntryModel dicts; extract bare path strings.
     return [p["path"] if isinstance(p, dict) else p for p in raw]
 
 
 def remove_images(paths: list[str]) -> None:
-    _call(GUI_SOCKET_PATH, {"command": "remove_images", "paths": paths})
+    call(GUI_SOCKET_PATH, {"command": "remove_images", "paths": paths})
 
 
 def move_records(moves: list[dict]) -> int:
-    resp = _call(GUI_SOCKET_PATH, {"command": "move_records", "moves": moves})
+    resp = call(GUI_SOCKET_PATH, {"command": "move_records", "moves": moves})
     return resp.get("moved_count", 0)
 
 
@@ -71,7 +38,6 @@ def move_records(moves: list[dict]) -> int:
 # ---------------------------------------------------------------------------
 
 def rsync_move(src: Path, dst: Path) -> None:
-    """Copy *src* to *dst* via rsync with per-file progress, then remove *src*."""
     subprocess.run(
         ["rsync", "--progress", "--remove-source-files", str(src), str(dst)],
         check=True,
@@ -121,12 +87,12 @@ def main():
         try:
             count = move_records(moves)
             print(f"Daemon DB updated: {count} record(s) moved.")
-        except Exception as e:
+        except Exception as e:  # why: GUI socket may be gone if user quit during move
             print(f"Warning: could not update daemon DB: {e}")
 
         try:
             remove_images([m["old_entry"]["path"] for m in moves])
-        except Exception as e:
+        except Exception as e:  # why: GUI socket may be gone if user quit during move
             print(f"Warning: could not remove images from GUI: {e}")
 
     print(f"Moved {len(moves)} image(s) to {dest}.", end="")
