@@ -10,7 +10,7 @@ import threading
 from collections import OrderedDict
 from typing import Optional, Dict, List, Set, Tuple, Any, Callable
 from core.metadata_database import MetadataDatabase
-from core.rendermanager import Priority, RenderManager, RenderTask, TaskState, TaskType
+from core.rendermanager import Priority, RenderManager, RenderTask, TaskType
 from core.source_cache import SourceExistsCache
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import shutdown_all as _shutdown_exiftool_processes
@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 _NATIVELY_VIEWABLE = frozenset({
     '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp',
 })
+
+
+# Bump when cached image generation changes in a way that invalidates
+# existing thumbnails/view-images (e.g., orientation handling).
+CACHE_VERSION = 1
 
 
 def _get_mount_point(path: str) -> Optional[str]:
@@ -49,6 +54,8 @@ class ThumbnailManager:
         
         os.makedirs(self.thumbnail_cache_dir, exist_ok=True)
         os.makedirs(self.image_cache_dir, exist_ok=True)
+
+        self._check_cache_migration()
 
         self._plugins_dir = os.path.join(os.path.dirname(__file__), '..', 'plugins')
         self.plugin_registry = plugin_registry
@@ -81,6 +88,41 @@ class ThumbnailManager:
         # requests at FULLRES_REQUEST are never starved.
         self._speculative_view_sem = threading.Semaphore(1)
 
+
+    # -- Cache version migration -----------------------------------------------
+
+    def _check_cache_migration(self):
+        """Invalidate cached thumbnails/view-images when CACHE_VERSION changes."""
+        version_file = os.path.join(self.cache_dir, "cache_version")
+
+        current_version = 0
+        try:
+            with open(version_file) as f:  # disk-io: cache version check
+                current_version = int(f.read().strip())
+        except (FileNotFoundError, ValueError):
+            pass
+
+        if current_version >= CACHE_VERSION:
+            return
+
+        logger.warning(
+            "Cache version %d < %d — invalidating all cached thumbnails and view images.",
+            current_version, CACHE_VERSION,
+        )
+
+        rows = self.metadata_db.clear_all_thumbnail_paths()
+        logger.info("Cache migration: cleared %d DB thumbnail/view_image paths.", rows)
+
+        import shutil
+        for d in (self.thumbnail_cache_dir, self.image_cache_dir):
+            if os.path.isdir(d):  # disk-io: cache dir cleanup
+                shutil.rmtree(d)
+                os.makedirs(d, exist_ok=True)
+        logger.info("Cache migration: deleted and recreated thumbnail/image cache directories.")
+
+        with open(version_file, "w") as f:  # disk-io: cache version marker
+            f.write(str(CACHE_VERSION))
+        logger.info("Cache migration complete. Version marker set to %d.", CACHE_VERSION)
 
     # -- Fullres memory cache (LRU, byte-size bounded) -----------------------
 
@@ -1148,30 +1190,11 @@ class ThumbnailManager:
         self.metadata_db.close()
         logger.info("ThumbnailManager: Shutdown complete.")
 
-    def queue_exif_rating_write(self, file_path: str, rating: int):
-        """
-        Updates the DB synchronously then queues a task to write rating to EXIF.
-        Use this for single-file writes where no prior batch_set_ratings was done.
-        """
-        self.metadata_db.set_rating(file_path, rating)
-
-        task_id = f"exif_rating::{file_path}"
-        logger.debug(f"Queuing EXIF rating write for {file_path} with task ID {task_id}")
-
-        self.render_manager.submit_task(
-            task_id=task_id,
-            priority=Priority.LOW,
-            func=self.write_rating_to_file,
-            file_path=file_path,
-            rating=rating
-        )
-
     # ------------------------------------------------------------------
     #  Pending-write recovery
     # ------------------------------------------------------------------
 
     def recover_pending_writes(self) -> int:
-        """Resubmit pending file writes from a prior session. Returns count."""
         pending = self.metadata_db.pending_write_get_all()
         if not pending:
             return 0

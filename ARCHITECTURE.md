@@ -210,7 +210,7 @@ meta::{file_path}        — fast metadata scan (orientation, rating, file_size)
 meta_full::{file_path}   — deferred full exiftool extraction (all EXIF fields, BACKGROUND_SCAN priority)
 {file_path}              — thumbnail + view image generation task
 view::{file_path}        — speculative fullres pre-cache (has cancel_event)
-exif_rating::{file_path} — EXIF star rating write-back
+write_rating::{file_path} — EXIF star rating write-back (via pending-write ledger)
 write_tags::{file_path}  — XMP:Subject tag write-back
 write_orientation::{file_path} — EXIF Orientation write + thumbnail regeneration
 job_slice::{job_id}::{n} — nth cooperative slice of a SourceJob
