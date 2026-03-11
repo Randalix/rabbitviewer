@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
             if current_path not in visible:
                 if visible:
                     first = self.thumbnail_view.current_files[0]
-                    self._open_media_view(first)
+                    self.open_media_view(first)
                 else:
                     if active_view == "picture":
                         self.close_picture_view()
@@ -596,7 +596,7 @@ class MainWindow(QMainWindow):
                 self.load_directory(path, recursive=False)
             elif os.path.isfile(path):  # disk-io: drop path classification
                 self.load_directory(os.path.dirname(path), recursive=False)
-                self._open_media_view(path)
+                self.open_media_view(path)
         else:
             file_paths = [p for p in paths if os.path.isfile(p)]  # disk-io: drop path filter
             if file_paths:
@@ -723,7 +723,7 @@ class MainWindow(QMainWindow):
         if active_view and current_path and current_path in removed_set:
             visible = self.thumbnail_view.current_files
             if visible:
-                self._open_media_view(visible[0])
+                self.open_media_view(visible[0])
             elif active_view == "picture":
                 self.close_picture_view()
             else:
@@ -735,9 +735,9 @@ class MainWindow(QMainWindow):
         target_image = self.current_hovered_image
         if not target_image:
             return
-        self._open_media_view(target_image)
+        self.open_media_view(target_image)
 
-    def _open_media_view(self, file_path: str):
+    def open_media_view(self, file_path: str):
         if _is_video(file_path):
             self._open_video_view(file_path)
         else:
@@ -887,4 +887,4 @@ class MainWindow(QMainWindow):
         else:
             return
         new_path = self.thumbnail_view.current_files[new_idx]
-        self._open_media_view(new_path)
+        self.open_media_view(new_path)

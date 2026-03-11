@@ -353,7 +353,7 @@ def _run_gui(args, config_manager):
                 logger.info("QFileOpenEvent: %s", path)
                 parent = os.path.dirname(path)
                 window.load_directory(parent, recursive=False)
-                window._open_media_view(path)
+                window.open_media_view(path)
                 return True
         return False
 
@@ -368,7 +368,7 @@ def _run_gui(args, config_manager):
         def _load():
             window.load_directory(target_dir, recursive_scan)
             if target_file:
-                window._open_media_view(target_file)
+                window.open_media_view(target_file)
         QTimer.singleShot(0, _load)
 
     exit_code = app.exec()
