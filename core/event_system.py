@@ -64,6 +64,9 @@ class EventType(Enum):
     # Overlay events
     THUMBNAIL_OVERLAY = "thumbnail_overlay"
 
+    # AI / CLIP search
+    OPEN_CLIP_SEARCH = "open_clip_search"
+
     # Status messages
     STATUS_MESSAGE = "status_message"
 

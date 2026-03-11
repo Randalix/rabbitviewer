@@ -5,5 +5,5 @@ watchdog==2.1.9
 pytest==7.2.1
 pytest-qt==4.0.2
 send2trash
-
-
+onnxruntime
+numpy

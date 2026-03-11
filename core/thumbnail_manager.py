@@ -570,6 +570,166 @@ class ThumbnailManager:
         )
         self.render_manager.notify(notification)
 
+    # ── CLIP embedding generation ───────────────────────────────
+
+    def _generate_clip_embedding(self, file_path: str, cancel_event=None):
+        """Runs in RenderManager worker thread."""
+        from core import clip_inference
+
+        if cancel_event and cancel_event.is_set():
+            return
+
+        # Use cached thumbnail to avoid NAS read
+        paths = self.metadata_db.get_thumbnail_paths(file_path)
+        thumb = paths.get('thumbnail_path') if paths else None
+
+        embedding = clip_inference.encode_image(
+            file_path, thumbnail_path=thumb, config_manager=self.config_manager)
+        if embedding is None:
+            logger.debug("CLIP embedding failed for %s", file_path)
+            return
+
+        blob = clip_inference.embedding_to_bytes(embedding)
+        self.metadata_db.upsert_embedding(file_path, blob)
+        logger.debug("CLIP embedding stored for %s", file_path)
+
+    def create_clip_embed_tasks(self, file_paths, priority: Priority) -> List[RenderTask]:
+        """Task factory for clip_index SourceJob."""
+        if isinstance(file_paths, str):
+            file_paths = [file_paths]
+        tasks = []
+        for fp in file_paths:
+            tasks.append(RenderTask(
+                task_id=f"clip_embed::{fp}",
+                priority=priority,
+                func=self._generate_clip_embedding,
+                args=(fp,),
+            ))
+        return tasks
+
+    def submit_clip_indexing_job(self, directory: str, file_paths: List[str]):
+        """No-op if numpy missing or AI disabled in config."""
+        from core import clip_inference
+        if not clip_inference._get_numpy() or not self.config_manager.get("ai.enabled", True):
+            return
+        if not self.config_manager.get("ai.clip_search.enabled", True):
+            return
+
+        missing = self.metadata_db.get_files_missing_embeddings(file_paths)
+        if not missing:
+            return
+
+        logger.info("CLIP indexing: %d files to embed in %s", len(missing), directory)
+
+        def _clip_generator():
+            batch = []
+            for fp in missing:
+                batch.append(fp)
+                if len(batch) >= 10:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
+
+        from core.priority import SourceJob
+        job = SourceJob(
+            job_id=f"clip_index::{directory}",
+            priority=Priority.CLIP_INDEX,
+            task_priority=Priority.CLIP_INDEX,
+            generator=_clip_generator(),
+            task_factory=self.create_clip_embed_tasks,
+            create_tasks=True,
+        )
+        self.render_manager.submit_source_job(job)
+
+    # ── Auto-orientation ────────────────────────────────────────
+
+    def _auto_orient_task(self, file_path: str, cancel_event=None):
+        """Runs in RenderManager worker thread. Skips if orientation set or pending write."""
+        from core import orientation_model
+
+        if cancel_event and cancel_event.is_set():
+            return
+
+        # Guard: skip if orientation already set
+        current_orient = self.metadata_db.get_orientation(file_path)
+        if current_orient != 1:
+            return
+
+        # Guard: skip if there's a pending orientation write
+        if self.metadata_db.pending_write_exists(file_path, 'orientation'):
+            return
+
+        paths = self.metadata_db.get_thumbnail_paths(file_path)
+        thumb = paths.get('thumbnail_path') if paths else None
+
+        result = orientation_model.predict_orientation(
+            file_path, thumbnail_path=thumb, config_manager=self.config_manager)
+        if result is None:
+            return
+
+        orientation, confidence = result
+        threshold = self.config_manager.get("ai.auto_orient.confidence_threshold", 0.9)
+        if confidence < threshold:
+            logger.debug("Auto-orient: low confidence %.2f for %s", confidence, file_path)
+            return
+        if orientation == 1:
+            return  # already correct
+
+        self.metadata_db.set_orientation(file_path, orientation)
+        logger.info("Auto-orient: set orientation=%d (conf=%.2f) for %s",
+                     orientation, confidence, file_path)
+
+    def create_auto_orient_tasks(self, file_paths, priority: Priority) -> List[RenderTask]:
+        """Task factory for auto_orient SourceJob."""
+        if isinstance(file_paths, str):
+            file_paths = [file_paths]
+        tasks = []
+        for fp in file_paths:
+            tasks.append(RenderTask(
+                task_id=f"auto_orient::{fp}",
+                priority=priority,
+                func=self._auto_orient_task,
+                args=(fp,),
+            ))
+        return tasks
+
+    def submit_auto_orient_job(self, directory: str, file_paths: List[str]):
+        """No-op if AI or auto_orient disabled in config."""
+        if not self.config_manager.get("ai.enabled", True):
+            return
+        if not self.config_manager.get("ai.auto_orient.enabled", False):
+            return
+
+        # Only process files with default orientation (1 = unset)
+        candidates = [fp for fp in file_paths
+                      if self.metadata_db.get_orientation(fp) == 1]
+        if not candidates:
+            return
+
+        logger.info("Auto-orient: %d candidates in %s", len(candidates), directory)
+
+        def _orient_generator():
+            batch = []
+            for fp in candidates:
+                batch.append(fp)
+                if len(batch) >= 10:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
+
+        from core.priority import SourceJob
+        job = SourceJob(
+            job_id=f"auto_orient::{directory}",
+            priority=Priority.CLIP_INDEX,
+            task_priority=Priority.CLIP_INDEX,
+            generator=_orient_generator(),
+            task_factory=self.create_auto_orient_tasks,
+            create_tasks=True,
+        )
+        self.render_manager.submit_source_job(job)
+
     def request_view_image(self, image_path: str) -> Optional[str]:
         """Requests view image generation at FULLRES_REQUEST priority.
 

@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         self.tag_editor_dialog = None
         self.tag_filter_dialog = None
         self.comfyui_dialog = None
+        self.clip_search_dialog = None
         self._removed_images = []
 
         QTimer.singleShot(0, self._deferred_init)
@@ -525,6 +526,62 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=_send, daemon=True).start()
 
+    # ── CLIP Search ─────────────────────────────────────────────
+
+    def open_clip_search_dialog(self):
+        if not self.clip_search_dialog:
+            from .clip_search_dialog import ClipSearchDialog
+            self.clip_search_dialog = ClipSearchDialog(self)
+            self.clip_search_dialog.search_requested.connect(self._on_clip_search)
+            self.clip_search_dialog.result_selected.connect(self._on_clip_result_selected)
+
+        if self.clip_search_dialog.isVisible():
+            self.clip_search_dialog.close()
+        else:
+            self.clip_search_dialog.show()
+            self.clip_search_dialog.activateWindow()
+
+    def _on_clip_search(self, query: str):
+        import threading as _threading
+        def _search_and_update():
+            try:
+                if not self.service:
+                    self._pending_clip_results = None
+                    return
+                results = self.service.clip_search(query)
+                self._pending_clip_results = results
+            except Exception:  # why: clip_search calls ONNX inference + DB reads; exceptions from either must not crash the background thread
+                logger.error("CLIP search failed", exc_info=True)
+                self._pending_clip_results = None
+
+        self._pending_clip_results = "searching"
+        _threading.Thread(target=_search_and_update, daemon=True).start()
+
+        from PySide6.QtCore import QTimer
+        self._clip_poll_count = 0
+
+        def _check_results():
+            self._clip_poll_count += 1
+            if self._pending_clip_results == "searching" and self._clip_poll_count < 600:
+                QTimer.singleShot(50, _check_results)
+                return
+            if not self.clip_search_dialog:
+                return
+            if self._pending_clip_results is None or self._pending_clip_results == "searching":
+                self.clip_search_dialog.set_error("Search failed — are models downloaded?")
+            else:
+                self.clip_search_dialog.set_results(self._pending_clip_results)
+                if self._pending_clip_results and self.thumbnail_view:
+                    result_paths = [fp for fp, _ in self._pending_clip_results]
+                    self.thumbnail_view.apply_clip_search_results(result_paths)
+
+        QTimer.singleShot(50, _check_results)
+
+    def _on_clip_result_selected(self, file_path: str):
+        """Navigate to a selected CLIP search result."""
+        if self.thumbnail_view:
+            self.thumbnail_view.navigate_to_file(file_path)
+
     def _on_filters_applied(self):
         # Case 1: detail view is open — navigate away if current media is now filtered out
         current_path = None
@@ -642,6 +699,7 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.REDO_SELECTION, lambda data: self.selection_history.redo())
         event_system.subscribe(EventType.STATUS_MESSAGE, self._handle_status_message)
         event_system.subscribe(EventType.OPEN_FILTER, lambda _: self.open_filter_dialog())
+        event_system.subscribe(EventType.OPEN_CLIP_SEARCH, lambda _: self.open_clip_search_dialog())
         event_system.subscribe(EventType.OPEN_TAG_EDITOR, lambda _: self.open_tag_editor())
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
@@ -677,9 +735,13 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("show_hotkey_help", self._toggle_hotkey_help)
         self.hotkey_manager.add_action("toggle_info_panel", self._open_info_panel)
         self.hotkey_manager.add_action("open_comfyui", self.open_comfyui_dialog)
+        self.hotkey_manager.add_action("clip_search", self.open_clip_search_dialog)
         self.hotkey_manager.add_action("zoom_in", lambda: self._handle_hotkey_zoom(1))
         self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
         self.hotkey_manager.add_action("toggle_group_mode", self._toggle_group_mode)
+        self.hotkey_manager.add_action("copy_paths", self._copy_paths)
+        self.hotkey_manager.add_action("copy_files", self._copy_files)
+        self.hotkey_manager.add_action("copy_image", self._copy_image)
 
     def _toggle_hotkey_help(self):
         if not hasattr(self, '_hotkey_help_overlay') or self._hotkey_help_overlay is None:
@@ -692,6 +754,50 @@ class MainWindow(QMainWindow):
     def _toggle_group_mode(self):
         if self.thumbnail_view:
             self.thumbnail_view.toggle_group_mode()
+
+    # ── Clipboard ────────────────────────────────────────────────
+
+    def _copy_paths(self):
+        from .clipboard import copy_paths_as_text
+        paths = self.get_effective_selection()
+        count = copy_paths_as_text(paths)
+        if count:
+            self._show_status(f"Copied {count} path{'s' if count != 1 else ''}")
+
+    def _copy_files(self):
+        from .clipboard import copy_files_to_clipboard
+        paths = self.get_effective_selection()
+        count = copy_files_to_clipboard(paths)
+        if count:
+            self._show_status(f"Copied {count} file{'s' if count != 1 else ''}")
+
+    def _copy_image(self):
+        from .clipboard import copy_image_pixels
+        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+            image = self.picture_view._picture_base.get_image()
+            path = self.picture_view.current_path
+        else:
+            self._show_status("Copy image: open in picture view first")
+            return
+        ok = copy_image_pixels(image, path)
+        if ok:
+            self._show_status("Image copied to clipboard")
+        elif path:
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in ('.jpg', '.jpeg'):
+                self._show_status("Copy image: JPEG only")
+            else:
+                self._show_status("Copy image: no image loaded")
+
+    def _show_status(self, message: str, timeout: int = 3000):
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE,
+            source="main_window",
+            timestamp=time.time(),
+            message=message,
+            section=StatusSection.PROCESS,
+            timeout=timeout,
+        ))
 
     def load_directory(self, directory_path: str, recursive: bool = True):
         logger.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")

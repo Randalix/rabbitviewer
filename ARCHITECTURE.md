@@ -416,6 +416,10 @@ Script-triggered overlays on thumbnails. Flow: `ScriptAPI.show_overlay()` → `E
 
 Renderers are pluggable callables `(QPainter, QRect, dict) -> None` registered by name. Built-in: `stars` (gold star glyphs with dark pill), `badge` (colored circle with optional text). `_compute_sub_rect` maps position names (`center`, `top-left`, etc.) to sub-rects for corner placement.
 
+### Clipboard — `gui/clipboard.py`
+
+Three pure functions for clipboard operations: `copy_paths_as_text` (newline-separated file paths), `copy_files_to_clipboard` (`QMimeData` with `QUrl`s for Finder/Explorer paste), `copy_image_pixels` (full-res `QImage` to clipboard, JPEG only). All read from `get_effective_selection()` or the active `PictureBase` image — no filesystem access.
+
 ### EventSystem — `core/event_system.py`
 
 Pub-sub bus for GUI-internal communication. Typed event data classes; history capped at 100 via `deque`. Thread-safe: `subscribe`/`unsubscribe`/`publish` all hold a lock; `publish` snapshots the subscriber list before iterating so callbacks may safely call `subscribe`/`unsubscribe`. Use for all GUI→GUI state changes; never call GUI methods directly. Ephemeral event types (`INSPECTOR_UPDATE`, `THUMBNAIL_OVERLAY`) skip history to avoid evicting useful events.
@@ -469,6 +473,51 @@ See [`docs/debugging.md`](docs/debugging.md) for the full debugging protocol: st
 `ScriptAPI` provides overlay support: `show_overlay(paths, renderer, params, position, duration, overlay_id)` and `remove_overlay(paths, overlay_id)`. Rating scripts (0–5) show a transient star overlay for 1.2 s after rating.
 
 ---
+
+## AI Features (Local ONNX)
+
+All AI features run fully offline via `onnxruntime`. They are gated behind `ai.enabled` in config and degrade gracefully if `onnxruntime` is not installed.
+
+### CLIP Semantic Search
+
+Natural language image search using OpenCLIP ViT-B-32 (512-dim embeddings).
+
+**Pipeline**: `post_scan` completes → `clip_index::{directory}` SourceJob at `CLIP_INDEX(5)` → `clip_embed::{file_path}` tasks → embeddings stored as float32 BLOBs in `clip_embeddings` table → `clip_search()` computes cosine similarity via `query @ matrix.T`.
+
+**Modules**:
+- `core/onnx_runtime.py` — lazy ONNX session cache, device selection (CoreML/CPU)
+- `core/model_manager.py` — downloads models from HuggingFace to `~/.rabbitviewer/models/`
+- `core/clip_inference.py` — CLIP image/text encoding via ONNX, uses cached thumbnails to avoid NAS reads
+- `core/clip_search.py` — pure-function cosine similarity search (no Qt deps)
+- `gui/clip_search_dialog.py` — search UI (hotkey: `/`)
+
+### Auto-Orientation
+
+Detects and corrects image orientation for files missing EXIF orientation data.
+
+**Pipeline**: `post_scan` completes → `auto_orient::{directory}` SourceJob at `CLIP_INDEX(5)` → `auto_orient::{file_path}` tasks → orientation classifier → DB update if confidence > threshold.
+
+**Guards**: only applies when orientation=1 (unset), no pending orientation write, confidence > 0.9.
+
+**Module**: `core/orientation_model.py` — 4-class orientation classifier (0/90/180/270°), maps to EXIF Orientation values.
+
+### Task ID Conventions (AI)
+
+```
+clip_embed::{file_path}     — CLIP embedding generation
+auto_orient::{file_path}    — orientation detection
+```
+
+### Job ID Conventions (AI)
+
+```
+clip_index::{directory}     — background CLIP indexing SourceJob
+auto_orient::{directory}    — background auto-orient SourceJob
+```
+
+### Priority
+
+`CLIP_INDEX = 5` — below `BACKGROUND_SCAN(10)`, ensuring AI work never competes with thumbnails or metadata.
 
 ## Benchmarks
 

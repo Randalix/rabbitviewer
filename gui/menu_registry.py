@@ -35,6 +35,7 @@ def build_menus() -> dict:
         MenuNode("90° CW", key="3", script="rotate_90"),
         MenuNode("180°", key="1", script="rotate_180"),
         MenuNode("270° CW", key="2", script="rotate_270"),
+        MenuNode("Auto-rotate (AI)", key="a", script="auto_rotate"),
     ])
     open_with_menu = MenuNode("Open with", children=[
         MenuNode("vkdt", key="v", script="open_in_vkdt"),

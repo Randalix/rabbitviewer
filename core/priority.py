@@ -9,6 +9,7 @@ from typing import Callable, Any, Optional, List, Set, Generator, Tuple
 
 
 class Priority(IntEnum):
+    CLIP_INDEX = 5
     BACKGROUND_SCAN = 10
     ORPHAN_SCAN = 15
     CONTENT_HASH = 20

@@ -16,6 +16,7 @@ from core.notifications import (
     ScanProgressData,
     ScanCompleteData,
     FilesRemovedData,
+    ClipIndexProgressData,
     ComfyUICompleteData,
 )
 
@@ -29,11 +30,12 @@ class DaemonSignals(QObject):
     the RenderManager notification callback and each GUI subscriber.
     """
 
-    previews_ready   = Signal(object)  # PreviewsReadyData
-    scan_progress    = Signal(object)  # ScanProgressData
-    scan_complete    = Signal(object)  # ScanCompleteData
-    files_removed    = Signal(object)  # FilesRemovedData
-    comfyui_complete = Signal(object)  # ComfyUICompleteData
+    previews_ready      = Signal(object)  # PreviewsReadyData
+    scan_progress       = Signal(object)  # ScanProgressData
+    scan_complete       = Signal(object)  # ScanCompleteData
+    files_removed       = Signal(object)  # FilesRemovedData
+    clip_index_progress = Signal(object)  # ClipIndexProgressData
+    comfyui_complete    = Signal(object)  # ComfyUICompleteData
 
     def dispatch_notification(self, notification: Notification) -> None:
         """Accept a Notification object and emit the matching signal.
@@ -60,6 +62,8 @@ class DaemonSignals(QObject):
                     self.scan_complete.emit(ScanCompleteData.model_validate(data))
                 case "files_removed":
                     self.files_removed.emit(FilesRemovedData.model_validate(data))
+                case "clip_index_progress":
+                    self.clip_index_progress.emit(ClipIndexProgressData.model_validate(data))
                 case "comfyui_complete":
                     self.comfyui_complete.emit(ComfyUICompleteData.model_validate(data))
                 case _:

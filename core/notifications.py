@@ -114,6 +114,20 @@ class FilesRemovedData:
 
 
 @dataclasses.dataclass
+class ClipIndexProgressData:
+    directory: str = ""
+    completed: int = 0
+    total: int = 0
+
+    def model_dump(self) -> dict:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def model_validate(cls, data: dict):
+        return _model_validate(cls, data)
+
+
+@dataclasses.dataclass
 class ComfyUICompleteData:
     source_path: str = ""
     result_path: str = ""

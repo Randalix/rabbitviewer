@@ -107,6 +107,12 @@ class ThumbnailService:
 
             self.db.ledger_prune_complete(path)
 
+            # Chain AI background jobs after scan completes
+            all_files = list(discovered) + [f for f in db_files if f not in discovered]
+            if all_files:
+                self.tm.submit_clip_indexing_job(path, all_files)
+                self.tm.submit_auto_orient_job(path, all_files)
+
         def _ledger_batch_cb(paths):
             self.db.ledger_batch_insert(paths, scan_root=path)
 
@@ -282,6 +288,28 @@ class ThumbnailService:
             )
         return True
 
+    def set_absolute_orientation(self, image_paths: List[str], orientations: List[int]) -> bool:
+        """Set EXIF orientation to exact values (not cumulative). Queues sidecar writes."""
+        if len(image_paths) != len(orientations):
+            return False
+        for path, orientation in zip(image_paths, orientations):
+            self.db.set_orientation(path, orientation)
+            self.db.pending_write_insert(
+                path, 'orientation', {'orientation': orientation})
+            task_id = f"write_orientation::{path}"
+            with self.rm.graph_lock:
+                prev = self.rm.task_graph.pop(task_id, None)
+                if prev:
+                    prev.is_active = False
+            self.rm.submit_task(
+                task_id,
+                Priority.NORMAL,
+                self._write_orientation_to_sidecar,
+                path, orientation,
+                task_type=TaskType.SIMPLE,
+            )
+        return True
+
     def _write_orientation_to_sidecar(self, path: str, orientation: int):
         """Write orientation to sidecar file only — no cache invalidation."""
         self.tm.write_orientation_to_file(path, orientation)
@@ -377,6 +405,35 @@ class ThumbnailService:
         return self.tm.submit_comfyui_generation(
             image_path, prompt, denoise, workflow=workflow,
         )
+
+    # ------------------------------------------------------------------
+    #  CLIP Search
+    # ------------------------------------------------------------------
+
+    def clip_search(self, query: str, top_k: int = 50):
+        """Search images by text query using CLIP embeddings.
+
+        Returns [(file_path, similarity_score), ...] sorted by score descending.
+        """
+        from core import clip_inference, clip_search
+
+        query_embedding = clip_inference.encode_text(
+            query, config_manager=self.tm.config_manager)
+        if query_embedding is None:
+            return []
+
+        rows = self.db.get_all_embeddings()
+        file_paths, matrix = clip_search.build_embedding_matrix(rows)
+        if matrix is None:
+            return []
+
+        return clip_search.search(query_embedding, file_paths, matrix, top_k=top_k)
+
+    def clip_index_status(self):
+        """Return CLIP indexing status: {total, indexed, model}."""
+        model = self.tm.config_manager.get("ai.clip_search.model", "clip-vit-b-32")
+        indexed = self.db.count_embeddings(model)
+        return {"indexed": indexed, "model": model}
 
     # ------------------------------------------------------------------
     #  Lifecycle

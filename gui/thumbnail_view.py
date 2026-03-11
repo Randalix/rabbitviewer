@@ -224,6 +224,7 @@ class ThumbnailViewWidget(QFrame):
         self._current_filter = ""
         self._current_star_filter = [True, True, True, True, True, True]
         self._current_tag_filter: List[str] = []
+        self._clip_search_paths = None  # set of paths when CLIP search active
         self._hidden_indices = set()
         self._visible_to_original_mapping = {}
         self._original_to_visible_mapping = {}
@@ -1560,8 +1561,24 @@ class ThumbnailViewWidget(QFrame):
         self._current_filter = ""
         self._current_star_filter = [True, True, True, True, True, True]
         self._current_tag_filter = []
+        self._clip_search_paths = None
         self._hidden_indices = set()
         self._filter_update_timer.start()
+
+    def apply_clip_search_results(self, result_paths: list):
+        """Filter grid to only show the given paths (CLIP search results)."""
+        self._clip_search_paths = set(result_paths)
+        self._apply_filter_results(self._clip_search_paths)
+
+    def clear_clip_search(self):
+        """Remove CLIP search filter; restores normal filtering."""
+        self._clip_search_paths = None
+        self.reapply_filters()
+
+    def navigate_to_file(self, file_path: str):
+        """Scroll to and highlight a file (used by CLIP search result selection)."""
+        if file_path in self.current_files:
+            self.setHighlightedThumbnail(file_path)
 
     def reapply_filters(self):
         """

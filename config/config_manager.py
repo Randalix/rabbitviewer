@@ -139,10 +139,39 @@ DEFAULT_CONFIG = {
         "toggle_group_mode": {
             "sequence": "J",
             "description": "Toggle RAW+JPG grouping"
+        },
+        "copy_paths": {
+            "sequence": "Ctrl+Shift+C",
+            "description": "Copy file paths to clipboard"
+        },
+        "copy_files": {
+            "sequence": "Ctrl+C",
+            "description": "Copy files to clipboard (for Finder paste)"
+        },
+        "copy_image": {
+            "sequence": "Ctrl+Shift+Alt+C",
+            "description": "Copy image pixels to clipboard (JPEG only)"
+        },
+        "clip_search": {
+            "sequence": "/",
+            "description": "Open CLIP semantic search"
         }
     },
     "color_management": {
         "icc_profile_path": "",  # path to monitor ICC profile; empty = disabled
+    },
+    "ai": {
+        "enabled": True,
+        "clip_search": {
+            "enabled": True,
+            "model": "clip-vit-b-32",
+            "auto_index": True,
+        },
+        "auto_orient": {
+            "enabled": False,
+            "confidence_threshold": 0.9,
+        },
+        "models_dir": "~/.rabbitviewer/models",
     },
     "comfyui": {
         "host": "192.168.50.4",
