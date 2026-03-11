@@ -222,6 +222,32 @@ if not defined MISSING_OPTIONAL (
 )
 echo.
 
+REM 4c. AI features (CLIP vector search + auto-rotate).
+echo.
+echo AI Features (optional)
+echo   RabbitViewer can use local AI models for:
+echo     - CLIP semantic search — find images by text description
+echo     - Auto-rotate — detect and fix image orientation
+echo   This installs onnxruntime + numpy (~25 MB) and downloads
+echo   ONNX models (~660 MB) to ~/.rabbitviewer/models/ on first use.
+echo.
+set /p "INSTALL_AI=  Install AI features? [y/N] "
+echo.
+
+if /i "%INSTALL_AI%"=="y" (
+    echo Installing AI dependencies ...
+    "%VENV_PIP%" install -r "%REPO_DIR%\requirements-ai.txt"
+    echo   AI dependencies installed.
+
+    echo Downloading AI models (this may take a few minutes) ...
+    "%VENV_PYTHON%" -c "import sys; sys.path.insert(0, r'%REPO_DIR%'); from core.model_manager import ensure_model, MODELS; [print(f'  Downloading {n} ...', end=' ', flush=True) or print('OK' if ensure_model(n) else 'FAILED') for n in MODELS]"
+    echo   AI models downloaded.
+) else (
+    echo   Skipping AI features. You can install them later with:
+    echo     %VENV_PIP% install -r %REPO_DIR%\requirements-ai.txt
+)
+echo.
+
 REM 5. Write `rabbit.cmd` wrapper into bin directory.
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 

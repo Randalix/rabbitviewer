@@ -18,22 +18,22 @@ _HF_BASE = "https://huggingface.co/immich-app/ViT-B-32__openai/resolve/main"
 
 MODELS = {
     "clip-vit-b-32-visual": {
-        "url": f"{_HF_BASE}/visual.onnx",
+        "url": f"{_HF_BASE}/visual/model.onnx",
         "filename": "visual.onnx",
         "sha256": "",  # populated after first verified download
     },
     "clip-vit-b-32-textual": {
-        "url": f"{_HF_BASE}/textual.onnx",
+        "url": f"{_HF_BASE}/textual/model.onnx",
         "filename": "textual.onnx",
         "sha256": "",
     },
     "clip-vit-b-32-preprocessor": {
-        "url": f"{_HF_BASE}/preprocess_cfg.json",
+        "url": f"{_HF_BASE}/visual/preprocess_cfg.json",
         "filename": "preprocess_cfg.json",
         "sha256": "",
     },
     "clip-vit-b-32-tokenizer": {
-        "url": f"{_HF_BASE}/tokenizer.json",
+        "url": f"{_HF_BASE}/textual/tokenizer.json",
         "filename": "tokenizer.json",
         "sha256": "",
     },

@@ -10,12 +10,13 @@ def run_script(api):
 
     def date_key(p):
         meta = metadata.get(p, {}) if metadata else {}
-        ts = meta.get("date_taken") or meta.get("mtime")
+        ts = meta.get("date_taken") or meta.get("birthtime") or meta.get("mtime")
         if ts:
             return float(ts)
         # why: fallback to stat only when daemon has no cached timestamp
         try:
-            return os.path.getmtime(p)  # disk-io: stat fallback for sort
+            st = os.stat(p)  # disk-io: stat fallback for sort
+            return getattr(st, 'st_birthtime', None) or st.st_mtime
         except OSError:
             return 0.0
 

@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
     _hover_metadata_ready = Signal(str)  # path — emitted after cache populated
     _tag_filter_ready = Signal(list, list)  # (dir_tags, global_tags)
     _tag_editor_ready = Signal(int, list, list, list)  # (count, common_tags, dir_tags, global_tags)
+    _clip_results_ready = Signal(object)  # list of (path, score) or None
     def __init__(self, config_manager, service,
                  daemon_signals: DaemonSignals, *, debug_ui: bool = False):
         super().__init__()
@@ -94,6 +95,7 @@ class MainWindow(QMainWindow):
         self.tag_filter_dialog = None
         self.comfyui_dialog = None
         self.clip_search_dialog = None
+        self._pre_clip_search_order = None
         self._removed_images = []
 
         QTimer.singleShot(0, self._deferred_init)
@@ -145,6 +147,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_view.filtersApplied.connect(self._on_filters_applied)
         self._hover_rating_ready.connect(self._on_hover_rating_ready)
         self._hover_metadata_ready.connect(self._on_hover_metadata_ready)
+        self._clip_results_ready.connect(self._on_clip_results_ready)
 
     def _handle_benchmark_result(self, operation: str, time: float):
         logger.info(f"Benchmark - {operation}: {time:.3f} seconds")
@@ -533,7 +536,10 @@ class MainWindow(QMainWindow):
             from .clip_search_dialog import ClipSearchDialog
             self.clip_search_dialog = ClipSearchDialog(self)
             self.clip_search_dialog.search_requested.connect(self._on_clip_search)
+            self.clip_search_dialog.search_cleared.connect(self._on_clip_search_cleared)
             self.clip_search_dialog.result_selected.connect(self._on_clip_result_selected)
+            # Warm the ONNX text session in background so first search is fast
+            self._warm_clip_session()
 
         if self.clip_search_dialog.isVisible():
             self.clip_search_dialog.close()
@@ -543,44 +549,75 @@ class MainWindow(QMainWindow):
 
     def _on_clip_search(self, query: str):
         import threading as _threading
-        def _search_and_update():
+        # Save pre-search order so we can restore on clear
+        if self.thumbnail_view and self._pre_clip_search_order is None:
+            self._pre_clip_search_order = list(self.thumbnail_view.all_files)
+
+        # Snapshot current files on main thread for scoped search
+        scope = list(self.thumbnail_view.all_files) if self.thumbnail_view else None
+
+        def _bg_search():
             try:
                 if not self.service:
-                    self._pending_clip_results = None
+                    self._clip_results_ready.emit(None)
                     return
-                results = self.service.clip_search(query)
-                self._pending_clip_results = results
-            except Exception:  # why: clip_search calls ONNX inference + DB reads; exceptions from either must not crash the background thread
+                results = self.service.clip_search(query, scope=scope)
+                self._clip_results_ready.emit(results)
+            except Exception:  # why: clip_search calls ONNX inference + DB reads
                 logger.error("CLIP search failed", exc_info=True)
-                self._pending_clip_results = None
+                self._clip_results_ready.emit(None)
 
-        self._pending_clip_results = "searching"
-        _threading.Thread(target=_search_and_update, daemon=True).start()
+        _threading.Thread(target=_bg_search, daemon=True).start()
 
-        from PySide6.QtCore import QTimer
-        self._clip_poll_count = 0
+    def _on_clip_results_ready(self, results):
+        if not self.clip_search_dialog:
+            return
+        if results is None:
+            self.clip_search_dialog.set_error("Search failed — are models downloaded?")
+            return
 
-        def _check_results():
-            self._clip_poll_count += 1
-            if self._pending_clip_results == "searching" and self._clip_poll_count < 600:
-                QTimer.singleShot(50, _check_results)
-                return
-            if not self.clip_search_dialog:
-                return
-            if self._pending_clip_results is None or self._pending_clip_results == "searching":
-                self.clip_search_dialog.set_error("Search failed — are models downloaded?")
-            else:
-                self.clip_search_dialog.set_results(self._pending_clip_results)
-                if self._pending_clip_results and self.thumbnail_view:
-                    result_paths = [fp for fp, _ in self._pending_clip_results]
-                    self.thumbnail_view.apply_clip_search_results(result_paths)
+        self.clip_search_dialog.set_results(results)
+        if results and self.thumbnail_view:
+            result_paths = [fp for fp, _ in results]
+            # Reorder: matched files first (by score), then the rest
+            matched_set = set(result_paths)
+            rest = [p for p in self.thumbnail_view.all_files if p not in matched_set]
+            self.thumbnail_view.reorder_files(result_paths + rest)
+            self.thumbnail_view.apply_clip_search_results(result_paths)
 
-        QTimer.singleShot(50, _check_results)
+    def _on_clip_search_cleared(self):
+        if self.thumbnail_view:
+            # Restore original order first, then clear the filter.
+            # reorder_files rebuilds the layout using current _hidden_indices,
+            # so the clip filter must still be active during reorder to avoid
+            # a stale layout flash.  clear_clip_search then removes the filter
+            # and triggers reapply_filters which unhides everything.
+            if self._pre_clip_search_order is not None:
+                self.thumbnail_view.reorder_files(self._pre_clip_search_order)
+                self._pre_clip_search_order = None
+            self.thumbnail_view.clear_clip_search()
 
     def _on_clip_result_selected(self, file_path: str):
-        """Navigate to a selected CLIP search result."""
         if self.thumbnail_view:
             self.thumbnail_view.navigate_to_file(file_path)
+
+    def _warm_clip_session(self):
+        import threading as _threading
+
+        def _warm():
+            try:
+                from core import onnx_runtime
+                from core.model_manager import get_model_path
+                if not onnx_runtime.is_available():
+                    return
+                path = get_model_path("clip-vit-b-32-textual",
+                                      self.config_manager if hasattr(self, 'config_manager') else None)
+                if path:
+                    onnx_runtime.get_session(path)
+            except Exception:  # why: best-effort warmup; missing model or incompatible runtime must not surface
+                pass
+
+        _threading.Thread(target=_warm, daemon=True).start()
 
     def _on_filters_applied(self):
         # Case 1: detail view is open — navigate away if current media is now filtered out

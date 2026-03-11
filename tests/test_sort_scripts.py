@@ -31,22 +31,32 @@ class TestSortByDate:
         sort_by_date(api)
         api.set_image_order.assert_called_once_with(["/a.jpg", "/b.jpg", "/c.jpg"])
 
-    def test_falls_back_to_mtime(self):
+    def test_falls_back_to_birthtime(self):
         paths = ["/b.jpg", "/a.jpg"]
         metadata = {
-            "/b.jpg": {"date_taken": None, "mtime": 200.0},
-            "/a.jpg": {"date_taken": None, "mtime": 100.0},
+            "/b.jpg": {"date_taken": None, "birthtime": 200.0, "mtime": 50.0},
+            "/a.jpg": {"date_taken": None, "birthtime": 100.0, "mtime": 300.0},
         }
         api = _make_api(paths, metadata)
         sort_by_date(api)
         api.set_image_order.assert_called_once_with(["/a.jpg", "/b.jpg"])
 
-    def test_mixed_date_taken_and_mtime(self):
-        """date_taken (float) and mtime (float) must be comparable."""
+    def test_falls_back_to_mtime(self):
         paths = ["/b.jpg", "/a.jpg"]
         metadata = {
-            "/b.jpg": {"date_taken": 5000.0, "mtime": 1.0},
-            "/a.jpg": {"date_taken": None, "mtime": 3000.0},
+            "/b.jpg": {"date_taken": None, "birthtime": None, "mtime": 200.0},
+            "/a.jpg": {"date_taken": None, "birthtime": None, "mtime": 100.0},
+        }
+        api = _make_api(paths, metadata)
+        sort_by_date(api)
+        api.set_image_order.assert_called_once_with(["/a.jpg", "/b.jpg"])
+
+    def test_mixed_date_taken_and_birthtime(self):
+        """date_taken and birthtime (both float) must be comparable."""
+        paths = ["/b.jpg", "/a.jpg"]
+        metadata = {
+            "/b.jpg": {"date_taken": 5000.0, "birthtime": 1.0, "mtime": 1.0},
+            "/a.jpg": {"date_taken": None, "birthtime": 3000.0, "mtime": 1.0},
         }
         api = _make_api(paths, metadata)
         sort_by_date(api)

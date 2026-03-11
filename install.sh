@@ -268,6 +268,41 @@ if [[ "$MISSING_OPTIONAL" -eq 0 ]]; then
 fi
 echo
 
+# 4c. AI features (CLIP vector search + auto-rotate).
+echo
+bold "AI Features (optional)"
+yellow "  RabbitViewer can use local AI models for:"
+yellow "    • CLIP semantic search — find images by text description"
+yellow "    • Auto-rotate — detect and fix image orientation"
+yellow "  This installs onnxruntime + numpy (~25 MB) and downloads"
+yellow "  ONNX models (~660 MB) to ~/.rabbitviewer/models/ on first use."
+echo
+printf '  Install AI features? [y/N] '
+read -r INSTALL_AI </dev/tty
+echo
+
+if [[ "${INSTALL_AI:-}" =~ ^[Yy]$ ]]; then
+    yellow "Installing AI dependencies …"
+    "$VENV_PIP" install -r "$REPO_DIR/requirements-ai.txt"
+    green "  AI dependencies installed."
+
+    yellow "Downloading AI models (this may take a few minutes) …"
+    "$VENV_PYTHON" -c "
+import sys
+sys.path.insert(0, '$REPO_DIR')
+from core.model_manager import ensure_model, MODELS
+for name in MODELS:
+    print(f'  Downloading {name} …', end=' ', flush=True)
+    path = ensure_model(name)
+    print('OK' if path else 'FAILED')
+"
+    green "  AI models downloaded."
+else
+    yellow "  Skipping AI features. You can install them later with:"
+    yellow "    $VENV_PIP install -r $REPO_DIR/requirements-ai.txt"
+fi
+echo
+
 # 5. Write `rabbit` wrapper into ~/.local/bin.
 #    The wrapper prepends the repo to PYTHONPATH so project modules win,
 #    then delegates to the venv's `rabbit` entry point (installed by pip).

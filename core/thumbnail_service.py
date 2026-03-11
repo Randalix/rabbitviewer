@@ -22,9 +22,12 @@ class ThumbnailService:
         self.tm = thumbnail_manager
         self.db = thumbnail_manager.metadata_db
         self.rm = thumbnail_manager.render_manager
+        self.config_manager = thumbnail_manager.config_manager
         self.directory_scanner = directory_scanner
         self._compound_task_counter = 0
         self._counter_lock = threading.Lock()
+        self._clip_cache = None       # (file_paths, matrix) tuple
+        self._clip_cache_gen = -1     # db.embedding_generation when cache was built
 
     def prepare_for_shutdown(self):
         self.rm.prepare_for_shutdown()
@@ -410,28 +413,51 @@ class ThumbnailService:
     #  CLIP Search
     # ------------------------------------------------------------------
 
-    def clip_search(self, query: str, top_k: int = 50):
+    def clip_search(self, query: str, top_k: int = 50, scope=None):
         """Search images by text query using CLIP embeddings.
 
+        scope: optional list of file_paths to restrict search to (e.g. current view).
         Returns [(file_path, similarity_score), ...] sorted by score descending.
         """
         from core import clip_inference, clip_search
 
         query_embedding = clip_inference.encode_text(
-            query, config_manager=self.tm.config_manager)
+            query, config_manager=self.config_manager)
         if query_embedding is None:
             return []
 
-        rows = self.db.get_all_embeddings()
-        file_paths, matrix = clip_search.build_embedding_matrix(rows)
+        # Reuse cached matrix if no embeddings were added/removed since last build
+        gen = self.db.embedding_generation
+        if self._clip_cache is not None and self._clip_cache_gen == gen:
+            file_paths, matrix = self._clip_cache
+        else:
+            rows = self.db.get_all_embeddings()
+            file_paths, matrix = clip_search.build_embedding_matrix(rows)
+            if matrix is not None:
+                self._clip_cache = (file_paths, matrix)
+                self._clip_cache_gen = gen
+
         if matrix is None:
             return []
 
+        # Filter to scope if provided
+        if scope is not None:
+            np = clip_search._get_numpy()
+            scope_set = set(scope)
+            mask = [i for i, fp in enumerate(file_paths) if fp in scope_set]
+            if not mask:
+                return []
+            file_paths = [file_paths[i] for i in mask]
+            matrix = matrix[np.array(mask)]
+
         return clip_search.search(query_embedding, file_paths, matrix, top_k=top_k)
 
+    def invalidate_clip_cache(self):
+        self._clip_cache = None
+        self._clip_cache_gen = -1
+
     def clip_index_status(self):
-        """Return CLIP indexing status: {total, indexed, model}."""
-        model = self.tm.config_manager.get("ai.clip_search.model", "clip-vit-b-32")
+        model = self.config_manager.get("ai.clip_search.model", "clip-vit-b-32")
         indexed = self.db.count_embeddings(model)
         return {"indexed": indexed, "model": model}
 

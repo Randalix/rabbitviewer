@@ -1566,13 +1566,14 @@ class ThumbnailViewWidget(QFrame):
         self._filter_update_timer.start()
 
     def apply_clip_search_results(self, result_paths: list):
-        """Filter grid to only show the given paths (CLIP search results)."""
+        """Set CLIP search filter and reapply all filters."""
         self._clip_search_paths = set(result_paths)
-        self._apply_filter_results(self._clip_search_paths)
+        self._filter_update_timer.start()
 
     def clear_clip_search(self):
-        """Remove CLIP search filter; restores normal filtering."""
+        """Remove CLIP search filter and reapply all filters immediately."""
         self._clip_search_paths = None
+        self._hidden_indices = set()
         self.reapply_filters()
 
     def navigate_to_file(self, file_path: str):
@@ -1597,7 +1598,10 @@ class ThumbnailViewWidget(QFrame):
 
         if self._is_loading:
             # Fast path: show everything during the initial scan.
-            self._apply_filter_results(set(self.all_files))
+            visible = set(self.all_files)
+            if self._clip_search_paths is not None:
+                visible = visible & self._clip_search_paths
+            self._apply_filter_results(visible)
             return
 
         # Async path: submit the socket call to the executor so the GUI
@@ -1637,6 +1641,10 @@ class ThumbnailViewWidget(QFrame):
 
         if visible_paths is None:
             visible_paths = set(self.all_files)
+
+        # Intersect with CLIP search results when active
+        if self._clip_search_paths is not None:
+            visible_paths = visible_paths & self._clip_search_paths
 
         self._apply_filter_results(visible_paths)
 

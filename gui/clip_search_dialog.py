@@ -16,6 +16,7 @@ class ClipSearchDialog(QDialog):
     """Non-modal dialog for CLIP semantic image search."""
 
     search_requested = Signal(str)
+    search_cleared = Signal()
     result_selected = Signal(str)  # file_path
 
     def __init__(self, parent=None):
@@ -57,6 +58,11 @@ class ClipSearchDialog(QDialog):
         if query:
             self.status_label.setText("Searching...")
             self.search_requested.emit(query)
+        else:
+            self.results_list.clear()
+            self._results = []
+            self.status_label.setText("")
+            self.search_cleared.emit()
 
     def _on_item_double_clicked(self, item: QListWidgetItem):
         idx = self.results_list.row(item)

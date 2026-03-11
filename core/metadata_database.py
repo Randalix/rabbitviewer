@@ -30,6 +30,7 @@ class MetadataDatabase:
         logger.info(f"Initializing MetadataDatabase with path: {db_path}")
         self.db_path = db_path
         self._lock = Lock()
+        self._embedding_generation = 0
 
         # Ensure database directory exists
         db_dir = os.path.dirname(db_path)
@@ -41,6 +42,10 @@ class MetadataDatabase:
 
         # Initialize database
         self._init_database()
+
+    @property
+    def embedding_generation(self) -> int:
+        return self._embedding_generation
 
     def _init_database(self):
         with self._lock:
@@ -986,6 +991,31 @@ class MetadataDatabase:
             logger.error(f"Error getting orientation for {file_path}: {e}")
             return 1
 
+    def batch_get_orientations(self, file_paths: List[str]) -> Dict[str, int]:
+        """Return {file_path: orientation} for a batch of files. Defaults to 1."""
+        if not file_paths:
+            return {}
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                result = {}
+                for i in range(0, len(file_paths), 500):
+                    batch = file_paths[i:i + 500]
+                    placeholders = ','.join('?' * len(batch))
+                    cursor.execute(
+                        f'SELECT file_path, orientation FROM image_metadata '
+                        f'WHERE file_path IN ({placeholders})', batch)
+                    for row in cursor.fetchall():
+                        result[row[0]] = row[1] if row[1] else 1
+                # Fill in missing paths with default
+                for fp in file_paths:
+                    if fp not in result:
+                        result[fp] = 1
+                return result
+        except sqlite3.Error as e:
+            logger.error("Error batch getting orientations: %s", e)
+            return {fp: 1 for fp in file_paths}
+
     def set_orientation(self, file_path: str, orientation: int) -> bool:
         """Sets the EXIF orientation for a file in the database."""
         try:
@@ -1270,6 +1300,8 @@ class MetadataDatabase:
                     cursor.execute(f'''
                         DELETE FROM clip_embeddings WHERE file_path IN ({placeholders})
                     ''', file_paths)
+                    if cursor.rowcount:
+                        self._embedding_generation += 1
 
                     logger.info(f"Deleted {rows_affected} records from database for {len(file_paths)} files.")
 
@@ -1802,6 +1834,7 @@ class MetadataDatabase:
                         created_at = excluded.created_at
                 ''', (file_path, embedding, model_name, time.time()))
                 self.conn.commit()
+                self._embedding_generation += 1
                 return True
         except sqlite3.Error as e:
             logger.error(f"Error upserting embedding for {file_path}: {e}")

@@ -702,8 +702,8 @@ class ThumbnailManager:
             return
 
         # Only process files with default orientation (1 = unset)
-        candidates = [fp for fp in file_paths
-                      if self.metadata_db.get_orientation(fp) == 1]
+        orientations = self.metadata_db.batch_get_orientations(file_paths)
+        candidates = [fp for fp in file_paths if orientations.get(fp, 1) == 1]
         if not candidates:
             return
 

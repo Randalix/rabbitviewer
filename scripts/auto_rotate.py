@@ -14,7 +14,6 @@ def _status(msg, timeout=5000):
 
 
 def run_script(api: ScriptAPI, selected_images: list[str] = None):
-    """Auto-detect and fix orientation using AI (ONNX MobileNet)."""
     from core import orientation_model, onnx_runtime
 
     if not onnx_runtime.is_available():
@@ -28,16 +27,20 @@ def run_script(api: ScriptAPI, selected_images: list[str] = None):
         logger.info("No images selected for auto-rotate.")
         return
 
-    config_manager = api.service.tm.config_manager
+    config_manager = api.service.config_manager
     db = api.service.db
     threshold = config_manager.get("ai.auto_orient.confidence_threshold", 0.9)
+
+    # Batch-fetch thumbnail paths and orientations to avoid N×lock acquisitions
+    thumb_validity = db.batch_get_cached_thumbnail_validity(selected_images)
+    current_orientations = db.batch_get_orientations(selected_images)
 
     corrected = []
     orientations = []
     for path in selected_images:
         # Use cached thumbnail to avoid NAS reads
-        paths = db.get_thumbnail_paths(path)
-        thumb = paths.get('thumbnail_path') if paths else None
+        info = thumb_validity.get(path)
+        thumb = info.get('thumbnail_path') if info and info.get('valid') else None
 
         result = orientation_model.predict_orientation(
             path, thumbnail_path=thumb, config_manager=config_manager)
@@ -50,8 +53,7 @@ def run_script(api: ScriptAPI, selected_images: list[str] = None):
             logger.debug("Auto-rotate: low confidence %.2f for %s", confidence, path)
             continue
 
-        current_orient = db.get_orientation(path)
-        if predicted_orient == current_orient:
+        if predicted_orient == current_orientations.get(path, 1):
             continue
 
         corrected.append(path)
