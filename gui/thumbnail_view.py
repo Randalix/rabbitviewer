@@ -1169,7 +1169,6 @@ class ThumbnailViewWidget(QFrame):
                     label.loaded = False
 
     def _apply_db_orientation(self, image: QImage, image_path: str) -> QImage:
-        """Apply DB orientation as a visual QImage transform."""
         if not self.service:
             return image
         try:
@@ -1183,7 +1182,7 @@ class ThumbnailViewWidget(QFrame):
         return image
 
     def rotate_thumbnails(self, image_paths: List[str], degrees: int) -> None:
-        """Rotate cached thumbnail pixmaps in-place for immediate visual feedback."""
+        # why: optimistic rotation for immediate feedback before regenerated thumbnail arrives
         transform = QTransform().rotate(degrees)
         for path in image_paths:
             idx = self._path_to_idx.get(path)
