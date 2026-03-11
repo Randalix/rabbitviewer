@@ -38,6 +38,9 @@ metadata:
 inspector:
   zoom_factor: 3.0
 
+color_management:
+  icc_profile_path: ""  # path to monitor ICC profile; empty = disabled
+
 gui:
   background_color: '#000000'
   spacing: 1
@@ -48,6 +51,7 @@ gui:
   info_panel_opacity: 0.8
   statusbar_font: Arial
   statusbar_font_size: 10
+  monospace_font: Menlo
 
 hotkeys:
   escape_picture_view:
@@ -126,6 +130,9 @@ hotkeys:
   redo_selection:
     sequence: Ctrl+Shift+Z
     description: Redo selection
+  toggle_group_mode:
+    sequence: J
+    description: Toggle RAW+JPG grouping
 
 comfyui:
   host: 192.168.50.4
