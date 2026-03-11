@@ -32,7 +32,7 @@ def build_menus() -> dict:
         MenuNode("JPG from RAW", key="j", script="extract_jpg"),
     ])
     rotate_menu = MenuNode("Rotate", children=[
-        MenuNode("90° CW", key="9", script="rotate_90"),
+        MenuNode("90° CW", key="3", script="rotate_90"),
         MenuNode("180°", key="1", script="rotate_180"),
         MenuNode("270° CW", key="2", script="rotate_270"),
     ])
