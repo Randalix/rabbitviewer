@@ -17,17 +17,18 @@ _srgb_cs: Optional[QColorSpace] = None
 _initialized = False
 
 
-def _ensure_init() -> None:
+def _ensure_init() -> None:  # GUI thread only
     global _monitor_cs, _srgb_cs, _initialized
     if _initialized:
         return
-    _initialized = True
+
     _srgb_cs = QColorSpace(QColorSpace.SRgb)
 
-    from config.config_manager import ConfigManager
+    from config.config_manager import ConfigManager  # why: deferred to avoid circular import (picture_base imports this module)
     cfg = ConfigManager()
     path = cfg.get("color_management.icc_profile_path", "")
     if not path:
+        _initialized = True
         return
 
     try:
@@ -36,20 +37,19 @@ def _ensure_init() -> None:
         cs = QColorSpace.fromIccProfile(data)
         if not cs.isValid():
             logger.warning("ICC profile loaded but invalid: %s", path)
+            _initialized = True
             return
         _monitor_cs = cs
         logger.info("Color management enabled: %s", path)
     except FileNotFoundError:
         logger.warning("ICC profile not found: %s", path)
-    except Exception:
+    except Exception:  # why: fromIccProfile raises undocumented Qt C++ exceptions on corrupt profiles
         logger.warning("Failed to load ICC profile: %s", path, exc_info=True)
+    _initialized = True
 
 
 def apply_profile(image: QImage) -> QImage:
-    """Convert *image* from sRGB to the monitor color space.
-
-    Returns the image unchanged if no profile is configured or on error.
-    """
+    """Convert *image* from sRGB to the monitor color space."""
     _ensure_init()
     if _monitor_cs is None or image.isNull():
         return image
