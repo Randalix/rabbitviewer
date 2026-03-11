@@ -73,7 +73,7 @@ class ScriptAPI:
             self._operation_stats['remove_images_time'] = self._last_operation_time
             self._operation_stats['images_removed'] = len(image_paths)
 
-        except Exception as e:
+        except Exception as e:  # why: user scripts may pass garbage; main_window may be mid-teardown
             logger.error(f"Error in remove_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
             self._operation_stats['remove_images_error'] = str(e)
@@ -97,7 +97,7 @@ class ScriptAPI:
                 return False
             logger.info(f"Submitted {len(ops)} daemon task(s): {[op['name'] for op in ops]}")
             return True
-        except Exception as e:
+        except Exception as e:  # why: service raises ConnectionError/OSError on IPC failure
             logger.error(f"Error submitting daemon tasks: {e}", exc_info=True)
             return False
 
@@ -113,7 +113,7 @@ class ScriptAPI:
             self._operation_stats['add_images_time'] = self._last_operation_time
             self._operation_stats['images_added'] = len(image_paths)
             logger.debug(f"add_images: {len(image_paths)} images in {self._last_operation_time:.3f}s")
-        except Exception as e:
+        except Exception as e:  # why: user scripts may pass garbage; view may be mid-teardown
             logger.error(f"Error in add_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
             self._operation_stats['add_images_error'] = str(e)
@@ -165,7 +165,7 @@ class ScriptAPI:
             self._operation_stats['images_selected'] = len(paths_to_select)
             logger.debug(f"set_selected_images: {len(paths_to_select)} images in {self._last_operation_time:.3f}s")
             
-        except Exception as e:
+        except Exception as e:  # why: user scripts may pass garbage; view may be mid-teardown
             logger.error(f"Error in set_selected_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
             self._operation_stats['set_selection_error'] = str(e)
@@ -185,7 +185,7 @@ class ScriptAPI:
             # Return list of all image paths from current_files
             return [str(Path(path).absolute()) for path in view.current_files]
             
-        except Exception as e:
+        except Exception as e:  # why: user scripts may pass garbage; view may be mid-teardown
             logger.error(f"Error in get_all_images: {e}", exc_info=True)
             return []
 
