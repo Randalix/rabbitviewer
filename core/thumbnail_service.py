@@ -115,6 +115,7 @@ class ThumbnailService:
             if all_files:
                 self.tm.submit_clip_indexing_job(path, all_files)
                 self.tm.submit_auto_orient_job(path, all_files)
+                self.tm.submit_face_detection_job(path, all_files)
 
         def _ledger_batch_cb(paths):
             self.db.ledger_batch_insert(paths, scan_root=path)
@@ -460,6 +461,52 @@ class ThumbnailService:
         model = self.config_manager.get("ai.clip_search.model", "clip-vit-b-32")
         indexed = self.db.count_embeddings(model)
         return {"indexed": indexed, "model": model}
+
+    # ------------------------------------------------------------------
+    #  Face Recognition
+    # ------------------------------------------------------------------
+
+    def get_faces_for_file(self, file_path: str) -> list:
+        return self.db.get_faces_for_file(file_path)
+
+    def get_all_persons(self, include_hidden: bool = False) -> list:
+        return self.db.get_all_persons(include_hidden)
+
+    def rename_person(self, person_id: str, name: str):
+        self.db.rename_person(person_id, name)
+
+    def merge_persons(self, target_id: str, source_ids: list):
+        self.db.merge_persons(target_id, source_ids)
+
+    def hide_person(self, person_id: str, hidden: bool):
+        self.db.hide_person(person_id, hidden)
+
+    def set_feature_face(self, person_id: str, face_id: str):
+        self.db.set_feature_face(person_id, face_id)
+
+    def get_face_paths_for_person(self, person_id: str) -> list:
+        return self.db.get_face_paths_for_person(person_id)
+
+    def get_faces_for_person(self, person_id: str) -> list:
+        return self.db.get_faces_for_person(person_id)
+
+    def get_feature_faces_batch(self, person_feature_map: dict) -> dict:
+        return self.db.get_feature_faces_batch(person_feature_map)
+
+    def get_face_paths_for_persons(self, person_ids: list) -> list:
+        return self.db.get_face_paths_for_persons(person_ids)
+
+    def assign_face_to_person(self, face_id: str, person_id: str):
+        self.db.assign_face_to_person(face_id, person_id)
+
+    def get_person_names(self) -> list:
+        return self.db.get_person_names()
+
+    def create_person(self, person_id: str, name: str = '', feature_face_id: str = None):
+        return self.db.create_person(person_id, name, feature_face_id)
+
+    def get_person_by_name(self, name: str):
+        return self.db.get_person_by_name(name)
 
     # ------------------------------------------------------------------
     #  Lifecycle

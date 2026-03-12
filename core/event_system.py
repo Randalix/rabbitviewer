@@ -67,6 +67,9 @@ class EventType(Enum):
     # AI / CLIP search
     OPEN_CLIP_SEARCH = "open_clip_search"
 
+    # Face recognition
+    FACE_PERSON_FILTER = "face_person_filter"
+
     # Status messages
     STATUS_MESSAGE = "status_message"
 
@@ -153,6 +156,11 @@ class StatusMessageEventData(EventData):
 @dataclass
 class SelectionChangedEventData(EventData):
     selected_paths: FrozenSet[str]
+
+@dataclass
+class FacePersonFilterEventData(EventData):
+    person_ids: List[str]  # empty = clear filter
+
 
 @dataclass
 class ThumbnailOverlayEventData(EventData):

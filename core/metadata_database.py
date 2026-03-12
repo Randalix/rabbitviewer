@@ -31,6 +31,7 @@ class MetadataDatabase:
         self.db_path = db_path
         self._lock = Lock()
         self._embedding_generation = 0
+        self._face_generation = 0
 
         # Ensure database directory exists
         db_dir = os.path.dirname(db_path)
@@ -46,6 +47,10 @@ class MetadataDatabase:
     @property
     def embedding_generation(self) -> int:
         return self._embedding_generation
+
+    @property
+    def face_generation(self) -> int:
+        return self._face_generation
 
     def _init_database(self):
         with self._lock:
@@ -190,6 +195,38 @@ class MetadataDatabase:
                         payload     TEXT NOT NULL,
                         created_at  REAL NOT NULL,
                         PRIMARY KEY (file_path, write_type)
+                    )
+                ''')
+
+                # Face recognition: detected faces with embeddings
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS face_detections (
+                        face_id     TEXT PRIMARY KEY,
+                        file_path   TEXT NOT NULL,
+                        person_id   TEXT,
+                        embedding   BLOB NOT NULL,
+                        bbox_x      REAL NOT NULL,
+                        bbox_y      REAL NOT NULL,
+                        bbox_w      REAL NOT NULL,
+                        bbox_h      REAL NOT NULL,
+                        confidence  REAL NOT NULL,
+                        model_name  TEXT NOT NULL DEFAULT 'buffalo_l',
+                        created_at  REAL NOT NULL
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_face_file ON face_detections(file_path)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_face_person ON face_detections(person_id)')
+
+                # Face recognition: named people
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS persons (
+                        person_id       TEXT PRIMARY KEY,
+                        name            TEXT NOT NULL DEFAULT '',
+                        face_count      INTEGER NOT NULL DEFAULT 0,
+                        feature_face_id TEXT,
+                        is_hidden       BOOLEAN NOT NULL DEFAULT 0,
+                        created_at      REAL NOT NULL,
+                        updated_at      REAL NOT NULL
                     )
                 ''')
 
@@ -1303,6 +1340,13 @@ class MetadataDatabase:
                     if cursor.rowcount:
                         self._embedding_generation += 1
 
+                    # 5. Clean up face detections for deleted files
+                    cursor.execute(f'''
+                        DELETE FROM face_detections WHERE file_path IN ({placeholders})
+                    ''', file_paths)
+                    if cursor.rowcount:
+                        self._face_generation += 1
+
                     logger.info(f"Deleted {rows_affected} records from database for {len(file_paths)} files.")
 
             # 4. Delete associated cache files outside the DB lock
@@ -1897,6 +1941,302 @@ class MetadataDatabase:
         except sqlite3.Error as e:
             logger.error(f"Error counting embeddings: {e}")
             return 0
+
+    # ------------------------------------------------------------------
+    #  Face Recognition
+    # ------------------------------------------------------------------
+
+    def insert_face_detection(self, face_id: str, file_path: str, embedding: bytes,
+                              bbox: tuple, confidence: float, model_name: str,
+                              person_id: str = None):
+        """Insert a detected face. bbox is (x, y, w, h) normalized 0-1."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO face_detections
+                    (face_id, file_path, embedding, bbox_x, bbox_y, bbox_w, bbox_h,
+                     confidence, model_name, person_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (face_id, file_path, embedding, bbox[0], bbox[1], bbox[2], bbox[3],
+                      confidence, model_name, person_id, time.time()))
+                self.conn.commit()
+                self._face_generation += 1
+        except sqlite3.Error as e:
+            logger.error(f"Error inserting face detection: {e}")
+
+    def get_faces_for_file(self, file_path: str) -> List[dict]:
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT face_id, person_id, embedding, bbox_x, bbox_y, bbox_w, bbox_h,
+                           confidence, model_name
+                    FROM face_detections WHERE file_path = ?
+                ''', (file_path,))
+                rows = cursor.fetchall()
+            return [{'face_id': r[0], 'person_id': r[1], 'embedding': r[2],
+                     'bbox': (r[3], r[4], r[5], r[6]), 'confidence': r[7],
+                     'model_name': r[8]} for r in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting faces for file: {e}")
+            return []
+
+    def get_faces_for_person(self, person_id: str) -> List[dict]:
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT face_id, file_path, embedding, bbox_x, bbox_y, bbox_w, bbox_h,
+                           confidence
+                    FROM face_detections WHERE person_id = ?
+                ''', (person_id,))
+                rows = cursor.fetchall()
+            return [{'face_id': r[0], 'file_path': r[1], 'embedding': r[2],
+                     'bbox': (r[3], r[4], r[5], r[6]), 'confidence': r[7]}
+                    for r in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting faces for person: {e}")
+            return []
+
+    def get_feature_faces_batch(self, person_feature_map: Dict[str, Optional[str]]) -> Dict[str, dict]:
+        """Return {person_id: face_dict} for each person's feature face (or first face).
+
+        person_feature_map: {person_id: feature_face_id_or_None}
+        Single query fetches one face per person — preferring the feature face.
+        """
+        if not person_feature_map:
+            return {}
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                pids = list(person_feature_map.keys())
+                placeholders = ','.join('?' * len(pids))
+                cursor.execute(f'''
+                    SELECT face_id, file_path, person_id,
+                           bbox_x, bbox_y, bbox_w, bbox_h
+                    FROM face_detections WHERE person_id IN ({placeholders})
+                ''', pids)
+                rows = cursor.fetchall()
+
+            # Group by person_id, pick feature face or first
+            from collections import defaultdict  # deferred: only needed for face batch
+            by_person = defaultdict(list)
+            for r in rows:
+                by_person[r[2]].append({
+                    'face_id': r[0], 'file_path': r[1],
+                    'bbox': (r[3], r[4], r[5], r[6]),
+                })
+
+            result = {}
+            for pid, faces in by_person.items():
+                feature_fid = person_feature_map.get(pid)
+                chosen = None
+                if feature_fid:
+                    for f in faces:
+                        if f['face_id'] == feature_fid:
+                            chosen = f
+                            break
+                result[pid] = chosen or faces[0]
+            return result
+        except sqlite3.Error as e:
+            logger.error(f"Error batch-fetching feature faces: {e}")
+            return {}
+
+    def get_all_face_embeddings(self) -> List[tuple]:
+        """Return all (face_id, embedding_blob, person_id) tuples."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT face_id, embedding, person_id FROM face_detections')
+                return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting all face embeddings: {e}")
+            return []
+
+    def get_files_missing_faces(self, file_paths: List[str], model_name: str = "buffalo_l") -> List[str]:
+        """Return file_paths that have no face detection for the given model."""
+        if not file_paths:
+            return []
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                placeholders = ','.join('?' for _ in file_paths)
+                cursor.execute(f'''
+                    SELECT DISTINCT file_path FROM face_detections
+                    WHERE file_path IN ({placeholders}) AND model_name = ?
+                ''', file_paths + [model_name])
+                existing = {row[0] for row in cursor.fetchall()}
+            return [fp for fp in file_paths if fp not in existing]
+        except sqlite3.Error as e:
+            logger.error(f"Error checking missing faces: {e}")
+            return file_paths
+
+    def assign_face_to_person(self, face_id: str, person_id: str):
+        """Assign a face to a person and update face_count."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                # Get old person_id to decrement count
+                cursor.execute('SELECT person_id FROM face_detections WHERE face_id = ?', (face_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return
+                old_person_id = row[0]
+
+                cursor.execute('UPDATE face_detections SET person_id = ? WHERE face_id = ?',
+                               (person_id, face_id))
+
+                if old_person_id and old_person_id != person_id:
+                    cursor.execute('''
+                        UPDATE persons SET face_count = MAX(0, face_count - 1), updated_at = ?
+                        WHERE person_id = ?
+                    ''', (time.time(), old_person_id))
+
+                cursor.execute('''
+                    UPDATE persons SET face_count = face_count + 1, updated_at = ?
+                    WHERE person_id = ?
+                ''', (time.time(), person_id))
+                self.conn.commit()
+                self._face_generation += 1
+        except sqlite3.Error as e:
+            logger.error(f"Error assigning face to person: {e}")
+
+    def create_person(self, person_id: str, name: str = '', feature_face_id: str = None) -> bool:
+        try:
+            now = time.time()
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT OR IGNORE INTO persons
+                    (person_id, name, feature_face_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (person_id, name, feature_face_id, now, now))
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logger.error(f"Error creating person: {e}")
+            return False
+
+    def get_all_persons(self, include_hidden: bool = False) -> List[dict]:
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                if include_hidden:
+                    cursor.execute('SELECT person_id, name, face_count, feature_face_id, is_hidden FROM persons')
+                else:
+                    cursor.execute('SELECT person_id, name, face_count, feature_face_id, is_hidden FROM persons WHERE is_hidden = 0')
+                rows = cursor.fetchall()
+            return [{'person_id': r[0], 'name': r[1], 'face_count': r[2],
+                     'feature_face_id': r[3], 'is_hidden': bool(r[4])} for r in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting all persons: {e}")
+            return []
+
+    def rename_person(self, person_id: str, name: str):
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('UPDATE persons SET name = ?, updated_at = ? WHERE person_id = ?',
+                               (name, time.time(), person_id))
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Error renaming person: {e}")
+
+    def merge_persons(self, target_id: str, source_ids: List[str]):
+        """Reassign all faces from source persons to target, delete sources."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                for src_id in source_ids:
+                    cursor.execute('UPDATE face_detections SET person_id = ? WHERE person_id = ?',
+                                   (target_id, src_id))
+                    cursor.execute('DELETE FROM persons WHERE person_id = ?', (src_id,))
+                # Recompute face_count for target
+                cursor.execute('''
+                    UPDATE persons SET face_count = (
+                        SELECT COUNT(*) FROM face_detections WHERE person_id = ?
+                    ), updated_at = ? WHERE person_id = ?
+                ''', (target_id, time.time(), target_id))
+                self.conn.commit()
+                self._face_generation += 1
+        except sqlite3.Error as e:
+            logger.error(f"Error merging persons: {e}")
+
+    def hide_person(self, person_id: str, hidden: bool):
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('UPDATE persons SET is_hidden = ?, updated_at = ? WHERE person_id = ?',
+                               (int(hidden), time.time(), person_id))
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Error hiding person: {e}")
+
+    def set_feature_face(self, person_id: str, face_id: str):
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('UPDATE persons SET feature_face_id = ?, updated_at = ? WHERE person_id = ?',
+                               (face_id, time.time(), person_id))
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Error setting feature face: {e}")
+
+    def get_face_paths_for_person(self, person_id: str) -> List[str]:
+        """Return distinct file_paths for a person (for filter)."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT DISTINCT file_path FROM face_detections WHERE person_id = ?
+                ''', (person_id,))
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting face paths for person: {e}")
+            return []
+
+    def get_face_paths_for_persons(self, person_ids: List[str]) -> List[str]:
+        """Return distinct file_paths for multiple persons (union, for multi-person filter)."""
+        if not person_ids:
+            return []
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                placeholders = ','.join('?' * len(person_ids))
+                cursor.execute(f'''
+                    SELECT DISTINCT file_path FROM face_detections
+                    WHERE person_id IN ({placeholders})
+                ''', person_ids)
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting face paths for persons: {e}")
+            return []
+
+    def get_person_names(self) -> List[str]:
+        """Return all non-empty person names (for autocomplete)."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT DISTINCT name FROM persons WHERE name != '' ORDER BY name")
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting person names: {e}")
+            return []
+
+    def get_person_by_name(self, name: str) -> Optional[dict]:
+        """Return person dict for exact name match, or None."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT person_id, name, face_count, feature_face_id FROM persons WHERE name = ?', (name,))
+                row = cursor.fetchone()
+                if row:
+                    return {'person_id': row[0], 'name': row[1], 'face_count': row[2], 'feature_face_id': row[3]}
+                return None
+        except sqlite3.Error as e:
+            logger.error(f"Error getting person by name: {e}")
+            return None
 
     def close(self):
         """Closes the database connection."""

@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self.current_hovered_image = None
         self.inspector_views: List[InspectorView] = []
         self._inspector_slot = 0
+        self.face_palettes: List = []
         self.metadata_cache = MetadataCache(self.service)
         self.info_panels: List[InfoPanelShell] = []
         self._info_panel_slot = 0
@@ -297,6 +298,25 @@ class MainWindow(QMainWindow):
     def _pin_last_inspector(self):
         if self.inspector_views:
             self.inspector_views[-1].toggle_pin()
+
+    # ------------------------------------------------------------------
+    #  Face Palette
+    # ------------------------------------------------------------------
+
+    def _open_face_palette(self):
+        from .face_palette import FacePalette
+        palette = FacePalette(config_manager=self.config_manager, parent=self)
+        palette.set_service(self.service)
+        self.face_palettes.append(palette)
+        palette.closed.connect(lambda: self._on_face_palette_closed(palette))
+        palette.show()
+        logger.debug("Opened People View window.")
+
+    def _on_face_palette_closed(self, palette):
+        try:
+            self.face_palettes.remove(palette)
+        except ValueError:
+            pass
 
     def _handle_hotkey_zoom(self, direction: int):
         factor = 1.25 if direction > 0 else 1 / 1.25
@@ -720,6 +740,9 @@ class MainWindow(QMainWindow):
         for panel in list(self.info_panels):
             panel.close()
         self.info_panels.clear()
+        for palette in list(self.face_palettes):
+            palette.close()
+        self.face_palettes.clear()
         if self.comfyui_dialog:
             self.comfyui_dialog.close()
             self.comfyui_dialog = None
@@ -773,6 +796,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("toggle_info_panel", self._open_info_panel)
         self.hotkey_manager.add_action("open_comfyui", self.open_comfyui_dialog)
         self.hotkey_manager.add_action("clip_search", self.open_clip_search_dialog)
+        self.hotkey_manager.add_action("toggle_face_palette", self._open_face_palette)
         self.hotkey_manager.add_action("zoom_in", lambda: self._handle_hotkey_zoom(1))
         self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
         self.hotkey_manager.add_action("toggle_group_mode", self._toggle_group_mode)
@@ -940,6 +964,8 @@ class MainWindow(QMainWindow):
             self.inspector_views[-1].close()
         elif self.info_panels:
             self.info_panels[-1].close()
+        elif self.face_palettes:
+            self.face_palettes[-1].close()
         else:
             self.close()
 

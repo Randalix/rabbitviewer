@@ -225,6 +225,7 @@ class ThumbnailViewWidget(QFrame):
         self._current_star_filter = [True, True, True, True, True, True]
         self._current_tag_filter: List[str] = []
         self._clip_search_paths = None  # set of paths when CLIP search active
+        self._person_filter_paths = None  # set of paths when person filter active
         self._hidden_indices = set()
         self._visible_to_original_mapping = {}
         self._original_to_visible_mapping = {}
@@ -296,6 +297,7 @@ class ThumbnailViewWidget(QFrame):
         event_system.subscribe(EventType.SHIFT_PRESSED, self._on_shift_pressed)
         event_system.subscribe(EventType.SHIFT_RELEASED, self._on_shift_released)
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
+        event_system.subscribe(EventType.FACE_PERSON_FILTER, self._on_face_person_filter)
 
         self.overlay_manager = OverlayManager(request_update=self._request_label_update)
         self.overlay_manager.register_renderer("stars", render_stars)
@@ -1220,6 +1222,7 @@ class ThumbnailViewWidget(QFrame):
         event_system.unsubscribe(EventType.SHIFT_PRESSED, self._on_shift_pressed)
         event_system.unsubscribe(EventType.SHIFT_RELEASED, self._on_shift_released)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
+        event_system.unsubscribe(EventType.FACE_PERSON_FILTER, self._on_face_person_filter)
         if self._daemon_signals:
             self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
             self._daemon_signals.scan_progress.disconnect(self._on_scan_progress)
@@ -1562,6 +1565,7 @@ class ThumbnailViewWidget(QFrame):
         self._current_star_filter = [True, True, True, True, True, True]
         self._current_tag_filter = []
         self._clip_search_paths = None
+        self._person_filter_paths = None
         self._hidden_indices = set()
         self._filter_update_timer.start()
 
@@ -1575,6 +1579,24 @@ class ThumbnailViewWidget(QFrame):
         self._clip_search_paths = None
         self._hidden_indices = set()
         self.reapply_filters()
+
+    def apply_person_filter(self, file_paths: list):
+        self._person_filter_paths = set(file_paths)
+        self._filter_update_timer.start()
+
+    def clear_person_filter(self):
+        self._person_filter_paths = None
+        self.reapply_filters()
+
+    def _on_face_person_filter(self, event_data):
+        person_ids = event_data.person_ids
+        if not person_ids:
+            self.clear_person_filter()
+            return
+        if not self.service:
+            return
+        file_paths = self.service.get_face_paths_for_persons(person_ids)
+        self.apply_person_filter(file_paths or [])
 
     def navigate_to_file(self, file_path: str):
         """Scroll to and highlight a file (used by CLIP search result selection)."""
@@ -1601,6 +1623,8 @@ class ThumbnailViewWidget(QFrame):
             visible = set(self.all_files)
             if self._clip_search_paths is not None:
                 visible = visible & self._clip_search_paths
+            if self._person_filter_paths is not None:
+                visible = visible & self._person_filter_paths
             self._apply_filter_results(visible)
             return
 
@@ -1645,6 +1669,8 @@ class ThumbnailViewWidget(QFrame):
         # Intersect with CLIP search results when active
         if self._clip_search_paths is not None:
             visible_paths = visible_paths & self._clip_search_paths
+        if self._person_filter_paths is not None:
+            visible_paths = visible_paths & self._person_filter_paths
 
         self._apply_filter_results(visible_paths)
 
