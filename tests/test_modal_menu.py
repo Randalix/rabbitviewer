@@ -627,9 +627,9 @@ class TestHotkeyManagerMenuIntegration:
     def test_menu_prefix_registered(self):
         _ensure_hotkey_stubs()
         from gui.hotkey_manager import HotkeyManager
+        from core.event_system import event_system, EventType
 
         parent = MagicMock()
-        parent.modal_menu = MagicMock()
 
         hm = object.__new__(HotkeyManager)
         hm.shortcuts = {}
@@ -645,5 +645,12 @@ class TestHotkeyManagerMenuIntegration:
         })
 
         assert "menu:sort" in hm.actions
-        hm.actions["menu:sort"]()
-        parent.modal_menu.open.assert_called_once_with("sort")
+
+        received = []
+        event_system.subscribe(EventType.OPEN_MODAL_MENU, received.append)
+        try:
+            hm.actions["menu:sort"]()
+            assert len(received) == 1
+            assert received[0].menu_id == "sort"
+        finally:
+            event_system.unsubscribe(EventType.OPEN_MODAL_MENU, received.append)

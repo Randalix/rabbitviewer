@@ -4,6 +4,8 @@ from PySide6.QtGui import QKeySequence, QShortcut
 import logging
 logger = logging.getLogger(__name__)
 
+import time
+from core.event_system import event_system, EventType, TextFilterEventData, StarFilterEventData
 from gui.components.star_button import StarButton, StarDragContext
 
 
@@ -68,7 +70,11 @@ class FilterDialog(QDialog):
         self.debounce_timer.start()
 
     def _emit_filter_text(self):
-        self.filter_changed.emit(self.filter_input.text())
+        text = self.filter_input.text()
+        self.filter_changed.emit(text)
+        event_system.publish(TextFilterEventData(
+            event_type=EventType.TEXT_FILTER_CHANGED, source="filter_dialog",
+            timestamp=time.time(), filter_text=text))
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -86,7 +92,11 @@ class FilterDialog(QDialog):
         logger.debug(f"Handler received: index={index}, new_state={new_state} (bool: {state_as_bool}). States BEFORE: {self.star_states}")
         if 0 <= index < len(self.star_states):
             self.star_states[index] = state_as_bool
-            self.stars_changed.emit(list(self.star_states))
+            states = list(self.star_states)
+            self.stars_changed.emit(states)
+            event_system.publish(StarFilterEventData(
+                event_type=EventType.STAR_FILTER_CHANGED, source="filter_dialog",
+                timestamp=time.time(), star_states=states))
             logger.debug(f"Star button {index} toggled. States AFTER: {self.star_states}")
         else:
             logger.error(f"Invalid index {index} received in _on_star_button_toggled")
@@ -99,7 +109,7 @@ class FilterDialog(QDialog):
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self.filter_changed.emit(self.filter_input.text())
+            self._emit_filter_text()
             self.hide()
             return
         super().keyPressEvent(event)

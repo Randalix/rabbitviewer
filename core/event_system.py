@@ -70,6 +70,20 @@ class EventType(Enum):
     # Face recognition
     FACE_PERSON_FILTER = "face_person_filter"
 
+    # Thumbnail hover events
+    THUMBNAIL_HOVERED = "thumbnail_hovered"
+    THUMBNAIL_LEFT = "thumbnail_left"
+
+    # Filter events
+    TEXT_FILTER_CHANGED = "text_filter_changed"
+    STAR_FILTER_CHANGED = "star_filter_changed"
+    TAG_FILTER_CHANGED = "tag_filter_changed"
+    CLEAR_FILTERS = "clear_filters"
+
+    # Script / menu events
+    RUN_SCRIPT = "run_script"
+    OPEN_MODAL_MENU = "open_modal_menu"
+
     # Status messages
     STATUS_MESSAGE = "status_message"
 
@@ -156,6 +170,30 @@ class StatusMessageEventData(EventData):
 @dataclass
 class SelectionChangedEventData(EventData):
     selected_paths: FrozenSet[str]
+
+@dataclass
+class ThumbnailHoveredEventData(EventData):
+    path: str
+
+@dataclass
+class TextFilterEventData(EventData):
+    filter_text: str
+
+@dataclass
+class StarFilterEventData(EventData):
+    star_states: list  # 6-element bool list
+
+@dataclass
+class TagFilterEventData(EventData):
+    tag_names: list  # list of tag name strings
+
+@dataclass
+class RunScriptEventData(EventData):
+    script_name: str
+
+@dataclass
+class OpenModalMenuEventData(EventData):
+    menu_id: str
 
 @dataclass
 class FacePersonFilterEventData(EventData):

@@ -5,7 +5,7 @@ from typing import Optional
 import logging
 logger = logging.getLogger(__name__)
 
-from core.event_system import EventType, event_system
+from core.event_system import EventType, event_system, StatusSection
 from gui.components.scrolling_label import ScrollingLabel
 
 # Sentinel: rating section is blank because no image is hovered.
@@ -34,6 +34,7 @@ class CustomStatusBar(QStatusBar):
         self._apply_font_settings()
 
         event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
+        event_system.subscribe(EventType.STATUS_MESSAGE, self._handle_status_message)
 
     def _build_layout(self):
         container = QWidget(self)
@@ -111,10 +112,23 @@ class CustomStatusBar(QStatusBar):
 
     def closeEvent(self, event):
         event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed)
+        event_system.unsubscribe(EventType.STATUS_MESSAGE, self._handle_status_message)
         super().closeEvent(event)
 
     def _on_selection_changed(self, event_data):
         self.setSelectionCount(len(event_data.selected_paths))
+
+    def _handle_status_message(self, event_data):
+        if event_data.section == StatusSection.FILEPATH:
+            self.setFilepath(event_data.message)
+        elif event_data.section == StatusSection.RATING:
+            if not event_data.message:
+                self.clearRating()
+            else:
+                val = int(event_data.message) if event_data.message.isdigit() else None
+                self.setRating(val)
+        else:
+            self.setProcessMessage(event_data.message, event_data.timeout)
 
     def _clear_process(self):
         self._raw_process = ""

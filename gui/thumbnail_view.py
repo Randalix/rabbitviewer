@@ -19,7 +19,9 @@ _ValidationErrors = (ValueError, TypeError, KeyError)
 from gui.picture_base import PictureBase
 from gui.components.virtual_grid_manager import VirtualGridManager
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, RemoveFromSelectionCommand
-from core.event_system import event_system, EventType, InspectorEventData, SelectionChangedEventData, StatusMessageEventData
+from core.event_system import (event_system, EventType, EventData, InspectorEventData,
+    SelectionChangedEventData, StatusMessageEventData, ThumbnailHoveredEventData,
+    TextFilterEventData, StarFilterEventData, TagFilterEventData)
 from network.daemon_signals import DaemonSignals
 from core.notifications import PreviewsReadyData, ScanProgressData, ScanCompleteData, FilesRemovedData
 from core.heatmap import compute_heatmap, THUMB_RING_COUNT
@@ -298,6 +300,10 @@ class ThumbnailViewWidget(QFrame):
         event_system.subscribe(EventType.SHIFT_RELEASED, self._on_shift_released)
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
         event_system.subscribe(EventType.FACE_PERSON_FILTER, self._on_face_person_filter)
+        event_system.subscribe(EventType.TEXT_FILTER_CHANGED, self._on_text_filter_event)
+        event_system.subscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
+        event_system.subscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
+        event_system.subscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
 
         self.overlay_manager = OverlayManager(request_update=self._request_label_update)
         self.overlay_manager.register_renderer("stars", render_stars)
@@ -329,12 +335,18 @@ class ThumbnailViewWidget(QFrame):
         if self._hovered_label != label:
             self._hovered_label = label
             self.thumbnailHovered.emit(label.original_path)
+            event_system.publish(ThumbnailHoveredEventData(
+                event_type=EventType.THUMBNAIL_HOVERED, source="thumbnail_view",
+                timestamp=time.time(), path=label.original_path))
             self._priority_update_timer.start()
 
     def _clear_hovered_label(self, label: ThumbnailLabel):
         if self._hovered_label == label:
             self._hovered_label = None
             self.thumbnailLeft.emit()
+            event_system.publish(EventData(
+                event_type=EventType.THUMBNAIL_LEFT, source="thumbnail_view",
+                timestamp=time.time()))
             self._priority_update_timer.start()
 
     def get_hovered_image_path(self) -> Optional[str]:
@@ -1223,6 +1235,10 @@ class ThumbnailViewWidget(QFrame):
         event_system.unsubscribe(EventType.SHIFT_RELEASED, self._on_shift_released)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
         event_system.unsubscribe(EventType.FACE_PERSON_FILTER, self._on_face_person_filter)
+        event_system.unsubscribe(EventType.TEXT_FILTER_CHANGED, self._on_text_filter_event)
+        event_system.unsubscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
+        event_system.unsubscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
+        event_system.unsubscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
         if self._daemon_signals:
             self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
             self._daemon_signals.scan_progress.disconnect(self._on_scan_progress)
@@ -1597,6 +1613,18 @@ class ThumbnailViewWidget(QFrame):
             return
         file_paths = self.service.get_face_paths_for_persons(person_ids)
         self.apply_person_filter(file_paths or [])
+
+    def _on_text_filter_event(self, event_data):
+        self.apply_filter(event_data.filter_text)
+
+    def _on_star_filter_event(self, event_data):
+        self.apply_star_filter(event_data.star_states)
+
+    def _on_tag_filter_event(self, event_data):
+        self.apply_tag_filter(event_data.tag_names)
+
+    def _on_clear_filters_event(self, event_data):
+        self.clear_filter()
 
     def navigate_to_file(self, file_path: str):
         """Scroll to and highlight a file (used by CLIP search result selection)."""

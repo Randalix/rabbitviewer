@@ -5,6 +5,7 @@ from typing import Dict, Callable, Any
 
 logger = logging.getLogger(__name__)
 from scripts.script_api import ScriptAPI
+from core.event_system import event_system, EventType
 
 class Script:
     def __init__(self, name: str, path: str, module):
@@ -18,6 +19,10 @@ class ScriptManager:
         self.main_window = main_window
         self.scripts: Dict[str, Script] = {}
         self.api = ScriptAPI(main_window)
+        event_system.subscribe(EventType.RUN_SCRIPT, self._on_run_script_event)
+
+    def _on_run_script_event(self, event_data):
+        self.run_script(event_data.script_name)
 
     def load_scripts(self, scripts_dir: str) -> None:
         """Scripts must have a 'run_script' function."""

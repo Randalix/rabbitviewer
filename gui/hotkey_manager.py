@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit
 from PySide6.QtCore import Qt, QObject
 from config.hotkeys import HotkeyDefinition
 from typing import Dict, List, Callable
-from core.event_system import event_system, EventType, EventData
+from core.event_system import event_system, EventType, EventData, RunScriptEventData, OpenModalMenuEventData
 
 _TEXT_INPUT_TYPES = (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox)
 
@@ -77,12 +77,16 @@ class HotkeyManager(QObject):
 				if action_name.startswith("script:"):
 					script_name = action_name[7:]
 					self.add_action(action_name, lambda s=script_name: (
-						self.parent_widget.script_manager.run_script(s)
+						event_system.publish(RunScriptEventData(
+						event_type=EventType.RUN_SCRIPT, source="hotkey_manager",
+						timestamp=time.time(), script_name=s))
 					))
 				elif action_name.startswith("menu:"):
 					menu_id = action_name[5:]
 					self.add_action(action_name, lambda m=menu_id: (
-						self.parent_widget.modal_menu.open(m)
+						event_system.publish(OpenModalMenuEventData(
+						event_type=EventType.OPEN_MODAL_MENU, source="hotkey_manager",
+						timestamp=time.time(), menu_id=m))
 					))
 				
 				definition = HotkeyDefinition.from_config(action_name, action_config)

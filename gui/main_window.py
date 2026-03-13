@@ -20,7 +20,8 @@ from .modal_menu import ModalMenu
 from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
 from scripts.script_manager import ScriptManager, ScriptAPI
-from core.event_system import event_system, EventType, InspectorEventData, StatusMessageEventData, StatusSection
+from core.event_system import (event_system, EventType, EventData, InspectorEventData,
+    StatusMessageEventData, StatusSection)
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
 from network.gui_server import GuiServer
 from network.daemon_signals import DaemonSignals
@@ -171,25 +172,23 @@ class MainWindow(QMainWindow):
                 message=path,
                 section=StatusSection.FILEPATH,
             ))
-        # Notify info panels immediately (reads from cache, may be stale/empty)
-        for panel in self.info_panels:
-            panel.on_thumbnail_hovered(path)
         self._hover_prefetch_path = path
         self._hover_prefetch_timer.start()
 
     def _on_thumbnail_left(self):
         if self._is_detail_view_active():
             return
-        for panel in self.info_panels:
-            panel.on_thumbnail_left()
         # Defer clear: if cursor enters another thumbnail within 100 ms the
         # timer is cancelled in _on_thumbnail_hovered, avoiding flicker.
         self._hover_clear_timer.start()
 
     def _do_hover_clear(self):
-        if self.status_bar:
-            self.status_bar.setFilepath("")
-            self.status_bar.clearRating()
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE, source="main_window",
+            timestamp=time.time(), message="", section=StatusSection.FILEPATH))
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE, source="main_window",
+            timestamp=time.time(), message="", section=StatusSection.RATING))
 
     def _fetch_metadata_for_path(self, path: str):
         # why: picture view doesn't trigger the hover-prefetch flow, so we
@@ -372,49 +371,26 @@ class MainWindow(QMainWindow):
     def open_filter_dialog(self):
         if not self.filter_dialog:
             self.filter_dialog = FilterDialog(self)
-            self.filter_dialog.filter_changed.connect(self._handle_filter_changed)
-            self.filter_dialog.stars_changed.connect(self._handle_stars_changed)
 
         if self.filter_dialog.isVisible():
             self.filter_dialog.hide()
             self.filter_dialog.clear_filter()
-            if self.thumbnail_view:
-                self.thumbnail_view.clear_filter()
+            event_system.publish(EventData(
+                event_type=EventType.CLEAR_FILTERS, source="main_window",
+                timestamp=time.time()))
         else:
             self.filter_dialog.show()
             self.filter_dialog.raise_()
             self.filter_dialog.activateWindow()
 
-    def _handle_filter_changed(self, filter_text: str):
-        logger.debug(f"Filter changed: {filter_text}")
-        if self.thumbnail_view:
-            self.thumbnail_view.apply_filter(filter_text)
-        else:
-            logger.warning("Filter changed but no thumbnail_view available")
-
-    def _handle_stars_changed(self, star_states: list):
-        logger.debug(f"Stars changed: {star_states}")
-        if self.thumbnail_view:
-            self.thumbnail_view.apply_star_filter(star_states)
-        else:
-            logger.warning("Stars changed but no thumbnail_view available")
-
-    def _handle_tags_filter_changed(self, tag_names: list):
-        logger.debug(f"Tag filter changed: {tag_names}")
-        if self.thumbnail_view:
-            self.thumbnail_view.apply_tag_filter(tag_names)
-
     def open_tag_filter(self):
         if not self.tag_filter_dialog:
             self.tag_filter_dialog = TagFilterDialog(self)
-            self.tag_filter_dialog.tags_changed.connect(self._handle_tags_filter_changed)
             self._tag_filter_ready.connect(self._on_tag_filter_ready)
 
         if self.tag_filter_dialog.isVisible():
             self.tag_filter_dialog.hide()
             self.tag_filter_dialog.clear_filter()
-            if self.thumbnail_view:
-                self.thumbnail_view.apply_tag_filter([])
         else:
             self.tag_filter_dialog.show()
             self.tag_filter_dialog.raise_()
@@ -757,24 +733,12 @@ class MainWindow(QMainWindow):
         # Subscribe to undo/redo events, which might be triggered by menus/etc.
         event_system.subscribe(EventType.UNDO_SELECTION, lambda data: self.selection_history.undo())
         event_system.subscribe(EventType.REDO_SELECTION, lambda data: self.selection_history.redo())
-        event_system.subscribe(EventType.STATUS_MESSAGE, self._handle_status_message)
         event_system.subscribe(EventType.OPEN_FILTER, lambda _: self.open_filter_dialog())
         event_system.subscribe(EventType.OPEN_CLIP_SEARCH, lambda _: self.open_clip_search_dialog())
         event_system.subscribe(EventType.OPEN_TAG_EDITOR, lambda _: self.open_tag_editor())
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
         event_system.subscribe(EventType.OPEN_COMPARE_SPLIT, lambda _: self._open_compare_view("split"))
-
-    def _handle_status_message(self, event_data: StatusMessageEventData):
-        if not self.status_bar:
-            return
-        if event_data.section == StatusSection.FILEPATH:
-            self.status_bar.setFilepath(event_data.message)
-        elif event_data.section == StatusSection.RATING:
-            val = int(event_data.message) if event_data.message.isdigit() else None
-            self.status_bar.setRating(val)
-        else:
-            self.status_bar.setProcessMessage(event_data.message, event_data.timeout)
 
     def _handle_inspector_event(self, event_data):
         self.current_hovered_image = event_data.image_path

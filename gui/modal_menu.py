@@ -10,6 +10,7 @@ from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QKeyEvent, QMou
 
 
 from gui.utils import mono_font
+from core.event_system import event_system, EventType
 
 
 @dataclass
@@ -65,6 +66,7 @@ class ModalMenu(QWidget):
         self._current_node: Optional[MenuNode] = None
         self._visible_items: List[MenuNode] = []
         self._key_map: dict = {}
+        event_system.subscribe(EventType.OPEN_MODAL_MENU, self._on_open_menu_event)
         self._context: Optional[MenuContext] = None
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -80,6 +82,9 @@ class ModalMenu(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _on_open_menu_event(self, event_data):
+        self.open(event_data.menu_id)
 
     def open(self, menu_id: str):
         ctx = self._build_context()

@@ -60,6 +60,8 @@ class InfoPanelShell(QWidget):
 
         self._build_ui()
         event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
+        event_system.subscribe(EventType.THUMBNAIL_HOVERED, self._on_thumbnail_hovered_event)
+        event_system.subscribe(EventType.THUMBNAIL_LEFT, self._on_thumbnail_left_event)
 
     def _handle_inspector_update(self, event_data: InspectorEventData):
         if not self.isVisible() or self._pinned:
@@ -176,6 +178,12 @@ class InfoPanelShell(QWidget):
 
     # -- Public API (called by MainWindow) --
 
+    def _on_thumbnail_hovered_event(self, event_data):
+        self.on_thumbnail_hovered(event_data.path)
+
+    def _on_thumbnail_left_event(self, event_data):
+        self.on_thumbnail_left()
+
     def on_thumbnail_hovered(self, path: str):
         if self._pinned:
             return
@@ -269,6 +277,8 @@ class InfoPanelShell(QWidget):
 
     def closeEvent(self, event):
         event_system.unsubscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
+        event_system.unsubscribe(EventType.THUMBNAIL_HOVERED, self._on_thumbnail_hovered_event)
+        event_system.unsubscribe(EventType.THUMBNAIL_LEFT, self._on_thumbnail_left_event)
         settings = QSettings("RabbitViewer", "InfoPanel")
         settings.setValue(f"geometry_{self._panel_index}", self.saveGeometry())
         settings.sync()

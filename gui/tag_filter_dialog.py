@@ -9,6 +9,8 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 
+import time
+from core.event_system import event_system, EventType, TagFilterEventData
 from gui.components.tag_input import TagInput
 
 
@@ -40,9 +42,16 @@ class TagFilterDialog(QDialog):
 
     def _on_tags_changed(self, tags: list):
         self.tags_changed.emit(tags)
+        event_system.publish(TagFilterEventData(
+            event_type=EventType.TAG_FILTER_CHANGED, source="tag_filter_dialog",
+            timestamp=time.time(), tag_names=tags))
 
     def _on_confirmed(self):
-        self.tags_changed.emit(self.tag_input.get_tags())
+        tags = self.tag_input.get_tags()
+        self.tags_changed.emit(tags)
+        event_system.publish(TagFilterEventData(
+            event_type=EventType.TAG_FILTER_CHANGED, source="tag_filter_dialog",
+            timestamp=time.time(), tag_names=tags))
         self.hide()
 
     def showEvent(self, event):
@@ -53,6 +62,9 @@ class TagFilterDialog(QDialog):
     def clear_filter(self):
         self.tag_input.clear()
         self.tags_changed.emit([])
+        event_system.publish(TagFilterEventData(
+            event_type=EventType.TAG_FILTER_CHANGED, source="tag_filter_dialog",
+            timestamp=time.time(), tag_names=[]))
 
     def keyPressEvent(self, event):
         super().keyPressEvent(event)
