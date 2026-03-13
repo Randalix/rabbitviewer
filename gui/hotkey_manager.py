@@ -97,11 +97,26 @@ class HotkeyManager(QObject):
 			return
 
 		logger.debug(f"Setting up hotkey: {definition.action_name} ({definition.sequences})")
-		
+
 		self.definitions[definition.action_name] = definition
 		self.shortcuts[definition.action_name] = []
-		
+
 		for sequence in definition.sequences:
+			# Remove any existing shortcut with the same key sequence to avoid
+			# Qt "ambiguous shortcut" conflicts (which silently disable both).
+			seq_key = QKeySequence(sequence).toString()
+			for other_name, other_shortcuts in list(self.shortcuts.items()):
+				if other_name == definition.action_name:
+					continue
+				for sc in list(other_shortcuts):
+					if sc.key().toString() == seq_key:
+						logger.warning(
+							"Hotkey conflict: '%s' takes '%s' from '%s'",
+							definition.action_name, seq_key, other_name)
+						sc.setEnabled(False)
+						sc.deleteLater()
+						other_shortcuts.remove(sc)
+
 			shortcut = QShortcut(QKeySequence(sequence), self.parent_widget)
 			shortcut.setContext(Qt.ApplicationShortcut)
 			shortcut.activated.connect(
