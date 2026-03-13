@@ -27,7 +27,7 @@ _NATIVELY_VIEWABLE = frozenset({
 
 # Bump when cached image generation changes in a way that invalidates
 # existing thumbnails/view-images (e.g., orientation handling).
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 def _get_mount_point(path: str) -> Optional[str]:
