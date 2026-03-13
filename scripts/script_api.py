@@ -14,65 +14,88 @@ from core.selection import ReplaceSelectionCommand, AddToSelectionCommand
 
 class ScriptAPI:
     """API interface provided to scripts for interacting with RabbitViewer."""
-    
-    def __init__(self, main_window):
+
+    def __init__(self, main_window, main_thread_invoke=None):
         """
         Initialize the Script API.
-        
+
         Args:
             main_window: Reference to the MainWindow instance
+            main_thread_invoke: Callable that dispatches a function to the Qt main thread
         """
         self.main_window = main_window
         self.service = main_window.service
+        self._invoke = main_thread_invoke
         self._last_operation_time = 0
         self._operation_stats = {}
 
+    def _on_main_thread(self, fn):
+        """Run fn on the Qt main thread. Blocks until complete."""
+        if self._invoke is None:
+            fn()
+            return
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            fn()
+            return
+        done = threading.Event()
+        result = [None]
+        error = [None]
+
+        def _wrapper():
+            try:
+                result[0] = fn()
+            except Exception as e:  # why: captures any main-thread exception to re-raise on the calling thread
+                error[0] = e
+            finally:
+                done.set()
+
+        self._invoke(_wrapper)
+        done.wait()
+        if error[0] is not None:
+            raise error[0]
+        return result[0]
+
     def get_hovered_image(self) -> Optional[str]:
         """Get the path of the currently hovered image."""
-        if self.main_window.stacked_widget.currentWidget() == self.main_window.picture_view:
-            return self.main_window.picture_view.current_path
-        elif self.main_window.stacked_widget.currentWidget() == self.main_window.thumbnail_view:
-            # Direct call to the method in ThumbnailViewWidget
-            return self.main_window.thumbnail_view.get_hovered_image_path()
-        return None
-        
+        def _get():
+            if self.main_window.stacked_widget.currentWidget() == self.main_window.picture_view:
+                return self.main_window.picture_view.current_path
+            elif self.main_window.stacked_widget.currentWidget() == self.main_window.thumbnail_view:
+                return self.main_window.thumbnail_view.get_hovered_image_path()
+            return None
+        return self._on_main_thread(_get)
+
     def get_selected_images(self) -> Set[str]:
         """Get paths of all currently selected images.
 
         Delegates to MainWindow.get_effective_selection() which returns
         the explicit selection, falling back to the hovered image.
         """
-        return set(self.main_window.get_effective_selection())
+        return self._on_main_thread(
+            lambda: set(self.main_window.get_effective_selection())
+        )
 
     def get_benchmark_results(self) -> Dict[str, float]:
         """Return comprehensive benchmark results."""
-        view = self.main_window.thumbnail_view
-        results = view.get_benchmark_results() if view else {}
+        def _get():
+            view = self.main_window.thumbnail_view
+            return view.get_benchmark_results() if view else {}
+        results = self._on_main_thread(_get)
         results['last_operation_time'] = self._last_operation_time
         results.update(self._operation_stats)
         return results
 
     def remove_images(self, image_paths: List[str]) -> None:
-        """
-        Remove images from the current view by delegating to the main window.
-        
-        Args:
-            image_paths: List of paths to images to remove
-        """
+        """Remove images from the current view by delegating to the main window."""
         start_time = time.time()
-        
         try:
             if not self.main_window or not image_paths:
                 return
-            
-            # Delegate to the main window's method to correctly handle view updates.
-            self.main_window.remove_images(image_paths)
-            
-            # Update benchmark stats
+            self._on_main_thread(lambda: self.main_window.remove_images(image_paths))
             self._last_operation_time = time.time() - start_time
             self._operation_stats['remove_images_time'] = self._last_operation_time
             self._operation_stats['images_removed'] = len(image_paths)
-
         except Exception as e:  # why: user scripts may pass garbage; main_window may be mid-teardown
             logger.error(f"Error in remove_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
@@ -108,7 +131,7 @@ class ScriptAPI:
             view = self.main_window.thumbnail_view
             if not view or not image_paths:
                 return
-            view.add_images(image_paths)
+            self._on_main_thread(lambda: view.add_images(image_paths))
             self._last_operation_time = time.time() - start_time
             self._operation_stats['add_images_time'] = self._last_operation_time
             self._operation_stats['images_added'] = len(image_paths)
@@ -119,86 +142,56 @@ class ScriptAPI:
             self._operation_stats['add_images_error'] = str(e)
 
     def set_selected_images(self, image_paths: List[str], clear_existing: bool = True) -> None:
-        """
-        Set the selection state for specified images using the central selection system.
-        
-        Args:
-            image_paths: List of image paths to select
-            clear_existing: If True, clears existing selection before setting new one.
-                            If False, adds to the existing selection.
-        """
+        """Set the selection state for specified images using the central selection system."""
         start_time = time.time()
-        
         try:
-            view = self.main_window.thumbnail_view
-            if not view or not hasattr(view, 'all_files') or not view.all_files:
-                logger.warning("set_selected_images: Thumbnail view or files not available.")
-                return
-
-            # Normalize input paths to absolute paths and filter to known files
-            paths_to_select = {str(Path(p).absolute()) for p in image_paths} & view._all_files_set
-
-            if not paths_to_select:
-                logger.debug("set_selected_images: No valid paths to select from provided paths.")
-                return
-
-            # Use the selection command system
-            selection_processor = self.main_window.selection_processor
-
-            if clear_existing:
-                command = ReplaceSelectionCommand(paths=paths_to_select, source="script", timestamp=time.time())
-            else:
-                command = AddToSelectionCommand(paths=paths_to_select, source="script", timestamp=time.time())
-
-            selection_processor.process_command(command)
-
-            # Ensure the first selected image is visible
-            if view and hasattr(view, 'ensure_visible') and paths_to_select:
-                first_path = min(paths_to_select)
-                first_idx = view._path_to_idx.get(first_path)
-                if first_idx is not None:
-                    view.ensure_visible(first_idx, center=True)
-
-            # Update benchmark stats and log
+            def _do():
+                view = self.main_window.thumbnail_view
+                if not view or not hasattr(view, 'all_files') or not view.all_files:
+                    return
+                paths_to_select = {str(Path(p).absolute()) for p in image_paths} & view._all_files_set
+                if not paths_to_select:
+                    return
+                selection_processor = self.main_window.selection_processor
+                if clear_existing:
+                    command = ReplaceSelectionCommand(paths=paths_to_select, source="script", timestamp=time.time())
+                else:
+                    command = AddToSelectionCommand(paths=paths_to_select, source="script", timestamp=time.time())
+                selection_processor.process_command(command)
+                if hasattr(view, 'ensure_visible') and paths_to_select:
+                    first_path = min(paths_to_select)
+                    first_idx = view._path_to_idx.get(first_path)
+                    if first_idx is not None:
+                        view.ensure_visible(first_idx, center=True)
+            self._on_main_thread(_do)
             self._last_operation_time = time.time() - start_time
-            self._operation_stats['set_selection_time'] = self._last_operation_time
-            self._operation_stats['images_selected'] = len(paths_to_select)
-            logger.debug(f"set_selected_images: {len(paths_to_select)} images in {self._last_operation_time:.3f}s")
-            
         except Exception as e:  # why: user scripts may pass garbage; view may be mid-teardown
             logger.error(f"Error in set_selected_images: {e}", exc_info=True)
             self._last_operation_time = time.time() - start_time
             self._operation_stats['set_selection_error'] = str(e)
 
     def get_all_images(self) -> List[str]:
-        """
-        Get paths of all images currently loaded in the viewer.
-        
-        Returns:
-            List[str]: List of absolute paths to all images
-        """
+        """Get paths of all images currently loaded in the viewer."""
         try:
-            view = self.main_window.thumbnail_view
-            if not view:
-                return []
-                
-            # Return list of all image paths from current_files
-            return [str(Path(path).absolute()) for path in view.current_files]
-            
+            def _get():
+                view = self.main_window.thumbnail_view
+                if not view:
+                    return []
+                return [str(Path(path).absolute()) for path in view.current_files]
+            return self._on_main_thread(_get)
         except Exception as e:  # why: user scripts may pass garbage; view may be mid-teardown
             logger.error(f"Error in get_all_images: {e}", exc_info=True)
             return []
 
     def set_image_order(self, ordered_paths: List[str]) -> None:
-        """Reorder images in the thumbnail view to match *ordered_paths*.
-
-        This is an atomic operation — no remove+add flicker.
-        """
+        """Reorder images in the thumbnail view to match *ordered_paths*."""
         try:
-            view = self.main_window.thumbnail_view
-            if not view:
-                return
-            view.reorder_files(ordered_paths)
+            def _do():
+                view = self.main_window.thumbnail_view
+                if not view:
+                    return
+                view.reorder_files(ordered_paths)
+            self._on_main_thread(_do)
         except Exception as e:  # why: user scripts may pass invalid paths or thumbnail_view may be mid-teardown
             logger.error(f"Error in set_image_order: {e}", exc_info=True)
 
@@ -250,14 +243,12 @@ class ScriptAPI:
                 event_type=EventType.STATUS_MESSAGE, source="script_api",
                 timestamp=time.time(), message=f"Finished rating {num_images} images.", timeout=5000
             ))
-            # Update the rating section if the visible image was just rated
-            self._update_status_bar_rating_if_visible(image_paths, rating)
-            # Only reapply filters when a star or text filter is active — otherwise
-            # reapply_filters() triggers a full grid rebuild for no visible benefit
-            # and can cause spurious layout shifts by picking up unrelated DB changes.
-            tv = self.main_window.thumbnail_view
-            if tv and tv.filter_affects_rating():
-                tv.reapply_filters()
+            def _gui_update():
+                self._update_status_bar_rating_if_visible(image_paths, rating)
+                tv = self.main_window.thumbnail_view
+                if tv and tv.filter_affects_rating():
+                    tv.reapply_filters()
+            self._on_main_thread(_gui_update)
         else:
             logger.error(f"ScriptAPI: Failed to set rating.")
             event_system.publish(StatusMessageEventData(
@@ -274,10 +265,20 @@ class ScriptAPI:
         avoids a blank/stale flash when the background task (e.g. rotation)
         generates the correct thumbnail shortly after.
         """
-        view = self.main_window.thumbnail_view
-        if view:
-            view.invalidate_thumbnails(image_paths, clear_labels=clear_gui)
+        def _do():
+            view = self.main_window.thumbnail_view
+            if view:
+                view.invalidate_thumbnails(image_paths, clear_labels=clear_gui)
+        self._on_main_thread(_do)
         self.service.invalidate_thumbnail_paths(image_paths)
+
+    def rotate_thumbnails(self, image_paths: List[str], degrees: int) -> None:
+        """Visually rotate thumbnails in-place without regeneration."""
+        def _do():
+            view = self.main_window.thumbnail_view
+            if view:
+                view.rotate_thumbnails(image_paths, degrees)
+        self._on_main_thread(_do)
 
     def rotate_images(self, image_paths: List[str], degrees: int) -> None:
         """Rotate images by the given degrees (90, 180, or 270) clockwise.
@@ -295,14 +296,16 @@ class ScriptAPI:
         success = self.service.rotate_images(image_paths, degrees)
 
         # Immediate visual rotation in PySide (no NAS round-trip).
-        pv = self.main_window.picture_view
-        if pv and self.main_window.stacked_widget.currentWidget() is pv:
-            if pv.current_path in image_paths:
-                pv.rotate_current_image(degrees)
+        def _gui_update():
+            pv = self.main_window.picture_view
+            if pv and self.main_window.stacked_widget.currentWidget() is pv:
+                if pv.current_path in image_paths:
+                    pv.rotate_current_image(degrees)
+            tv = self.main_window.thumbnail_view
+            if tv:
+                tv.rotate_thumbnails(image_paths, degrees)
+        self._on_main_thread(_gui_update)
 
-        tv = self.main_window.thumbnail_view
-        if tv:
-            tv.rotate_thumbnails(image_paths, degrees)
         if success:
             logger.info(f"Rotated {len(image_paths)} images by {degrees}°.")
             event_system.publish(StatusMessageEventData(
@@ -376,8 +379,10 @@ class ScriptAPI:
     # -- RAW+JPG group mode helpers ----------------------------------------
 
     def is_group_mode(self) -> bool:
-        view = self.main_window.thumbnail_view
-        return bool(view and view.group_mode)
+        def _get():
+            view = self.main_window.thumbnail_view
+            return bool(view and view.group_mode)
+        return self._on_main_thread(_get)
 
     def get_selected_groups(self) -> List[FileGroup]:
         """Return a FileGroup for each selected image.
@@ -385,26 +390,30 @@ class ScriptAPI:
         When group mode is off (or a file has no group), a synthetic
         single-file group is returned so callers always get a uniform type.
         """
-        view = self.main_window.thumbnail_view
-        selected = self.get_selected_images()
-        groups: List[FileGroup] = []
-        seen_primaries: Set[str] = set()
-        for path in sorted(selected):
-            group = view.get_group_for_path(path) if view else None
-            if group:
-                if group.primary not in seen_primaries:
-                    seen_primaries.add(group.primary)
-                    groups.append(group)
-            else:
-                groups.append(FileGroup(primary=path, raw_files=()))
-        return groups
+        def _get():
+            view = self.main_window.thumbnail_view
+            selected = self.get_selected_images()
+            groups: List[FileGroup] = []
+            seen_primaries: Set[str] = set()
+            for path in sorted(selected):
+                group = view.get_group_for_path(path) if view else None
+                if group:
+                    if group.primary not in seen_primaries:
+                        seen_primaries.add(group.primary)
+                        groups.append(group)
+                else:
+                    groups.append(FileGroup(primary=path, raw_files=()))
+            return groups
+        return self._on_main_thread(_get)
 
     def expand_group_paths(self, paths: List[str]) -> List[str]:
         """Expand primary paths to include paired RAW files (group mode only)."""
-        view = self.main_window.thumbnail_view
-        if not view or not view.group_mode:
-            return list(paths)
-        return expand_paths_for_group(paths, view.group_map)
+        def _get():
+            view = self.main_window.thumbnail_view
+            if not view or not view.group_mode:
+                return list(paths)
+            return expand_paths_for_group(paths, view.group_map)
+        return self._on_main_thread(_get)
 
     def _update_status_bar_rating_if_visible(self, image_paths: List[str], rating: int) -> None:
         """If the currently displayed image was just rated, push the new rating to the status bar."""

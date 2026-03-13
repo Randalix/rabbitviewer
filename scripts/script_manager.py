@@ -1,11 +1,29 @@
 import os
 import importlib.util
 import logging
+import threading
+import time
 from typing import Dict, Callable, Any
+
+from PySide6.QtCore import QObject, Signal, Slot
 
 logger = logging.getLogger(__name__)
 from scripts.script_api import ScriptAPI
 from core.event_system import event_system, EventType
+
+
+class _MainThreadRelay(QObject):
+    """Executes callables on the Qt main thread via a queued signal."""
+    _dispatch = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dispatch.connect(self._run)
+
+    @Slot(object)
+    def _run(self, fn):
+        fn()
+
 
 class Script:
     def __init__(self, name: str, path: str, module):
@@ -18,7 +36,8 @@ class ScriptManager:
     def __init__(self, main_window):
         self.main_window = main_window
         self.scripts: Dict[str, Script] = {}
-        self.api = ScriptAPI(main_window)
+        self._relay = _MainThreadRelay(main_window)
+        self.api = ScriptAPI(main_window, main_thread_invoke=self._relay._dispatch.emit)
         event_system.subscribe(EventType.RUN_SCRIPT, self._on_run_script_event)
 
     def _on_run_script_event(self, event_data):
@@ -53,16 +72,21 @@ class ScriptManager:
                     logger.error(f"Failed to load script {script_name} from {script_path}: {e}")
 
     def run_script(self, script_name: str, *args: Any, **kwargs: Any) -> bool:
-        """Returns True if found and run, False if not found or if execution raised."""
+        """Runs the script in a background thread so the GUI stays responsive."""
         script = self.scripts.get(script_name)
-        if script:
-            try:
-                script.run_script(self.api, *args, **kwargs)
-                logger.debug(f"Executed script: {script_name}")
-                return True
-            except Exception as e:  # why: user-supplied scripts may raise anything
-                logger.error(f"Error executing script '{script_name}': {e}")
-                return False
-        else:
+        if not script:
             logger.warning(f"Script not found: {script_name}")
             return False
+
+        def _run():
+            try:
+                t0 = time.perf_counter()
+                logger.info("Script '%s' started", script_name)
+                script.run_script(self.api, *args, **kwargs)
+                logger.info("Script '%s' finished in %.3fs", script_name, time.perf_counter() - t0)
+            except Exception as e:  # why: user-supplied scripts may raise anything
+                logger.error(f"Error executing script '{script_name}': {e}")
+
+        threading.Thread(target=_run, daemon=True,
+                         name=f"script-{script_name}").start()
+        return True

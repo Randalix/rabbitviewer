@@ -156,7 +156,6 @@ class ThumbnailViewWidget(QFrame):
     thumbnailLeft = Signal()         # emits when hover ends (no path)
     benchmarkComplete = Signal(str, float)
     filtersApplied = Signal()
-    initialScanReady = Signal()
     _thumbnail_generated_signal = Signal(str, QImage, object)
     # Dedicated signal for the DB-response file list so it always triggers an
     # immediate layout update, regardless of what fast-scan batches arrived first.
@@ -252,6 +251,7 @@ class ThumbnailViewWidget(QFrame):
         self._startup_first_scan_progress: bool = False
         self._needs_heatmap_seed: bool = False
         self._startup_first_previews_ready: bool = False
+        self._startup_thumbnails_emitted: bool = False
         self._startup_inline_thumb_count: int = 0
 
         self._filter_update_timer = QTimer(self)
@@ -602,6 +602,7 @@ class ThumbnailViewWidget(QFrame):
         self._startup_t0 = time.perf_counter()
         self._startup_first_scan_progress = False
         self._startup_first_previews_ready = False
+        self._startup_thumbnails_emitted = False
         self._startup_inline_thumb_count = 0
         logger.info("[startup] load_directory called for %s", directory_path)
         self.clear_layout()
@@ -1401,6 +1402,10 @@ class ThumbnailViewWidget(QFrame):
 
         if not self._pending_previews:
             self._preview_tick_timer.stop()
+            if self._startup_t0 is not None and not self._startup_thumbnails_emitted:
+                self._startup_thumbnails_emitted = True
+                elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
+                logger.info("[startup] initial thumbnails drawn: %.0f ms after load_directory", elapsed_ms)
 
     def get_benchmark_results(self) -> dict:
         return {

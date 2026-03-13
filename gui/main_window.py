@@ -598,22 +598,11 @@ class MainWindow(QMainWindow):
             self.thumbnail_view.navigate_to_file(file_path)
 
     def _warm_clip_session(self):
-        import threading as _threading
-
-        def _warm():
-            try:
-                from core import onnx_runtime
-                from core.model_manager import get_model_path
-                if not onnx_runtime.is_available():
-                    return
-                path = get_model_path("clip-vit-b-32-textual",
-                                      self.config_manager if hasattr(self, 'config_manager') else None)
-                if path:
-                    onnx_runtime.get_session(path)
-            except Exception:  # why: best-effort warmup; missing model or incompatible runtime must not surface
-                pass
-
-        _threading.Thread(target=_warm, daemon=True).start()
+        from core import onnx_runtime
+        from core.model_manager import get_model_path
+        path = get_model_path("clip-vit-b-32-textual", self.config_manager)
+        if path:
+            onnx_runtime.prewarm_session(path)
 
     def _on_filters_applied(self):
         # Case 1: detail view is open — navigate away if current media is now filtered out

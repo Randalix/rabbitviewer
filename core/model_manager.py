@@ -6,6 +6,7 @@ verifies SHA256, caches in ~/.rabbitviewer/models/.
 import hashlib
 import logging
 import os
+import time
 import urllib.request
 from typing import Callable, Optional
 
@@ -106,9 +107,12 @@ def ensure_model(
 
     tmp_path = path + ".tmp"
     try:
+        t0 = time.perf_counter()
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req) as resp:
             total = int(resp.headers.get("Content-Length", 0))
+            logger.info("Model %s download started (size=%s)",
+                        model_name, f"{total / 1048576:.1f}MB" if total else "unknown")
             downloaded = 0
             with open(tmp_path, "wb") as f:  # disk-io: write downloaded model to cache
                 while True:
@@ -119,11 +123,17 @@ def ensure_model(
                     downloaded += len(chunk)
                     if progress_cb:
                         progress_cb(downloaded, total)
+        t_download = time.perf_counter() - t0
+        logger.info("Model %s downloaded in %.1fs (%.1f MB/s)",
+                    model_name, t_download,
+                    (downloaded / 1048576) / t_download if t_download > 0 else 0)
 
+        t0 = time.perf_counter()
         if not _verify_sha256(tmp_path, info.get("sha256", "")):
             logger.error("SHA256 mismatch for %s", model_name)
             os.unlink(tmp_path)
             return None
+        logger.info("Model %s SHA256 verified in %.3fs", model_name, time.perf_counter() - t0)
 
         os.replace(tmp_path, path)
         logger.info("Model %s saved to %s", model_name, path)

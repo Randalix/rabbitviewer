@@ -42,6 +42,7 @@ POSITIVE_FILES = [
 
 # Files where detection is expected to fail (face too small/distant/occluded)
 HARD_POSITIVE_FILES = {
+    "/Users/joe/Pictures/202509_all/_MG_6116.CR3",  # 0 detections at conf>=0.5
     "/Users/joe/Pictures/202509_all/_MG_6152.CR3",  # 0 detections at conf>=0.5
     "/Users/joe/Pictures/202509_all/_MG_6440.CR3",  # face classified as animal (wildlife context)
     "/Users/joe/Pictures/202509_all/_MG_6466.CR3",  # tiny distant face

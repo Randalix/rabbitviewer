@@ -5,6 +5,7 @@ and maps to EXIF Orientation values.  Uses EfficientNetV2-S (384x384 input).
 """
 import logging
 import os
+import time
 from typing import Optional, Tuple
 
 from core import onnx_runtime
@@ -48,27 +49,34 @@ def predict_orientation(
     if np is None or not onnx_runtime.is_available():
         return None
 
+    t0 = time.perf_counter()
     model_path = get_model_path(_MODEL_KEY, config_manager)
     if not model_path or not os.path.isfile(model_path):  # disk-io: local model cache check
         model_path = ensure_model(_MODEL_KEY, config_manager)
     if not model_path:
         return None
+    t_model_resolve = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
     session = onnx_runtime.get_session(model_path)
     if session is None:
         return None
+    t_session = time.perf_counter() - t0
 
     source = thumbnail_path if (thumbnail_path and os.path.isfile(thumbnail_path)) else image_path  # disk-io: prefer local cache over NAS
 
     try:
         from PIL import Image
+        t0 = time.perf_counter()
         img = Image.open(source).convert("RGB")  # disk-io: load cached thumbnail or source for orientation detection
+        t_load = time.perf_counter() - t0
     except Exception:  # why: PIL raises UnidentifiedImageError, OSError, and arbitrary decoder exceptions
         logger.debug("Failed to open image for orientation: %s", source)
         return None
 
     try:
         # Resize shortest side to _RESIZE, then center crop to _CROP
+        t0 = time.perf_counter()
         w, h = img.size
         if w < h:
             new_w = _RESIZE
@@ -89,9 +97,12 @@ def predict_orientation(
         arr = (arr - mean) / std
         arr = arr.transpose(2, 0, 1)  # HWC → CHW
         arr = np.expand_dims(arr, 0)   # add batch dim
+        t_preprocess = time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         input_name = session.get_inputs()[0].name
         outputs = session.run(None, {input_name: arr})
+        t_inference = time.perf_counter() - t0
         logits = outputs[0].flatten()
 
         # Softmax for confidence
@@ -101,6 +112,12 @@ def predict_orientation(
         class_idx = int(np.argmax(probs))
         confidence = float(probs[class_idx])
         exif_orient = _CLASS_TO_EXIF.get(class_idx, 1)
+
+        logger.info("predict_orientation: resolve=%.3fs session=%.3fs load=%.3fs "
+                    "preprocess=%.3fs inference=%.3fs (source=%s)",
+                    t_model_resolve, t_session, t_load,
+                    t_preprocess, t_inference,
+                    "thumbnail" if source == thumbnail_path else "original")
 
         return (exif_orient, confidence)
     except Exception:  # why: onnxruntime raises undocumented C++ exceptions on inference failure
