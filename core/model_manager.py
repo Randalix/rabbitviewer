@@ -42,13 +42,25 @@ MODELS = {
         "filename": "orientation_model_v2.onnx",
         "sha256": "",
     },
+    "face-detection-buffalo_l": {
+        "url": "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx",
+        "filename": "detection.onnx",
+        "sha256": "",
+    },
+    "face-recognition-buffalo_l": {
+        "url": "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx",
+        "filename": "recognition.onnx",
+        "sha256": "",
+    },
 }
 
 
 def _model_dir(model_name: str, config_manager=None) -> str:
-    # Group CLIP files together
+    # Group CLIP files together; group face models together
     if model_name.startswith("clip-vit-b-32"):
         subdir = "clip-vit-b-32"
+    elif model_name.startswith("face-"):
+        subdir = "buffalo_l"
     else:
         subdir = model_name
     d = os.path.join(get_models_dir(config_manager), subdir)
@@ -133,6 +145,23 @@ def ensure_model(
         if os.path.exists(tmp_path):  # disk-io: cleanup failed download
             os.unlink(tmp_path)
         return None
+
+
+def ensure_face_models(
+    config_manager=None,
+    progress_cb: Optional[Callable[[str, int, int], None]] = None,
+) -> bool:
+    """Returns True if both face detection and recognition models are cached or downloaded."""
+    required = [
+        "face-detection-buffalo_l",
+        "face-recognition-buffalo_l",
+    ]
+    for name in required:
+        cb = (lambda d, t, _n=name: progress_cb(_n, d, t)) if progress_cb else None
+        path = ensure_model(name, config_manager, progress_cb=cb)
+        if path is None:
+            return False
+    return True
 
 
 def ensure_clip_models(

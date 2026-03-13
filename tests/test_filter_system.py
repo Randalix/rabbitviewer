@@ -261,6 +261,7 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     view._current_star_filter = [True, True, True, True, True, True]
     view._current_tag_filter = []
     view._clip_search_paths = None
+    view._person_filter_paths = None
     view._hidden_indices = set()
     view._visible_to_original_mapping = {}
     view._original_to_visible_mapping = {}

@@ -501,11 +501,32 @@ Detects and corrects image orientation for files missing EXIF orientation data.
 
 **Module**: `core/orientation_model.py` — 4-class orientation classifier (0/90/180/270°), maps to EXIF Orientation values.
 
+### Face Recognition
+
+Detects faces, generates 512-dim embeddings, clusters into people, and enables person-based filtering.
+
+**Models**: InsightFace buffalo_l from `immich-app/buffalo_l` on HuggingFace:
+- Detection: SCRFD (`detection/model.onnx`, 16.9 MB) — bboxes + 5-point keypoints
+- Recognition: ArcFace (`recognition/model.onnx`, 174 MB) — 512-dim L2-normalized embeddings from aligned 112x112 crops
+
+**Pipeline**: `post_scan` completes → `face_detect::{directory}` SourceJob at `CLIP_INDEX(5)` → `face_detect::{file_path}` tasks → detect → 5-point affine align → embed → cluster via cosine similarity → assign to existing person or create new one. RAW files (CR3, etc.) are skipped when no view image exists yet — PIL can't read them directly, so detection defers until view images are generated.
+
+**Image loading**: Detection caps input at 1280px (`_DET_MAX_SIZE`) since SCRFD downscales to 640×640 anyway. Alignment uses full-resolution view image for sharp 112×112 ArcFace crops. Default detection confidence threshold: 0.7.
+
+**DB tables**: `face_detections` (face_id, file_path, person_id, embedding BLOB, normalized bbox, confidence) and `persons` (person_id, name, face_count, feature_face_id, is_hidden).
+
+**Modules**:
+- `core/face_inference.py` — SCRFD detection + ArcFace embedding extraction (Qt-free, daemon-safe)
+- `core/face_clustering.py` — pure-function cosine matching of faces to person mean embeddings
+
+**GUI**: People View (`gui/face_palette.py`) — floating `Qt.Tool` window (hotkey: `P`). Grid of person cards with async crop loading (PIL on background thread, QImage via cross-thread signal). Selection mirrors thumbnail_view (click, ctrl+click, shift+click) and filters the main grid in real time. Unnamed persons with only 1 face are hidden to suppress false positives. Context menu: rename, merge, hide, set feature face.
+
 ### Task ID Conventions (AI)
 
 ```
 clip_embed::{file_path}     — CLIP embedding generation
 auto_orient::{file_path}    — orientation detection
+face_detect::{file_path}    — face detection + embedding
 ```
 
 ### Job ID Conventions (AI)
@@ -513,6 +534,7 @@ auto_orient::{file_path}    — orientation detection
 ```
 clip_index::{directory}     — background CLIP indexing SourceJob
 auto_orient::{directory}    — background auto-orient SourceJob
+face_detect::{directory}    — background face detection SourceJob
 ```
 
 ### Priority

@@ -268,14 +268,15 @@ if [[ "$MISSING_OPTIONAL" -eq 0 ]]; then
 fi
 echo
 
-# 4c. AI features (CLIP vector search + auto-rotate).
+# 4c. AI features (CLIP vector search + auto-rotate + face recognition).
 echo
 bold "AI Features (optional)"
 yellow "  RabbitViewer can use local AI models for:"
 yellow "    • CLIP semantic search — find images by text description"
 yellow "    • Auto-rotate — detect and fix image orientation"
+yellow "    • Face recognition — detect, identify, and filter by person"
 yellow "  This installs onnxruntime + numpy (~25 MB) and downloads"
-yellow "  ONNX models (~660 MB) to ~/.rabbitviewer/models/ on first use."
+yellow "  ONNX models (~850 MB) to ~/.rabbitviewer/models/ on first use."
 echo
 printf '  Install AI features? [y/N] '
 read -r INSTALL_AI </dev/tty

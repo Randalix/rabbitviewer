@@ -222,14 +222,15 @@ if not defined MISSING_OPTIONAL (
 )
 echo.
 
-REM 4c. AI features (CLIP vector search + auto-rotate).
+REM 4c. AI features (CLIP vector search + auto-rotate + face recognition).
 echo.
 echo AI Features (optional)
 echo   RabbitViewer can use local AI models for:
 echo     - CLIP semantic search — find images by text description
 echo     - Auto-rotate — detect and fix image orientation
+echo     - Face recognition — detect, identify, and filter by person
 echo   This installs onnxruntime + numpy (~25 MB) and downloads
-echo   ONNX models (~660 MB) to ~/.rabbitviewer/models/ on first use.
+echo   ONNX models (~850 MB) to ~/.rabbitviewer/models/ on first use.
 echo.
 set /p "INSTALL_AI=  Install AI features? [y/N] "
 echo.

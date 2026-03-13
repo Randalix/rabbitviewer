@@ -48,8 +48,12 @@ DEFAULT_CONFIG = {
             "description": "Toggle inspector window"
         },
         "pin_inspector": {
-            "sequence": "P",
+            "sequence": "Shift+P",
             "description": "Pin/unpin inspector to current image"
+        },
+        "toggle_face_palette": {
+            "sequence": "P",
+            "description": "Open face palette"
         },
         "script:set_rating_0": {
             "sequence": "0",
@@ -170,6 +174,13 @@ DEFAULT_CONFIG = {
         "auto_orient": {
             "enabled": False,
             "confidence_threshold": 0.9,
+        },
+        "face_recognition": {
+            "enabled": True,
+            "auto_index": True,
+            "detection_confidence": 0.7,
+            "recognition_threshold": 0.6,
+            "model": "buffalo_l",
         },
         "models_dir": "~/.rabbitviewer/models",
     },

@@ -730,6 +730,125 @@ class ThumbnailManager:
         )
         self.render_manager.submit_source_job(job)
 
+    # ── Face detection + recognition ──────────────────────────────
+
+    def _face_detect_task(self, file_path: str, cancel_event=None):
+        """Runs in RenderManager worker thread. Detect faces, embed, cluster, assign."""
+        from core import face_inference, face_clustering
+
+        if cancel_event and cancel_event.is_set():
+            return
+
+        # Use view image (full-res cache) for face detection — thumbnails are
+        # too small (128px) for SCRFD's 640×640 input and ArcFace alignment.
+        paths = self.metadata_db.get_thumbnail_paths(file_path)
+        view_img = paths.get('view_image_path') if paths else None
+
+        # Skip non-PIL-readable files (RAW formats) when no view image exists yet.
+        # They'll be retried on the next scan once view images are generated.
+        ext = os.path.splitext(file_path)[1].lower()
+        if not view_img and ext not in _NATIVELY_VIEWABLE:
+            logger.debug("Face detection: skipping %s (no view image for RAW file)", file_path)
+            return
+
+        confidence = self.config_manager.get("ai.face_recognition.detection_confidence", 0.5)
+        faces = face_inference.detect_and_embed(
+            file_path, view_image_path=view_img,
+            config_manager=self.config_manager,
+            confidence_threshold=confidence)
+        if not faces:
+            return
+
+        import uuid
+        threshold = self.config_manager.get("ai.face_recognition.recognition_threshold", 0.6)
+
+        # Load existing person mean embeddings for clustering
+        all_persons = self.metadata_db.get_all_persons(include_hidden=True)
+        person_means = []
+        for person in all_persons:
+            person_faces = self.metadata_db.get_faces_for_person(person['person_id'])
+            if person_faces:
+                embeddings = [face_inference.bytes_to_embedding(f['embedding'])
+                              for f in person_faces]
+                embeddings = [e for e in embeddings if e is not None]
+                if embeddings:
+                    mean = face_clustering.compute_person_mean(embeddings)
+                    if mean is not None:
+                        person_means.append((person['person_id'], mean))
+
+        new_face_data = []
+        for face in faces:
+            face_id = str(uuid.uuid4())
+            emb_bytes = face_inference.embedding_to_bytes(face['embedding'])
+            self.metadata_db.insert_face_detection(
+                face_id, file_path, emb_bytes, face['bbox'],
+                face['confidence'], 'buffalo_l')
+            new_face_data.append((face_id, face['embedding']))
+
+        # Cluster: assign to existing persons or create new ones
+        assignments = face_clustering.assign_faces(new_face_data, person_means, threshold)
+        for face_id, person_id in assignments:
+            if person_id:
+                self.metadata_db.assign_face_to_person(face_id, person_id)
+            else:
+                # Create new person
+                new_person_id = str(uuid.uuid4())
+                self.metadata_db.create_person(new_person_id, feature_face_id=face_id)
+                self.metadata_db.assign_face_to_person(face_id, new_person_id)
+
+        logger.debug("Face detection: %d faces in %s", len(faces), file_path)
+
+    def create_face_detect_tasks(self, file_paths, priority: Priority) -> List[RenderTask]:
+        """Task factory for face_detect SourceJob."""
+        if isinstance(file_paths, str):
+            file_paths = [file_paths]
+        tasks = []
+        for fp in file_paths:
+            tasks.append(RenderTask(
+                task_id=f"face_detect::{fp}",
+                priority=priority,
+                func=self._face_detect_task,
+                args=(fp,),
+            ))
+        return tasks
+
+    def submit_face_detection_job(self, directory: str, file_paths: List[str]):
+        """No-op if AI or face recognition disabled in config."""
+        from core import face_inference
+        if not face_inference._get_numpy() or not self.config_manager.get("ai.enabled", True):
+            return
+        if not self.config_manager.get("ai.face_recognition.enabled", True):
+            return
+        if not self.config_manager.get("ai.face_recognition.auto_index", True):
+            return
+
+        missing = self.metadata_db.get_files_missing_faces(file_paths)
+        if not missing:
+            return
+
+        logger.info("Face detection: %d files to process in %s", len(missing), directory)
+
+        def _face_generator():
+            batch = []
+            for fp in missing:
+                batch.append(fp)
+                if len(batch) >= 10:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
+
+        from core.priority import SourceJob
+        job = SourceJob(
+            job_id=f"face_detect::{directory}",
+            priority=Priority.CLIP_INDEX,
+            task_priority=Priority.CLIP_INDEX,
+            generator=_face_generator(),
+            task_factory=self.create_face_detect_tasks,
+            create_tasks=True,
+        )
+        self.render_manager.submit_source_job(job)
+
     def request_view_image(self, image_path: str) -> Optional[str]:
         """Requests view image generation at FULLRES_REQUEST priority.
 
