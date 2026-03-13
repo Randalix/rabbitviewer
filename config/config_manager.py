@@ -159,6 +159,14 @@ DEFAULT_CONFIG = {
         "clip_search": {
             "sequence": "/",
             "description": "Open CLIP semantic search"
+        },
+        "script:select_all": {
+            "sequence": "Ctrl+A",
+            "description": "Select all images"
+        },
+        "script:invert_selection": {
+            "sequence": "Ctrl+Shift+A",
+            "description": "Invert selection"
         }
     },
     "color_management": {
