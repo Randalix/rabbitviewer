@@ -46,7 +46,6 @@ class HotkeyManager(QObject):
 
 
 	def _on_focus_changed(self, old, new):
-		"""Suppress shortcuts while a text-input widget has focus."""
 		should_suppress = isinstance(new, _TEXT_INPUT_TYPES)
 		if should_suppress == self._shortcuts_suppressed:
 			return

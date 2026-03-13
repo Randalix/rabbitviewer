@@ -100,7 +100,6 @@ class TestCacheMigration:
         tmp_env["db"].clear_all_thumbnail_paths.reset_mock()
 
         # Re-seed a file to verify it's not deleted
-        (os.path.join(tmp_env["thumb_dir"], "new.jpg"))
         with open(os.path.join(tmp_env["thumb_dir"], "new.jpg"), "wb") as f:
             f.write(b"\xff")
 

@@ -833,7 +833,7 @@ class MainWindow(QMainWindow):
             self._show_status(f"Copied {count} file{'s' if count != 1 else ''}")
 
     def _copy_image(self):
-        from .clipboard import copy_image_pixels
+        from .clipboard import copy_image_pixels, JPEG_EXTENSIONS
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             image = self.picture_view._picture_base.get_image()
             path = self.picture_view.current_path
@@ -845,7 +845,7 @@ class MainWindow(QMainWindow):
             self._show_status("Image copied to clipboard")
         elif path:
             ext = os.path.splitext(path)[1].lower()
-            if ext not in ('.jpg', '.jpeg'):
+            if ext not in JPEG_EXTENSIONS:
                 self._show_status("Copy image: JPEG only")
             else:
                 self._show_status("Copy image: no image loaded")

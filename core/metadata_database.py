@@ -1999,6 +1999,24 @@ class MetadataDatabase:
             logger.error(f"Error getting faces for person: {e}")
             return []
 
+    def get_all_person_embeddings(self) -> List[dict]:
+        """Return all face embeddings that are assigned to a person.
+
+        Single query returning [{person_id, embedding}, ...].
+        """
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT person_id, embedding
+                    FROM face_detections WHERE person_id IS NOT NULL
+                ''')
+                rows = cursor.fetchall()
+            return [{'person_id': r[0], 'embedding': r[1]} for r in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting all person embeddings: {e}")
+            return []
+
     def get_feature_faces_batch(self, person_feature_map: Dict[str, Optional[str]]) -> Dict[str, dict]:
         """Return {person_id: face_dict} for each person's feature face (or first face).
 

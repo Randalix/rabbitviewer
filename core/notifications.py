@@ -1,8 +1,4 @@
-"""Notification dataclasses shared between core/ and GUI.
-
-These types were previously defined in network/protocol.py. They now live
-here so that core/ has no dependency on the network layer.
-"""
+"""Notification dataclasses shared between core/ and GUI."""
 import dataclasses
 import typing
 from typing import Any, Dict, List, Optional
@@ -32,7 +28,6 @@ def _model_validate(cls, data: dict):
 
 @dataclasses.dataclass
 class ImageEntryModel:
-    """Wire-format representation of an ImageEntry."""
     path: str = ""
     sidecars: List[str] = dataclasses.field(default_factory=list)
     variant: Optional[str] = None
@@ -47,7 +42,6 @@ class ImageEntryModel:
 
 @dataclasses.dataclass
 class Notification:
-    """Notification emitted by core workers and consumed by the GUI."""
     type: str = ""
     data: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
@@ -115,20 +109,6 @@ class FilesRemovedData:
 
 @dataclasses.dataclass
 class ClipIndexProgressData:
-    directory: str = ""
-    completed: int = 0
-    total: int = 0
-
-    def model_dump(self) -> dict:
-        return dataclasses.asdict(self)
-
-    @classmethod
-    def model_validate(cls, data: dict):
-        return _model_validate(cls, data)
-
-
-@dataclasses.dataclass
-class FaceDetectionProgressData:
     directory: str = ""
     completed: int = 0
     total: int = 0

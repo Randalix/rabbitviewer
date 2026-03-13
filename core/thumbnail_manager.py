@@ -733,7 +733,6 @@ class ThumbnailManager:
     # ── Face detection + recognition ──────────────────────────────
 
     def _face_detect_task(self, file_path: str, cancel_event=None):
-        """Runs in RenderManager worker thread. Detect faces, embed, cluster, assign."""
         from core import face_inference, face_clustering
 
         if cancel_event and cancel_event.is_set():
@@ -762,19 +761,19 @@ class ThumbnailManager:
         import uuid
         threshold = self.config_manager.get("ai.face_recognition.recognition_threshold", 0.6)
 
-        # Load existing person mean embeddings for clustering
-        all_persons = self.metadata_db.get_all_persons(include_hidden=True)
+        # Single query for all person embeddings instead of N queries
+        all_face_rows = self.metadata_db.get_all_person_embeddings()
+        from collections import defaultdict
+        by_person = defaultdict(list)
+        for row in all_face_rows:
+            emb = face_inference.bytes_to_embedding(row['embedding'])
+            if emb is not None:
+                by_person[row['person_id']].append(emb)
         person_means = []
-        for person in all_persons:
-            person_faces = self.metadata_db.get_faces_for_person(person['person_id'])
-            if person_faces:
-                embeddings = [face_inference.bytes_to_embedding(f['embedding'])
-                              for f in person_faces]
-                embeddings = [e for e in embeddings if e is not None]
-                if embeddings:
-                    mean = face_clustering.compute_person_mean(embeddings)
-                    if mean is not None:
-                        person_means.append((person['person_id'], mean))
+        for person_id, embeddings in by_person.items():
+            mean = face_clustering.compute_person_mean(embeddings)
+            if mean is not None:
+                person_means.append((person_id, mean))
 
         new_face_data = []
         for face in faces:
@@ -785,13 +784,11 @@ class ThumbnailManager:
                 face['confidence'], 'buffalo_l')
             new_face_data.append((face_id, face['embedding']))
 
-        # Cluster: assign to existing persons or create new ones
         assignments = face_clustering.assign_faces(new_face_data, person_means, threshold)
         for face_id, person_id in assignments:
             if person_id:
                 self.metadata_db.assign_face_to_person(face_id, person_id)
             else:
-                # Create new person
                 new_person_id = str(uuid.uuid4())
                 self.metadata_db.create_person(new_person_id, feature_face_id=face_id)
                 self.metadata_db.assign_face_to_person(face_id, new_person_id)
@@ -799,7 +796,6 @@ class ThumbnailManager:
         logger.debug("Face detection: %d faces in %s", len(faces), file_path)
 
     def create_face_detect_tasks(self, file_paths, priority: Priority) -> List[RenderTask]:
-        """Task factory for face_detect SourceJob."""
         if isinstance(file_paths, str):
             file_paths = [file_paths]
         tasks = []

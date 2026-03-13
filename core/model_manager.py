@@ -20,7 +20,7 @@ MODELS = {
     "clip-vit-b-32-visual": {
         "url": f"{_HF_BASE}/visual/model.onnx",
         "filename": "visual.onnx",
-        "sha256": "",  # populated after first verified download
+        "sha256": "",
     },
     "clip-vit-b-32-textual": {
         "url": f"{_HF_BASE}/textual/model.onnx",
@@ -56,7 +56,6 @@ MODELS = {
 
 
 def _model_dir(model_name: str, config_manager=None) -> str:
-    # Group CLIP files together; group face models together
     if model_name.startswith("clip-vit-b-32"):
         subdir = "clip-vit-b-32"
     elif model_name.startswith("face-"):
@@ -75,12 +74,6 @@ def get_model_path(model_name: str, config_manager=None) -> Optional[str]:
     return os.path.join(_model_dir(model_name, config_manager), info["filename"])
 
 
-def is_model_available(model_name: str, config_manager=None) -> bool:
-    """True if the model file exists on disk."""
-    path = get_model_path(model_name, config_manager)
-    return path is not None and os.path.isfile(path)  # disk-io: local model cache check
-
-
 def _verify_sha256(path: str, expected: str) -> bool:
     if not expected:
         return True  # skip verification if hash not set
@@ -96,11 +89,7 @@ def ensure_model(
     config_manager=None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> Optional[str]:
-    """Download model if missing, verify SHA256, return local path.
-
-    progress_cb(bytes_downloaded, total_bytes) is called during download.
-    Returns None on failure.
-    """
+    """Download model if missing, verify SHA256, return local path."""
     info = MODELS.get(model_name)
     if not info:
         logger.error("Unknown model: %s", model_name)
@@ -147,37 +136,3 @@ def ensure_model(
         return None
 
 
-def ensure_face_models(
-    config_manager=None,
-    progress_cb: Optional[Callable[[str, int, int], None]] = None,
-) -> bool:
-    """Returns True if both face detection and recognition models are cached or downloaded."""
-    required = [
-        "face-detection-buffalo_l",
-        "face-recognition-buffalo_l",
-    ]
-    for name in required:
-        cb = (lambda d, t, _n=name: progress_cb(_n, d, t)) if progress_cb else None
-        path = ensure_model(name, config_manager, progress_cb=cb)
-        if path is None:
-            return False
-    return True
-
-
-def ensure_clip_models(
-    config_manager=None,
-    progress_cb: Optional[Callable[[str, int, int], None]] = None,
-) -> bool:
-    """Returns True if all 4 CLIP files are cached or successfully downloaded."""
-    required = [
-        "clip-vit-b-32-visual",
-        "clip-vit-b-32-textual",
-        "clip-vit-b-32-preprocessor",
-        "clip-vit-b-32-tokenizer",
-    ]
-    for name in required:
-        cb = (lambda d, t, _n=name: progress_cb(_n, d, t)) if progress_cb else None
-        path = ensure_model(name, config_manager, progress_cb=cb)
-        if path is None:
-            return False
-    return True

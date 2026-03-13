@@ -17,11 +17,7 @@ def _get_numpy():
 
 
 def compute_person_mean(embeddings):
-    """Compute mean of L2-normalized face embeddings, then re-normalize.
-
-    embeddings: list of (512,) float32 arrays.
-    Returns (512,) float32 ndarray, or None if empty.
-    """
+    """Compute mean of L2-normalized face embeddings, then re-normalize."""
     np = _get_numpy()
     if np is None or not embeddings:
         return None
@@ -41,9 +37,6 @@ def assign_faces(
 ) -> List[Tuple[str, Optional[str]]]:
     """Match face embeddings against existing person mean embeddings.
 
-    new_faces: [(face_id, embedding), ...]
-    person_means: [(person_id, mean_embedding), ...]
-    threshold: cosine similarity threshold for matching.
     Returns [(face_id, matched_person_id_or_None), ...]
     """
     np = _get_numpy()
@@ -53,7 +46,6 @@ def assign_faces(
     if not person_means:
         return [(fid, None) for fid, _ in new_faces]
 
-    # Build person matrix
     person_ids = [pid for pid, _ in person_means]
     person_matrix = np.stack([emb for _, emb in person_means])
 

@@ -26,7 +26,6 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$REPO_DIR/venv"
 BIN_DIR="$HOME/.local/bin"
-CLI_DIR="$REPO_DIR/cli"
 MODE="${1:-}"
 
 # ── argument validation ────────────────────────────────────────────────────────

@@ -449,7 +449,6 @@ def _clip_filter_batch(crop_pils, config_manager=None):
     """Zero-shot CLIP classification on a batch of crops.
 
     Returns list of bools (True = human face, False = rejected).
-    Single CLIP forward pass for the entire batch.
     Falls back to all-True if CLIP is unavailable.
     """
     global _clip_class_embs
@@ -461,7 +460,9 @@ def _clip_filter_batch(crop_pils, config_manager=None):
     if not onnx_runtime.is_available():
         return [True] * len(crop_pils)
 
-    # Lazy-compute class text embeddings (cached across calls)
+    # Lazy-compute class text embeddings (cached across calls).
+    # Benign race: two threads may both compute and assign; last write wins,
+    # both produce identical results so no corruption.
     if _clip_class_embs is None:
         embs = []
         for prompt in _CLIP_CLASS_PROMPTS:
@@ -471,21 +472,11 @@ def _clip_filter_batch(crop_pils, config_manager=None):
             embs.append(emb)
         _clip_class_embs = np.stack(embs)  # (N_classes, 512)
 
-    # Preprocess all crops into a single batch tensor
     from core.clip_inference import _CLIP_IMAGE_SIZE, _CLIP_MEAN, _CLIP_STD
     Image = _get_pil()
     if Image is None:
         return [True] * len(crop_pils)
 
-    batch = np.zeros((len(crop_pils), 3, _CLIP_IMAGE_SIZE, _CLIP_IMAGE_SIZE), dtype=np.float32)
-    for i, crop in enumerate(crop_pils):
-        img = crop.resize((_CLIP_IMAGE_SIZE, _CLIP_IMAGE_SIZE), Image.BICUBIC)
-        arr = np.array(img, dtype=np.float32) / 255.0
-        for c in range(3):
-            arr[:, :, c] = (arr[:, :, c] - _CLIP_MEAN[c]) / _CLIP_STD[c]
-        batch[i] = arr.transpose(2, 0, 1)
-
-    # Single CLIP forward pass for entire batch
     model_path = get_model_path("clip-vit-b-32-visual", config_manager)
     if not model_path:
         return [True] * len(crop_pils)
@@ -496,10 +487,14 @@ def _clip_filter_batch(crop_pils, config_manager=None):
     try:
         input_name = session.get_inputs()[0].name
         results = []
-        for i in range(len(crop_pils)):
-            # Run one crop at a time (CLIP ViT has fixed batch=1 input)
-            single = batch[i:i+1]  # (1, 3, 224, 224)
-            outputs = session.run(None, {input_name: single})
+        # CLIP ViT has fixed batch=1 input shape, so run one crop at a time
+        for crop in crop_pils:
+            img = crop.resize((_CLIP_IMAGE_SIZE, _CLIP_IMAGE_SIZE), Image.BICUBIC)
+            arr = np.array(img, dtype=np.float32) / 255.0
+            for c in range(3):
+                arr[:, :, c] = (arr[:, :, c] - _CLIP_MEAN[c]) / _CLIP_STD[c]
+            input_tensor = arr.transpose(2, 0, 1)[np.newaxis, ...]  # (1, 3, 224, 224)
+            outputs = session.run(None, {input_name: input_tensor})
             img_emb = outputs[0].flatten().astype(np.float32)
             norm = np.linalg.norm(img_emb)
             if norm > 0:
@@ -521,7 +516,7 @@ def _clip_filter_batch(crop_pils, config_manager=None):
             else:
                 results.append(True)
         return results
-    except Exception:
+    except Exception:  # why: onnxruntime C++ and PIL decode exceptions are untyped
         logger.debug("CLIP batch verification failed", exc_info=True)
         return [True] * len(crop_pils)
 

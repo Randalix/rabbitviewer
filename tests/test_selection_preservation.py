@@ -344,11 +344,6 @@ class TestDeferredDelete:
         tm.create_tasks_for_file.return_value = []
         handler = WatchdogHandler(tm, [])
 
-        ev = MagicMock()
-        ev.event_type = "deleted"
-        ev.src_path = "/img/photo.jpg"
-        ev.is_directory = False
-
         # dispatch defers via Timer; we call _handle_deleted directly
         # simulating file existing after the defer window
         with patch("os.path.exists", return_value=True):

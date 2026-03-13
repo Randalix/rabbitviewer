@@ -48,7 +48,7 @@ class TestAssignFaces:
 
     def test_no_match_below_threshold(self):
         e1 = _random_embedding(20)
-        e2 = _random_embedding(30)  # different random = likely low similarity
+        e2 = _random_embedding(30)  # seeds 20 vs 30 in 512D → cosine sim ≈ 0.0
 
         results = assign_faces(
             [("face1", e1)],

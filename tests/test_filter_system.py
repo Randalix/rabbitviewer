@@ -563,7 +563,8 @@ class TestFilterDialogClear:
              patch("gui.filter_dialog.StarDragContext"):
             def make_btn(**kw):
                 btn = MagicMock()
-                # Wire up set_state to call the handler like the real button does
+                # Closure captures `dialog` by name — safe because side_effect
+                # is called after dialog is assigned on the line below MockBtn.
                 def side_effect(state, b=btn, idx=kw.get("index", 0)):
                     b._current_state = state
                     dialog._on_star_button_toggled(idx, state)
