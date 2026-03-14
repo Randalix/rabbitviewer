@@ -3,23 +3,24 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal, QPointF, QSizeF, QRectF, Qt
 from PySide6.QtGui import QImage, QTransform
 import logging
+import math
 logger = logging.getLogger(__name__)
-from core.event_system import event_system, EventType, ZoomEventData, ZoomDragEventData, DoubleClickZoomEventData
 from gui.color_profile import apply_profile
-import time
+
+# why: perceptually uniform zoom — each 120 wheel-units (one mouse notch)
+# shifts log-zoom by WHEEL_ZOOM_STEP; drag zoom maps pixels at the same rate.
+WHEEL_ZOOM_STEP = 0.15
+_DRAG_PX_PER_LOG_UNIT = 200.0
 
 @dataclass
 class ViewState:
-    """Represents the current view state of the image."""
     center: QPointF  # Center point in normalized coordinates (0-1)
     zoom: float      # Current zoom level (1.0 = 100%)
     viewport_size: QSizeF  # Current viewport size in pixels
     fit_mode: bool   # Whether the image should always fit in the viewport
 
 class PictureBase(QObject):
-    """Base class for image viewing widgets with normalized coordinate system."""
 
-    _DRAG_ZOOM_THRESHOLD = 10
     _MIN_ZOOM = 0.01
     _MAX_ZOOM = 50.0
 
@@ -37,10 +38,10 @@ class PictureBase(QObject):
         self._image: Optional[QImage] = None
         self._orientation_degrees: int = 0
         self._view_state = ViewState(
-            center=QPointF(0.5, 0.5),  # Start at center
+            center=QPointF(0.5, 0.5),
             zoom=1.0,
             viewport_size=QSizeF(0, 0),
-            fit_mode=True  # Start in fit mode
+            fit_mode=True
         )
         self._padding_rect = QRectF()
 
@@ -48,101 +49,10 @@ class PictureBase(QObject):
         self._drag_zoom_anchor = QPointF()
         self._drag_zoom_start_pos = QPointF()
         self._drag_zoom_initial_zoom = 1.0
+        self._drag_zoom_initial_center = QPointF(0.5, 0.5)
 
         self._cached_transform: Optional[QTransform] = None
         self._transform_dirty = True
-
-        self._setup_event_subscriptions()
-
-    def _setup_event_subscriptions(self):
-        event_system.subscribe(EventType.ZOOM_IN, self._handle_zoom_in)
-        event_system.subscribe(EventType.ZOOM_OUT, self._handle_zoom_out)
-        event_system.subscribe(EventType.ZOOM_TO_POINT, self._handle_zoom_to_point)
-        event_system.subscribe(EventType.ZOOM_FIT, self._handle_zoom_fit)
-        event_system.subscribe(EventType.ZOOM_RESET, self._handle_zoom_reset)
-        event_system.subscribe(EventType.ZOOM_DRAG_START, self._handle_zoom_drag_start)
-        event_system.subscribe(EventType.ZOOM_DRAG_UPDATE, self._handle_zoom_drag_update)
-        event_system.subscribe(EventType.ZOOM_DRAG_END, self._handle_zoom_drag_end)
-        event_system.subscribe(EventType.DOUBLE_CLICK_ZOOM, self._handle_double_click_zoom)
-
-    def _handle_zoom_in(self, event_data: ZoomEventData):
-        if event_data.source != id(self):
-            return
-            
-        current_zoom = self._view_state.zoom
-        new_zoom = current_zoom * event_data.zoom_factor
-        center = event_data.center_point if event_data.center_point else self._view_state.center
-        self.setZoom(new_zoom, center)
-
-    def _handle_zoom_out(self, event_data: ZoomEventData):
-        if event_data.source != id(self):
-            return
-            
-        current_zoom = self._view_state.zoom
-        new_zoom = current_zoom / event_data.zoom_factor
-        center = event_data.center_point if event_data.center_point else self._view_state.center
-        self.setZoom(new_zoom, center)
-
-    def _handle_zoom_to_point(self, event_data: ZoomEventData):
-        if event_data.source != id(self):
-            return
-            
-        center = event_data.center_point if event_data.center_point else QPointF(0.5, 0.5)
-        self.setZoom(event_data.zoom_factor, center)
-
-    def _handle_zoom_fit(self, event_data: ZoomEventData):
-        if event_data.source != id(self):
-            return
-            
-        self.setFitMode(True)
-
-    def _handle_zoom_reset(self, event_data: ZoomEventData):
-        if event_data.source != id(self):
-            return
-            
-        center = event_data.center_point if event_data.center_point else QPointF(0.5, 0.5)
-        self.setZoom(1.0, center)
-
-    def _handle_zoom_drag_start(self, event_data: ZoomDragEventData):
-        if event_data.source != id(self):
-            return
-            
-        self._is_drag_zooming = True
-        self._drag_zoom_anchor = event_data.anchor_point
-        self._drag_zoom_start_pos = event_data.start_position
-        self._drag_zoom_initial_zoom = event_data.initial_zoom
-
-    def _handle_zoom_drag_update(self, event_data: ZoomDragEventData):
-        if event_data.source != id(self) or not self._is_drag_zooming:
-            return
-            
-        delta_x = event_data.current_position.x() - self._drag_zoom_start_pos.x()
-        
-        if abs(delta_x) < self._DRAG_ZOOM_THRESHOLD:
-            return
-
-        adjusted_delta = delta_x - (self._DRAG_ZOOM_THRESHOLD if delta_x > 0 else -self._DRAG_ZOOM_THRESHOLD)
-        zoom_change = adjusted_delta / 100.0
-        new_zoom = self._drag_zoom_initial_zoom * (1.0 + zoom_change)
-        
-        if new_zoom > 0:
-            self.setZoom(new_zoom, self._drag_zoom_anchor)
-
-    def _handle_zoom_drag_end(self, event_data: ZoomDragEventData):
-        if event_data.source != id(self):
-            return
-            
-        self._is_drag_zooming = False
-
-    def _handle_double_click_zoom(self, event_data: DoubleClickZoomEventData):
-        if event_data.source != id(self):
-            return
-
-        if self._view_state.fit_mode:
-            self.setFitMode(False)
-            self.setZoom(1.0, event_data.click_position)
-        else:
-            self.setFitMode(True)
 
     def has_image(self) -> bool:
         return self._image is not None and not self._image.isNull()
@@ -208,7 +118,7 @@ class PictureBase(QObject):
             logger.debug("Loaded image from %d bytes", len(data))
             return True
         return False
-            
+
     def _updatePaddingRect(self) -> None:
         if not self._image:
             return
@@ -223,8 +133,8 @@ class PictureBase(QObject):
             square_size, square_size
         )
         self._transform_dirty = True
-        
-    
+
+
     def screenToNormalized(self, screen_pos: QPointF) -> QPointF:
         """Convert screen coordinates to normalized coordinates (0-1) within the square padded space."""
         if not self._image or self.viewportSize().isEmpty():
@@ -243,12 +153,12 @@ class PictureBase(QObject):
 
         logger.debug("screen coordinates: %s -> padded_space_pos: %s -> normalized: %s", screen_pos, padded_space_pos, result)
         return result
-            
+
     def normalizedToScreen(self, norm_pos: QPointF) -> QPointF:
         """Convert normalized coordinates (0-1) to screen coordinates."""
         if not self._image or self.viewportSize().isEmpty():
             return QPointF()
-            
+
         padded_pos = QPointF(
             self._padding_rect.left() + norm_pos.x() * self._padding_rect.width(),
             self._padding_rect.top() + (1.0 - norm_pos.y()) * self._padding_rect.height()
@@ -277,9 +187,74 @@ class PictureBase(QObject):
         self._cached_transform = transform
         self._transform_dirty = False
         return transform
-        
+
+    def zoomAtAnchor(self, new_zoom: float, anchor_norm: QPointF) -> None:
+        """Zoom so that the point under *anchor_norm* stays at the same screen pixel."""
+        self._zoom_at_anchor_from(
+            new_zoom, anchor_norm,
+            self._view_state.zoom, self._view_state.center,
+        )
+
+    def _zoom_at_anchor_from(
+        self, new_zoom: float, anchor_norm: QPointF,
+        old_zoom: float, old_center: QPointF,
+    ) -> None:
+        if not self._image or new_zoom <= 0:
+            return
+
+        new_zoom = max(self._MIN_ZOOM, min(self._MAX_ZOOM, new_zoom))
+        pr = self._padding_rect
+
+        ax = pr.left() + anchor_norm.x() * pr.width()
+        ay = pr.top() + (1.0 - anchor_norm.y()) * pr.height()
+
+        cx = pr.left() + old_center.x() * pr.width()
+        cy = pr.top() + (1.0 - old_center.y()) * pr.height()
+
+        # why: keeps the anchor pixel fixed on screen while zoom changes.
+        #   (anchor - old_center) * old_zoom == (anchor - new_center) * new_zoom
+        new_cx = ax - (ax - cx) * old_zoom / new_zoom
+        new_cy = ay - (ay - cy) * old_zoom / new_zoom
+
+        norm_x = (new_cx - pr.left()) / pr.width()
+        norm_y = 1.0 - (new_cy - pr.top()) / pr.height()
+
+        self.setZoom(new_zoom, QPointF(norm_x, norm_y))
+
+    def _clamp_center(self, center: QPointF) -> QPointF:
+        if not self._image or self._view_state.viewport_size.isEmpty():
+            return center
+
+        zoom = self._view_state.zoom
+        vp_w = self._view_state.viewport_size.width()
+        vp_h = self._view_state.viewport_size.height()
+        pr = self._padding_rect
+
+        cx = pr.left() + center.x() * pr.width()
+        cy = pr.top() + (1.0 - center.y()) * pr.height()
+
+        half_vp_x = vp_w / (2.0 * zoom)
+        half_vp_y = vp_h / (2.0 * zoom)
+
+        img_w = self._image.width()
+        img_h = self._image.height()
+
+        # why: if image fits in viewport, lock to center; otherwise clamp to edges.
+        if img_w <= 2 * half_vp_x:
+            cx = img_w / 2.0
+        else:
+            cx = max(half_vp_x, min(img_w - half_vp_x, cx))
+
+        if img_h <= 2 * half_vp_y:
+            cy = img_h / 2.0
+        else:
+            cy = max(half_vp_y, min(img_h - half_vp_y, cy))
+
+        norm_x = (cx - pr.left()) / pr.width()
+        norm_y = 1.0 - (cy - pr.top()) / pr.height()
+        return QPointF(norm_x, norm_y)
+
     def setZoom(self, zoom: float, center: Optional[QPointF] = None) -> None:
-        """Set the zoom level and optionally the center point."""
         if zoom <= 0:
             return
 
@@ -287,13 +262,14 @@ class PictureBase(QObject):
         self._view_state.zoom = zoom
         if center is not None:
             self._view_state.center = center
+        self._view_state.center = self._clamp_center(self._view_state.center)
         self._view_state.fit_mode = False
         self._transform_dirty = True
 
         self.viewStateChanged.emit(self._view_state)
 
     def setCenter(self, center: QPointF) -> None:
-        """Set the center point in normalized coordinates."""
+        center = self._clamp_center(center)
         current = self._view_state.center
         if center.x() == current.x() and center.y() == current.y():
             return
@@ -303,7 +279,6 @@ class PictureBase(QObject):
         self.viewStateChanged.emit(self._view_state)
 
     def setViewportSize(self, size: QSizeF) -> None:
-        """Update the viewport size."""
         if size != self._view_state.viewport_size:
             self._view_state.viewport_size = size
             if self._view_state.fit_mode:
@@ -311,173 +286,94 @@ class PictureBase(QObject):
                 self._view_state.center = QPointF(0.5, 0.5)
             self._transform_dirty = True
             self.viewStateChanged.emit(self._view_state)
-            
+
     def viewState(self) -> ViewState:
-        """Get the current view state."""
         return self._view_state
-        
+
     def viewportSize(self) -> QSizeF:
-        """Get the current viewport size."""
         return self._view_state.viewport_size
-        
+
     def imageRect(self) -> QRectF:
-        """Get the actual image rectangle in padded space."""
         if not self._image:
             return QRectF()
-            
         return QRectF(0, 0, self._image.width(), self._image.height())
-        
+
     def paddedRect(self) -> QRectF:
-        """Get the padded square rectangle."""
         return self._padding_rect
-        
+
     def calculateFitZoom(self) -> float:
-        """Calculate the zoom level needed to fit the image in the viewport."""
         if not self._image or self.viewportSize().isEmpty():
             return 1.0
-            
+
         viewport = self.viewportSize()
-        
+
         zoom_x = viewport.width() / self._image.width()
         zoom_y = viewport.height() / self._image.height()
-        
+
         return min(zoom_x, zoom_y)
-    
+
     def setFitMode(self, fit_mode: bool) -> None:
-        """Enable or disable fit mode."""
         self._view_state.fit_mode = fit_mode
         if fit_mode:
             self._view_state.zoom = self.calculateFitZoom()
             self._view_state.center = QPointF(0.5, 0.5)
         self._transform_dirty = True
         self.viewStateChanged.emit(self._view_state)
-    
+
     def isFitMode(self) -> bool:
-        """Check if fit mode is enabled."""
         return self._view_state.fit_mode
-    
+
     def zoomIn(self, factor: float = 1.25, center: Optional[QPointF] = None):
-        """Zoom in by the specified factor."""
-        event_data = ZoomEventData(
-            event_type=EventType.ZOOM_IN,
-            source=id(self),
-            timestamp=time.time(),
-            zoom_factor=factor,
-            center_point=center
-        )
-        event_system.publish(event_data)
-    
+        new_zoom = self._view_state.zoom * factor
+        c = center if center else self._view_state.center
+        self.setZoom(new_zoom, c)
+
     def zoomOut(self, factor: float = 1.25, center: Optional[QPointF] = None):
-        """Zoom out by the specified factor."""
-        event_data = ZoomEventData(
-            event_type=EventType.ZOOM_OUT,
-            source=id(self),
-            timestamp=time.time(),
-            zoom_factor=factor,
-            center_point=center
-        )
-        event_system.publish(event_data)
-    
-    def zoomToPoint(self, zoom: float, center: QPointF):
-        """Zoom to a specific zoom level at a specific point."""
-        event_data = ZoomEventData(
-            event_type=EventType.ZOOM_TO_POINT,
-            source=id(self),
-            timestamp=time.time(),
-            zoom_factor=zoom,
-            center_point=center
-        )
-        event_system.publish(event_data)
-    
+        new_zoom = self._view_state.zoom / factor
+        c = center if center else self._view_state.center
+        self.setZoom(new_zoom, c)
+
     def zoomToFit(self):
-        """Zoom to fit the image in the viewport."""
-        event_data = ZoomEventData(
-            event_type=EventType.ZOOM_FIT,
-            source=id(self),
-            timestamp=time.time(),
-            zoom_factor=0.0,  # Not used for fit mode
-            fit_mode=True
-        )
-        event_system.publish(event_data)
-    
+        self.setFitMode(True)
+
     def zoomReset(self, center: Optional[QPointF] = None):
-        """Reset zoom to 100%."""
-        event_data = ZoomEventData(
-            event_type=EventType.ZOOM_RESET,
-            source=id(self),
-            timestamp=time.time(),
-            zoom_factor=1.0,
-            center_point=center
-        )
-        event_system.publish(event_data)
-    
+        c = center if center else QPointF(0.5, 0.5)
+        self.setZoom(1.0, c)
+
     def startDragZoom(self, anchor_point: QPointF, start_position: QPointF):
-        """Start drag zoom operation."""
-        event_data = ZoomDragEventData(
-            event_type=EventType.ZOOM_DRAG_START,
-            source=id(self),
-            timestamp=time.time(),
-            anchor_point=anchor_point,
-            current_position=start_position,
-            start_position=start_position,
-            initial_zoom=self._view_state.zoom
-        )
-        event_system.publish(event_data)
-    
+        self._is_drag_zooming = True
+        self._drag_zoom_anchor = anchor_point
+        self._drag_zoom_start_pos = start_position
+        self._drag_zoom_initial_zoom = self._view_state.zoom
+        self._drag_zoom_initial_center = QPointF(self._view_state.center)
+
     def updateDragZoom(self, current_position: QPointF):
-        """Update drag zoom operation."""
-        if self._is_drag_zooming:
-            event_data = ZoomDragEventData(
-                event_type=EventType.ZOOM_DRAG_UPDATE,
-                source=id(self),
-                timestamp=time.time(),
-                anchor_point=self._drag_zoom_anchor,
-                current_position=current_position,
-                start_position=self._drag_zoom_start_pos,
-                initial_zoom=self._drag_zoom_initial_zoom
-            )
-            event_system.publish(event_data)
-    
+        if not self._is_drag_zooming:
+            return
+        delta_x = current_position.x() - self._drag_zoom_start_pos.x()
+        log_zoom = math.log(self._drag_zoom_initial_zoom) + delta_x / _DRAG_PX_PER_LOG_UNIT
+        new_zoom = math.exp(log_zoom)
+        self._zoom_at_anchor_from(
+            new_zoom, self._drag_zoom_anchor,
+            self._drag_zoom_initial_zoom, self._drag_zoom_initial_center,
+        )
+
     def endDragZoom(self):
-        """End drag zoom operation."""
-        if self._is_drag_zooming:
-            event_data = ZoomDragEventData(
-                event_type=EventType.ZOOM_DRAG_END,
-                source=id(self),
-                timestamp=time.time(),
-                anchor_point=self._drag_zoom_anchor,
-                current_position=QPointF(),
-                start_position=self._drag_zoom_start_pos,
-                initial_zoom=self._drag_zoom_initial_zoom
-            )
-            event_system.publish(event_data)
-    
+        self._is_drag_zooming = False
+
     def computeDragZoom(self, current_pos: QPointF) -> Optional[float]:
-        """Return the new zoom implied by current drag position, or None if below threshold."""
         if not self._is_drag_zooming:
             return None
         delta_x = current_pos.x() - self._drag_zoom_start_pos.x()
-        if abs(delta_x) < self._DRAG_ZOOM_THRESHOLD:
-            return None
-        adjusted_delta = delta_x - (self._DRAG_ZOOM_THRESHOLD if delta_x > 0 else -self._DRAG_ZOOM_THRESHOLD)
-        new_zoom = self._drag_zoom_initial_zoom * (1.0 + adjusted_delta / 100.0)
+        new_zoom = math.exp(math.log(self._drag_zoom_initial_zoom) + delta_x / _DRAG_PX_PER_LOG_UNIT)
         return new_zoom if new_zoom > 0 else None
 
     def isDragZooming(self) -> bool:
-        """Check if currently drag zooming."""
         return self._is_drag_zooming
 
     def resetDragZoom(self) -> None:
         self._is_drag_zooming = False
 
     def cleanup_subscriptions(self) -> None:
-        event_system.unsubscribe(EventType.ZOOM_IN, self._handle_zoom_in)
-        event_system.unsubscribe(EventType.ZOOM_OUT, self._handle_zoom_out)
-        event_system.unsubscribe(EventType.ZOOM_TO_POINT, self._handle_zoom_to_point)
-        event_system.unsubscribe(EventType.ZOOM_FIT, self._handle_zoom_fit)
-        event_system.unsubscribe(EventType.ZOOM_RESET, self._handle_zoom_reset)
-        event_system.unsubscribe(EventType.ZOOM_DRAG_START, self._handle_zoom_drag_start)
-        event_system.unsubscribe(EventType.ZOOM_DRAG_UPDATE, self._handle_zoom_drag_update)
-        event_system.unsubscribe(EventType.ZOOM_DRAG_END, self._handle_zoom_drag_end)
-        event_system.unsubscribe(EventType.DOUBLE_CLICK_ZOOM, self._handle_double_click_zoom)
-    
+        # why: kept as a no-op for callers that still call it during teardown.
+        pass

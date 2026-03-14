@@ -237,12 +237,12 @@ class _CompareSplit(QWidget):
         if delta == 0:
             return
         self._user_navigating = True
-        center = self._picture_base.screenToNormalized(QPointF(event.position()))
-        factor = 1.25
-        if delta > 0:
-            self._picture_base.zoomIn(factor, center)
-        else:
-            self._picture_base.zoomOut(factor, center)
+        from .picture_base import WHEEL_ZOOM_STEP
+        log_zoom = math.log(self._picture_base.viewState().zoom)
+        log_zoom += WHEEL_ZOOM_STEP * (delta / 120.0)
+        new_zoom = math.exp(log_zoom)
+        anchor = self._picture_base.screenToNormalized(QPointF(event.position()))
+        self._picture_base.zoomAtAnchor(new_zoom, anchor)
         self._user_navigating = False
 
 
@@ -536,12 +536,12 @@ class _SplitLineView(QWidget):
         delta = event.angleDelta().y()
         if delta == 0:
             return
-        center = self._picture_base.screenToNormalized(QPointF(event.position()))
-        factor = 1.25
-        if delta > 0:
-            self._picture_base.zoomIn(factor, center)
-        else:
-            self._picture_base.zoomOut(factor, center)
+        from .picture_base import WHEEL_ZOOM_STEP
+        log_zoom = math.log(self._picture_base.viewState().zoom)
+        log_zoom += WHEEL_ZOOM_STEP * (delta / 120.0)
+        new_zoom = math.exp(log_zoom)
+        anchor = self._picture_base.screenToNormalized(QPointF(event.position()))
+        self._picture_base.zoomAtAnchor(new_zoom, anchor)
 
     def _publish_hovered_path(self, x: int) -> None:
         side = self._side_at(x)

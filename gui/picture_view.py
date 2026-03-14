@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QPointF, QSizeF, QPoint, QTimer
 from PySide6.QtGui import QPainter, QImage, QMouseEvent, QPaintEvent, QResizeEvent, QKeyEvent
 
 import logging
+import math
 logger = logging.getLogger(__name__)
 import os
 import time
@@ -70,7 +71,6 @@ class PictureView(QWidget):
             logger.error(f"Error updating inspector in picture view: {e}", exc_info=True)
 
     def loadImage(self, image_path: str, force_reload: bool = False) -> bool:
-        """Load an image from the given path, preferring full resolution cached version."""
         # image_path here is always the ORIGINAL path
         if image_path == self._current_path and not force_reload:
             return True  # Already loaded, and not forced to reload
@@ -194,7 +194,6 @@ class PictureView(QWidget):
         return self._current_path
 
     def _fetch_rating(self, path: str):
-        """Fetch rating from daemon in a background thread and marshal result to main thread."""
         rating = 0
         if self.service:
             try:
@@ -207,7 +206,6 @@ class PictureView(QWidget):
 
     @Slot(str, int)
     def _on_rating_ready(self, path: str, rating: int):
-        """Publish rating to status bar if the path is still current."""
         if self._current_path == path:
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE,
@@ -270,10 +268,8 @@ class PictureView(QWidget):
         self._picture_base.setViewportSize(QSizeF(event.size()))
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        # First update inspector
         self._updateInspector(QPointF(event.position()))
 
-        # Then handle standard mouse movement
         if self._is_panning:
             delta = event.position().toPoint() - self._last_mouse_pos
             self._last_mouse_pos = event.position().toPoint()
@@ -321,27 +317,28 @@ class PictureView(QWidget):
         if event.button() == Qt.LeftButton:
             click_pos = self._picture_base.screenToNormalized(QPointF(event.position()))
             
-            # PictureView specific double click behavior: toggle between fit mode and 100% zoom
             if self._picture_base.isFitMode() or abs(self._picture_base.viewState().zoom - 1.0) > 0.01:
-                # Switch to 100% zoom at click position
                 self._picture_base.setZoom(1.0, click_pos)
             else:
-                # Switch to fit mode
                 self._picture_base.setFitMode(True)
             
             self.zoomChanged.emit(self._picture_base.viewState().zoom)
                 
                 
     def wheelEvent(self, event) -> None:
-        factor = 1.25 if event.angleDelta().y() > 0 else 1/1.25
-        mouse_pos = self._picture_base.screenToNormalized(QPointF(event.position()))
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
 
-        if event.angleDelta().y() > 0:
-            # Zoom in using PictureBase
-            self._picture_base.zoomIn(factor, mouse_pos)
-        else:
-            # Zoom out using PictureBase
-            self._picture_base.zoomOut(factor, mouse_pos)
+        # why: exponential scaling — trackpads send smaller deltas (~15-30)
+        # so they produce proportionally finer adjustments vs mouse notches (120).
+        from .picture_base import WHEEL_ZOOM_STEP
+        log_zoom = math.log(self._picture_base.viewState().zoom)
+        log_zoom += WHEEL_ZOOM_STEP * (delta / 120.0)
+        new_zoom = math.exp(log_zoom)
+
+        mouse_pos = self._picture_base.screenToNormalized(QPointF(event.position()))
+        self._picture_base.zoomAtAnchor(new_zoom, mouse_pos)
 
         self.zoomChanged.emit(self._picture_base.viewState().zoom)
 

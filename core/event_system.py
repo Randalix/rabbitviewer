@@ -40,17 +40,6 @@ class EventType(Enum):
     # Inspector events
     INSPECTOR_UPDATE = "inspector_update"
     
-    # Zoom events
-    ZOOM_IN = "zoom_in"
-    ZOOM_OUT = "zoom_out"
-    ZOOM_TO_POINT = "zoom_to_point"
-    ZOOM_FIT = "zoom_fit"
-    ZOOM_RESET = "zoom_reset"
-    ZOOM_DRAG_START = "zoom_drag_start"
-    ZOOM_DRAG_UPDATE = "zoom_drag_update"
-    ZOOM_DRAG_END = "zoom_drag_end"
-    DOUBLE_CLICK_ZOOM = "double_click_zoom"
-    
     # UI command events
     OPEN_FILTER = "open_filter"
     OPEN_TAG_EDITOR = "open_tag_editor"
@@ -129,28 +118,6 @@ class ViewEventData(EventData):
 class InspectorEventData(EventData):
     image_path: str
     normalized_position: QPointF
-
-
-@dataclass
-class ZoomEventData(EventData):
-    zoom_factor: float
-    center_point: Optional[QPointF] = None  # Normalized coordinates (0-1)
-    fit_mode: bool = False
-
-
-@dataclass
-class ZoomDragEventData(EventData):
-    anchor_point: QPointF  # Normalized coordinates (0-1)
-    current_position: QPointF  # Screen coordinates
-    start_position: QPointF  # Screen coordinates
-    initial_zoom: float
-
-
-@dataclass
-class DoubleClickZoomEventData(EventData):
-    click_position: QPointF  # Normalized coordinates (0-1)
-    current_zoom: float
-    is_fit_mode: bool
 
 
 class StatusSection(Enum):
