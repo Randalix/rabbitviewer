@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.inspector_views: List[InspectorView] = []
         self._inspector_slot = 0
         self.face_palettes: List = []
+        self._face_selection: List[str] = []  # persists across palette open/close
         self.metadata_cache = MetadataCache(self.service)
         self.info_panels: List[InfoPanelShell] = []
         self._info_panel_slot = 0
@@ -306,12 +307,16 @@ class MainWindow(QMainWindow):
         from .face_palette import FacePalette
         palette = FacePalette(config_manager=self.config_manager, parent=self)
         palette.set_service(self.service)
+        if self.thumbnail_view:
+            palette.set_current_files(list(self.thumbnail_view.all_files))
+        palette.restore_selection(self._face_selection)
         self.face_palettes.append(palette)
         palette.closed.connect(lambda: self._on_face_palette_closed(palette))
         palette.show()
         logger.debug("Opened People View window.")
 
     def _on_face_palette_closed(self, palette):
+        self._face_selection = list(palette.get_selection())
         try:
             self.face_palettes.remove(palette)
         except ValueError:
@@ -633,6 +638,12 @@ class MainWindow(QMainWindow):
         if hovered_path:
             self.thumbnail_view.thumbnailHovered.emit(hovered_path)
 
+        # Update face palettes with all files (unfiltered)
+        if self.face_palettes and self.thumbnail_view:
+            files = list(self.thumbnail_view.all_files)
+            for palette in self.face_palettes:
+                palette.set_current_files(files)
+
     def _prime_inspector_from_picture_view(self, inspector):
         if (self.picture_view and self.picture_view.current_path and
                 self.picture_view.has_image()):
@@ -876,6 +887,7 @@ class MainWindow(QMainWindow):
                 from gui.video_view import VideoView
                 self.video_view = VideoView()
                 self.video_view.escapePressed.connect(self.close_video_view)
+                self.video_view.navigateRequested.connect(self.navigate_to_image)
                 self.video_view.set_service(self.service)
                 self.stacked_widget.addWidget(self.video_view)
             self.video_view.loadVideo(video_path)

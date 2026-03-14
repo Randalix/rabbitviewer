@@ -1,6 +1,6 @@
 # tests/test_inspector_view_modes.py
 """
-Unit tests for InspectorView mode transitions.
+Unit tests for ImageInspector mode transitions.
 
 Validates that zoom (wheel, right-drag) stays in tracking mode, double-click
 cycles between tracking and fit, and only left-drag panning enters manual mode.
@@ -13,7 +13,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Qt stubs — InspectorView needs more surface than the global conftest provides.
+# Qt stubs — ImageInspector needs more surface than the global conftest provides.
 # ---------------------------------------------------------------------------
 
 def _ensure_qt_stubs():
@@ -180,24 +180,23 @@ class FakeWheelEvent:
 
 @pytest.fixture()
 def inspector():
-    """Create an InspectorView with mocked dependencies."""
-    from gui.inspector_view import InspectorView, _ViewMode
+    """Create an ImageInspector with mocked dependencies."""
+    from gui.components.image_inspector import ImageInspector, ViewMode
 
-    with patch("gui.inspector_view.event_system"):
-        iv = InspectorView(config_manager=None, inspector_index=0)
+    ii = ImageInspector()
 
     # Stub PictureBase methods used during mode transitions.
-    iv._picture_base = MagicMock()
-    iv._picture_base.has_image.return_value = True
-    iv._picture_base.isDragZooming.return_value = False
+    ii._picture_base = MagicMock()
+    ii._picture_base.has_image.return_value = True
+    ii._picture_base.isDragZooming.return_value = False
     # calculateTransform().inverted() must return (transform, bool)
     mock_transform = MagicMock()
     mock_transform.inverted.return_value = (MagicMock(), True)
-    iv._picture_base.calculateTransform.return_value = mock_transform
-    iv._current_image_path = "/fake/image.jpg"
-    iv._view_image_ready = True
+    ii._picture_base.calculateTransform.return_value = mock_transform
+    ii._current_image_path = "/fake/image.jpg"
+    ii._view_image_ready = True
 
-    return iv, _ViewMode
+    return ii, ViewMode
 
 
 # ---------------------------------------------------------------------------
@@ -208,79 +207,79 @@ class TestWheelZoomDoesNotLock:
     """Wheel zoom must stay in tracking mode, never enter manual/locked."""
 
     def test_wheel_from_tracking_stays_tracking(self, inspector):
-        iv, Mode = inspector
-        iv._view_mode = Mode.TRACKING
+        ii, Mode = inspector
+        ii._view_mode = Mode.TRACKING
 
-        iv.wheelEvent(FakeWheelEvent(delta_y=120))
+        ii.wheelEvent(FakeWheelEvent(delta_y=120))
 
-        assert iv._view_mode == Mode.TRACKING
+        assert ii._view_mode == Mode.TRACKING
 
     def test_wheel_from_fit_goes_to_tracking(self, inspector):
-        iv, Mode = inspector
-        iv._view_mode = Mode.FIT
+        ii, Mode = inspector
+        ii._view_mode = Mode.FIT
 
-        iv.wheelEvent(FakeWheelEvent(delta_y=120))
+        ii.wheelEvent(FakeWheelEvent(delta_y=120))
 
-        assert iv._view_mode == Mode.TRACKING
+        assert ii._view_mode == Mode.TRACKING
 
     def test_wheel_from_manual_stays_manual(self, inspector):
         """If the user already locked, wheel zoom doesn't change the mode."""
-        iv, Mode = inspector
-        iv._view_mode = Mode.MANUAL
+        ii, Mode = inspector
+        ii._view_mode = Mode.MANUAL
 
-        iv.wheelEvent(FakeWheelEvent(delta_y=-120))
+        ii.wheelEvent(FakeWheelEvent(delta_y=-120))
 
-        assert iv._view_mode == Mode.MANUAL
+        assert ii._view_mode == Mode.MANUAL
 
 
 class TestDoubleClickCycles:
     """Double-click must toggle between tracking and fit."""
 
     def test_tracking_to_fit(self, inspector):
-        iv, Mode = inspector
-        iv._view_mode = Mode.TRACKING
+        ii, Mode = inspector
+        ii._view_mode = Mode.TRACKING
         Qt = sys.modules["PySide6.QtCore"].Qt
 
-        iv.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
+        ii.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
 
-        assert iv._view_mode == Mode.FIT
-        iv._picture_base.setFitMode.assert_called_with(True)
+        assert ii._view_mode == Mode.FIT
+        ii._picture_base.setFitMode.assert_called_with(True)
 
     def test_fit_to_tracking(self, inspector):
-        iv, Mode = inspector
-        iv._view_mode = Mode.FIT
+        ii, Mode = inspector
+        ii._view_mode = Mode.FIT
         Qt = sys.modules["PySide6.QtCore"].Qt
 
-        iv.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
+        ii.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
 
-        assert iv._view_mode == Mode.TRACKING
-        iv._picture_base.setFitMode.assert_called_with(False)
-        iv._picture_base.setZoom.assert_called()
+        assert ii._view_mode == Mode.TRACKING
+        ii._picture_base.setFitMode.assert_called_with(False)
+        ii._picture_base.setZoom.assert_called()
 
     def test_manual_to_fit(self, inspector):
         """From locked/manual, double-click goes to fit."""
-        iv, Mode = inspector
-        iv._view_mode = Mode.MANUAL
+        ii, Mode = inspector
+        ii._view_mode = Mode.MANUAL
         Qt = sys.modules["PySide6.QtCore"].Qt
 
-        iv.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
+        ii.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
 
-        assert iv._view_mode == Mode.FIT
+        assert ii._view_mode == Mode.FIT
 
     def test_full_cycle(self, inspector):
         """tracking → fit → tracking → fit round-trip."""
-        iv, Mode = inspector
+        ii, Mode = inspector
         Qt = sys.modules["PySide6.QtCore"].Qt
-        iv._view_mode = Mode.TRACKING
+        ii._view_mode = Mode.TRACKING
 
-        iv.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
-        assert iv._view_mode == Mode.FIT
+        ii.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
+        assert ii._view_mode == Mode.FIT
 
-        iv.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
-        assert iv._view_mode == Mode.TRACKING
+        ii.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
+        assert ii._view_mode == Mode.TRACKING
 
-        iv.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
-        assert iv._view_mode == Mode.FIT
+        ii.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))
+        assert ii._view_mode == Mode.FIT
 
     def test_double_click_not_blocked_by_press(self, inspector):
         """The real Qt sequence: press → release → double-click → press.
@@ -288,57 +287,57 @@ class TestDoubleClickCycles:
         mousePressEvent must NOT enter manual mode, so the double-click
         handler sees the original mode and toggles correctly.
         """
-        iv, Mode = inspector
+        ii, Mode = inspector
         Qt = sys.modules["PySide6.QtCore"].Qt
-        iv._view_mode = Mode.TRACKING
+        ii._view_mode = Mode.TRACKING
 
         # Simulate Qt's double-click delivery sequence
-        iv.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton))        # 1st click
-        assert iv._view_mode == Mode.TRACKING, "press must not switch to manual"
+        ii.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton))        # 1st click
+        assert ii._view_mode == Mode.TRACKING, "press must not switch to manual"
 
-        iv.mouseReleaseEvent(FakeMouseEvent(button=Qt.LeftButton))
-        iv.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))  # 2nd click
-        assert iv._view_mode == Mode.FIT
+        ii.mouseReleaseEvent(FakeMouseEvent(button=Qt.LeftButton))
+        ii.mouseDoubleClickEvent(FakeMouseEvent(button=Qt.LeftButton))  # 2nd click
+        assert ii._view_mode == Mode.FIT
 
-        iv.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton))        # Qt re-fires press
-        assert iv._view_mode == Mode.FIT, "press after dbl-click must not change mode"
+        ii.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton))        # Qt re-fires press
+        assert ii._view_mode == Mode.FIT, "press after dbl-click must not change mode"
 
 
 class TestPanningEntersManual:
     """Only left-button drag (actual movement) should enter manual mode."""
 
     def test_press_alone_does_not_lock(self, inspector):
-        iv, Mode = inspector
+        ii, Mode = inspector
         Qt = sys.modules["PySide6.QtCore"].Qt
-        iv._view_mode = Mode.TRACKING
+        ii._view_mode = Mode.TRACKING
 
-        iv.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton))
-        iv.mouseReleaseEvent(FakeMouseEvent(button=Qt.LeftButton))
+        ii.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton))
+        ii.mouseReleaseEvent(FakeMouseEvent(button=Qt.LeftButton))
 
-        assert iv._view_mode == Mode.TRACKING
+        assert ii._view_mode == Mode.TRACKING
 
     def test_drag_enters_manual(self, inspector):
-        iv, Mode = inspector
+        ii, Mode = inspector
         Qt = sys.modules["PySide6.QtCore"].Qt
-        iv._view_mode = Mode.TRACKING
+        ii._view_mode = Mode.TRACKING
 
-        iv.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton, x=100, y=100))
-        iv.mouseMoveEvent(FakeMouseEvent(button=Qt.LeftButton, x=120, y=120))
+        ii.mousePressEvent(FakeMouseEvent(button=Qt.LeftButton, x=100, y=100))
+        ii.mouseMoveEvent(FakeMouseEvent(button=Qt.LeftButton, x=120, y=120))
 
-        assert iv._view_mode == Mode.MANUAL
+        assert ii._view_mode == Mode.MANUAL
 
 
 class TestRightDragZoomDoesNotLock:
     """Right-click drag zoom must not enter manual/locked mode."""
 
     def test_right_drag_stays_tracking(self, inspector):
-        iv, Mode = inspector
+        ii, Mode = inspector
         Qt = sys.modules["PySide6.QtCore"].Qt
-        iv._view_mode = Mode.TRACKING
-        iv._picture_base.isDragZooming.return_value = True
-        iv._picture_base.computeDragZoom.return_value = 4.0
+        ii._view_mode = Mode.TRACKING
+        ii._picture_base.isDragZooming.return_value = True
+        ii._picture_base.computeDragZoom.return_value = 4.0
 
-        iv.mousePressEvent(FakeMouseEvent(button=Qt.RightButton, x=100, y=100))
-        iv.mouseMoveEvent(FakeMouseEvent(button=Qt.RightButton, x=130, y=100))
+        ii.mousePressEvent(FakeMouseEvent(button=Qt.RightButton, x=100, y=100))
+        ii.mouseMoveEvent(FakeMouseEvent(button=Qt.RightButton, x=130, y=100))
 
-        assert iv._view_mode == Mode.TRACKING
+        assert ii._view_mode == Mode.TRACKING
