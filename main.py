@@ -112,9 +112,28 @@ def _read_git_head():
         with open(head_path) as f:
             head = f.read().strip()
         if head.startswith("ref: "):
-            ref_path = os.path.join(repo_dir, ".git", head[5:])
-            with open(ref_path) as f:
-                return f.read().strip()
+            ref = head[5:]
+            # Try loose ref first, fall back to packed-refs.
+            ref_path = os.path.join(repo_dir, ".git", ref)
+            try:
+                with open(ref_path) as f:
+                    return f.read().strip()
+            except OSError:
+                pass
+            # Packed refs: lines like "<hash> <ref>"
+            packed_path = os.path.join(repo_dir, ".git", "packed-refs")
+            try:
+                with open(packed_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#") or not line:
+                            continue
+                        parts = line.split(" ", 1)
+                        if len(parts) == 2 and parts[1] == ref:
+                            return parts[0]
+            except OSError:
+                pass
+            return None
         return head  # detached HEAD
     except OSError:
         return None
