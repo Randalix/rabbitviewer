@@ -199,19 +199,21 @@ class RenderManager:
                 # Task is PENDING or PAUSED (queued). Upgrade its priority if the new one is higher.
                 elif priority > task.priority:
                     logger.info(f"Upgrading priority for task '{task_id}' from {task.priority.name} to {priority.name}.")
-                    # Invalidate the old task. The worker will discard it when it's dequeued.
+                    # Invalidate the old queue entry so workers discard it.
                     task.is_active = False
-
-                    # Create a new, high-priority task to replace it.
+                    # Create a replacement at the new priority.
+                    # why: clear cancel_event on upgrade — a speculative task's
+                    # cancel_event may already be set; inheriting it would cause
+                    # the upgraded task to abort immediately.
                     new_task = RenderTask(
                         task_id=task.task_id, func=func, priority=priority,
                         args=args, kwargs=kwargs, dependencies=(dependencies or set()).copy(),
                         task_type=task.task_type, on_complete_callback=on_complete_callback,
-                        dependents=task.dependents, # Preserve dependents
-                        cancel_event=task.cancel_event or cancel_event,  # Preserve cancel_event
+                        dependents=task.dependents,
+                        cancel_event=cancel_event,
                     )
                     self.task_graph[task_id] = new_task
-                    task = new_task # Continue with the new task object
+                    task = new_task
                 else:
                     # Update args so the queued task runs with the latest values (e.g. latest rating).
                     task.args = args
@@ -518,7 +520,7 @@ class RenderManager:
                 # Get the next highest priority task. Short timeout to allow shutdown check.
                 task = self.task_queue.get(timeout=0.2)
                 
-                # If a task has been invalidated (e.g., by a priority upgrade), discard it.
+                # If a task has been invalidated (e.g., by cancellation), discard it.
                 # Do NOT call task_done() here — the finally block handles it unconditionally.
                 if not task.is_active:
                     continue

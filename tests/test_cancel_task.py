@@ -88,24 +88,30 @@ class TestCancelTask:
         assert not _poll(called.is_set, timeout=0.5), \
             "Cancelled task should not have been executed"
 
-    def test_cancel_event_preserved_on_upgrade(self, rm: RenderManager):
-        """Priority upgrade preserves the original cancel_event."""
-        evt = threading.Event()
+    def test_cancel_event_cleared_on_upgrade(self, rm: RenderManager):
+        """Priority upgrade uses caller's cancel_event, not the old one.
+
+        why: inheriting a speculative task's already-set cancel_event would
+        cause the upgraded FULLRES_REQUEST task to abort immediately.
+        """
+        old_evt = threading.Event()
+        new_evt = threading.Event()
         blocker = threading.Event()
         rm.submit_task(
             "test::upgrade", Priority.LOW,
             lambda: blocker.wait(2),
-            cancel_event=evt,
+            cancel_event=old_evt,
         )
-        # Upgrade priority
+        # Upgrade priority with a different cancel_event
         rm.submit_task(
             "test::upgrade", Priority.GUI_REQUEST,
             lambda: blocker.wait(2),
-            cancel_event=threading.Event(),  # different event
+            cancel_event=new_evt,
         )
-        # The original event should still be on the task
-        assert rm.cancel_task("test::upgrade") is True
-        assert evt.is_set(), "Original cancel_event should be set after cancel"
+        with rm.graph_lock:
+            task = rm.task_graph["test::upgrade"]
+        assert task.cancel_event is new_evt
+        assert not old_evt.is_set(), "Old cancel_event should not be touched"
         blocker.set()
 
     def test_cancel_tasks_batch(self, rm: RenderManager):
