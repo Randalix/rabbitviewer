@@ -198,6 +198,22 @@ class MetadataDatabase:
                     )
                 ''')
 
+                # Work-intent ledger: tracks pending processing steps
+                # per file so the daemon can resume GUI-initiated work.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS file_work (
+                        file_path   TEXT NOT NULL,
+                        work_type   TEXT NOT NULL,
+                        scan_root   TEXT NOT NULL,
+                        created_at  REAL NOT NULL,
+                        PRIMARY KEY (file_path, work_type, scan_root)
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_file_work_root_type
+                    ON file_work(scan_root, work_type)
+                ''')
+
                 # Face recognition: detected faces with embeddings
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS face_detections (
@@ -1861,6 +1877,117 @@ class MetadataDatabase:
             return []
 
     # ------------------------------------------------------------------
+    #  Work-Intent Ledger (file_work)
+    # ------------------------------------------------------------------
+
+    def file_work_batch_insert(self, file_paths: List[str], work_type: str,
+                               scan_root: str) -> None:
+        """Record pending work.  INSERT OR IGNORE — idempotent."""
+        if not file_paths:
+            return
+        now = time.time()
+        rows = [(fp, work_type, scan_root, now) for fp in file_paths]
+        try:
+            with self._lock:
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO file_work "
+                    "(file_path, work_type, scan_root, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    rows,
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("file_work_batch_insert failed: %s", e)
+
+    def file_work_remove(self, file_path: str, work_type: str) -> None:
+        """Remove a single completed work entry."""
+        try:
+            with self._lock:
+                self.conn.execute(
+                    "DELETE FROM file_work WHERE file_path = ? AND work_type = ?",
+                    (file_path, work_type),
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("file_work_remove failed: %s", e)
+
+    def file_work_batch_remove(self, file_paths: List[str], work_type: str) -> None:
+        """Remove completed work entries in batch."""
+        if not file_paths:
+            return
+        try:
+            with self._lock:
+                self.conn.executemany(
+                    "DELETE FROM file_work WHERE file_path = ? AND work_type = ?",
+                    [(fp, work_type) for fp in file_paths],
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("file_work_batch_remove failed: %s", e)
+
+    def file_work_get_pending(self, scan_root: str, work_type: str) -> List[str]:
+        """Return file paths with pending work of the given type."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "SELECT file_path FROM file_work "
+                    "WHERE scan_root = ? AND work_type = ?",
+                    (scan_root, work_type),
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error("file_work_get_pending failed: %s", e)
+            return []
+
+    def file_work_get_all_roots(self) -> List[str]:
+        """Return distinct scan roots that have pending work."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "SELECT DISTINCT scan_root FROM file_work"
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error("file_work_get_all_roots failed: %s", e)
+            return []
+
+    def file_work_get_pending_types(self, scan_root: str) -> List[str]:
+        """Return distinct work types with pending entries for a scan root."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "SELECT DISTINCT work_type FROM file_work "
+                    "WHERE scan_root = ?",
+                    (scan_root,),
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error("file_work_get_pending_types failed: %s", e)
+            return []
+
+    def file_work_clear_all(self) -> int:
+        """Delete all file_work entries (used during cache migration)."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute("DELETE FROM file_work")
+                self.conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logger.error("file_work_clear_all failed: %s", e)
+            return 0
+
+    def ledger_reset_all(self) -> int:
+        """Delete all scan_ledger entries (used during cache migration)."""
+        try:
+            with self._lock:
+                cursor = self.conn.execute("DELETE FROM scan_ledger")
+                self.conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logger.error("ledger_reset_all failed: %s", e)
+            return 0
+
+    # ------------------------------------------------------------------
     #  CLIP Embeddings
     # ------------------------------------------------------------------
 
@@ -2151,6 +2278,31 @@ class MetadataDatabase:
             logger.error(f"Error getting all persons: {e}")
             return []
 
+    def get_persons_for_files(self, file_paths: List[str], include_hidden: bool = False) -> List[dict]:
+        """Return persons that have at least one face in the given file_paths."""
+        if not file_paths:
+            return []
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                placeholders = ','.join('?' * len(file_paths))
+                hidden_clause = "" if include_hidden else " AND p.is_hidden = 0"
+                cursor.execute(f'''
+                    SELECT p.person_id, p.name, p.face_count, p.feature_face_id, p.is_hidden,
+                           COUNT(f.face_id) AS visible_face_count
+                    FROM persons p
+                    INNER JOIN face_detections f ON f.person_id = p.person_id
+                    WHERE f.file_path IN ({placeholders}){hidden_clause}
+                    GROUP BY p.person_id
+                ''', file_paths)
+                rows = cursor.fetchall()
+            return [{'person_id': r[0], 'name': r[1], 'face_count': r[2],
+                     'feature_face_id': r[3], 'is_hidden': bool(r[4]),
+                     'visible_face_count': r[5]} for r in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting persons for files: {e}")
+            return []
+
     def rename_person(self, person_id: str, name: str):
         try:
             with self._lock:
@@ -2180,6 +2332,36 @@ class MetadataDatabase:
                 self._face_generation += 1
         except sqlite3.Error as e:
             logger.error(f"Error merging persons: {e}")
+
+    def ungroup_person(self, person_id: str):
+        """Split a person into individual persons — one per face."""
+        import uuid
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    'SELECT face_id FROM face_detections WHERE person_id = ?',
+                    (person_id,))
+                face_ids = [r[0] for r in cursor.fetchall()]
+                if len(face_ids) < 2:
+                    return
+                now = time.time()
+                for fid in face_ids:
+                    new_pid = str(uuid.uuid4())
+                    cursor.execute('''
+                        INSERT INTO persons
+                        (person_id, name, face_count, feature_face_id, created_at, updated_at)
+                        VALUES (?, '', 1, ?, ?, ?)
+                    ''', (new_pid, fid, now, now))
+                    cursor.execute(
+                        'UPDATE face_detections SET person_id = ? WHERE face_id = ?',
+                        (new_pid, fid))
+                cursor.execute('DELETE FROM persons WHERE person_id = ?',
+                               (person_id,))
+                self.conn.commit()
+                self._face_generation += 1
+        except sqlite3.Error as e:
+            logger.error(f"Error ungrouping person: {e}")
 
     def hide_person(self, person_id: str, hidden: bool):
         try:

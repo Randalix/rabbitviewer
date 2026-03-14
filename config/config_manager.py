@@ -186,7 +186,7 @@ DEFAULT_CONFIG = {
         "face_recognition": {
             "enabled": True,
             "auto_index": True,
-            "detection_confidence": 0.7,
+            "detection_confidence": 0.5,
             "recognition_threshold": 0.6,
             "model": "buffalo_l",
         },
@@ -200,6 +200,7 @@ DEFAULT_CONFIG = {
     "thumbnail_size": 128,
     "cache_dir": "~/.rabbitviewer",
     "watch_paths": [os.path.expanduser("~/Pictures"), os.path.expanduser("~/Downloads")],
+    "remote_paths": [],  # path prefixes treated as network mounts (timeout-probed)
     "min_file_size": 8192,  # bytes; 8 KB floor
     "ignore_patterns": ["._*"],  # glob patterns
     "max_cache_size_mb": 10240,  # 10 GB; 0 = unlimited

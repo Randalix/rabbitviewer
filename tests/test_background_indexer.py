@@ -60,6 +60,18 @@ class _StubLedger:
     def pending_write_get_all(self):
         return []
 
+    def file_work_get_all_roots(self):
+        return []
+
+    def file_work_get_pending_types(self, scan_root):
+        return []
+
+    def file_work_get_pending(self, scan_root, work_type):
+        return []
+
+    def file_work_batch_insert(self, file_paths, work_type, scan_root):
+        pass
+
 
 class _StubThumbnailManager:
 

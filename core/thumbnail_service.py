@@ -88,6 +88,10 @@ class ThumbnailService:
                     f"discovered files in '{path}'."
                 )
 
+                discovered_list = list(discovered)
+                for wt in ('thumbnail', 'view_image', 'metadata'):
+                    self.db.file_work_batch_insert(discovered_list, wt, scan_root=path)
+
                 def _discovered_batch_generator():
                     batch = []
                     for f in discovered:
@@ -113,6 +117,14 @@ class ThumbnailService:
             # Chain AI background jobs after scan completes
             all_files = list(discovered) + [f for f in db_files if f not in discovered]
             if all_files:
+                cfg = self.tm.config_manager
+                if cfg.get("ai.enabled", True):
+                    if cfg.get("ai.clip_search.enabled", True):
+                        self.db.file_work_batch_insert(all_files, 'clip', scan_root=path)
+                    if cfg.get("ai.auto_orient.enabled", False):
+                        self.db.file_work_batch_insert(all_files, 'auto_orient', scan_root=path)
+                    if cfg.get("ai.face_recognition.enabled", True):
+                        self.db.file_work_batch_insert(all_files, 'face_detect', scan_root=path)
                 self.tm.submit_clip_indexing_job(path, all_files)
                 self.tm.submit_auto_orient_job(path, all_files)
                 self.tm.submit_face_detection_job(path, all_files)
@@ -472,6 +484,9 @@ class ThumbnailService:
     def get_all_persons(self, include_hidden: bool = False) -> list:
         return self.db.get_all_persons(include_hidden)
 
+    def get_persons_for_files(self, file_paths: list, include_hidden: bool = False) -> list:
+        return self.db.get_persons_for_files(file_paths, include_hidden)
+
     def rename_person(self, person_id: str, name: str):
         self.db.rename_person(person_id, name)
 
@@ -480,6 +495,9 @@ class ThumbnailService:
 
     def hide_person(self, person_id: str, hidden: bool):
         self.db.hide_person(person_id, hidden)
+
+    def ungroup_person(self, person_id: str):
+        self.db.ungroup_person(person_id)
 
     def set_feature_face(self, person_id: str, face_id: str):
         self.db.set_feature_face(person_id, face_id)

@@ -175,6 +175,7 @@ def _run_daemon(config_manager, log_level_override=None):
                 logger.info("GUI gone — resuming daemon workers.")
                 rm.resume()
                 background_indexer.recover_orphans()
+                background_indexer.resume_pending_work()
                 thumbnail_manager.recover_pending_writes()
                 gui_was_active = False
         except Exception as e:  # why: is_gui_active() can raise OSError on remote fs; must not crash poll loop

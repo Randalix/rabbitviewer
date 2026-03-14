@@ -13,9 +13,8 @@ class BackgroundIndexer:
 
     On startup the indexer first recovers orphaned files left by a prior GUI
     session (from the scan ledger) at ``ORPHAN_SCAN`` priority, then resumes
-    the filesystem walk for un-walked directories at ``BACKGROUND_SCAN``.
-    After the initial pass completes, the watchdog observer handles all
-    further changes — no re-scans are performed."""
+    pending work from the ``file_work`` table, and finally walks un-walked
+    directories at ``BACKGROUND_SCAN``."""
 
     def __init__(self, thumbnail_manager, directory_scanner,
                  watch_paths: list[str], metadata_db=None):
@@ -49,23 +48,87 @@ class BackgroundIndexer:
                 f"orphaned files for {scan_root}"
             )
 
-            def _orphan_generator(files: List[str]):
-                batch: list = []
-                for f in files:
-                    batch.append(f)
-                    if len(batch) >= 10:
-                        yield batch
-                        batch = []
-                if batch:
-                    yield batch
-
             job = SourceJob(
                 job_id=job_id,
                 priority=Priority.ORPHAN_SCAN,
-                generator=_orphan_generator(incomplete),
+                generator=self._batch_generator(incomplete),
                 task_factory=self.thumbnail_manager.create_all_tasks_for_file,
             )
             rm.submit_source_job(job)
+
+    # ------------------------------------------------------------------
+    #  Phase 1.5: resume pending work from the file_work ledger
+    # ------------------------------------------------------------------
+
+    def resume_pending_work(self) -> None:
+        """Submit jobs for work left incomplete by a prior GUI session."""
+        rm = self.thumbnail_manager.render_manager
+        roots = self.metadata_db.file_work_get_all_roots()
+        if not roots:
+            return
+
+        for scan_root in roots:
+            pending_types = set(self.metadata_db.file_work_get_pending_types(scan_root))
+            if not pending_types:
+                continue
+
+            # Core work (thumbnail/view_image/metadata) — union all file paths
+            core_types = {'thumbnail', 'view_image', 'metadata'} & pending_types
+            if core_types:
+                core_files: set = set()
+                for wt in core_types:
+                    core_files.update(
+                        self.metadata_db.file_work_get_pending(scan_root, wt)
+                    )
+                if core_files:
+                    job_id = f"daemon_work::core::{scan_root}"
+                    with rm.active_jobs_lock:
+                        if job_id not in rm.active_jobs:
+                            logger.info(
+                                "BackgroundIndexer: resuming %d core tasks for %s",
+                                len(core_files), scan_root,
+                            )
+                            job = SourceJob(
+                                job_id=job_id,
+                                priority=Priority.ORPHAN_SCAN,
+                                generator=self._batch_generator(list(core_files)),
+                                task_factory=self.thumbnail_manager.create_all_tasks_for_file,
+                            )
+                            rm.submit_source_job(job)
+
+            # AI work — delegate to existing submit methods (they do their
+            # own skip-checks via DB queries).
+            if 'clip' in pending_types:
+                files = self.metadata_db.file_work_get_pending(scan_root, 'clip')
+                if files:
+                    logger.info("BackgroundIndexer: resuming CLIP indexing for %d files in %s",
+                                len(files), scan_root)
+                    self.thumbnail_manager.submit_clip_indexing_job(scan_root, files)
+
+            if 'face_detect' in pending_types:
+                files = self.metadata_db.file_work_get_pending(scan_root, 'face_detect')
+                if files:
+                    logger.info("BackgroundIndexer: resuming face detection for %d files in %s",
+                                len(files), scan_root)
+                    self.thumbnail_manager.submit_face_detection_job(scan_root, files)
+
+            if 'auto_orient' in pending_types:
+                files = self.metadata_db.file_work_get_pending(scan_root, 'auto_orient')
+                if files:
+                    logger.info("BackgroundIndexer: resuming auto-orient for %d files in %s",
+                                len(files), scan_root)
+                    self.thumbnail_manager.submit_auto_orient_job(scan_root, files)
+
+    @staticmethod
+    def _batch_generator(files: List[str]):
+        batch: list = []
+        for f in files:
+            batch.append(f)
+            if len(batch) >= 10:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
 
     # ------------------------------------------------------------------
     #  Phase 2: checkpoint-aware filesystem walk
@@ -79,6 +142,9 @@ class BackgroundIndexer:
 
         # Phase 1: recover orphaned files at ORPHAN_SCAN(15).
         self.recover_orphans()
+
+        # Phase 1.5: resume pending work from file_work ledger.
+        self.resume_pending_work()
 
         # Phase 2: walk un-walked directories at BACKGROUND_SCAN(10).
         rm = self.thumbnail_manager.render_manager
@@ -96,6 +162,8 @@ class BackgroundIndexer:
 
             def _ledger_batch_cb(paths, _root=path):
                 self.metadata_db.ledger_batch_insert(paths, scan_root=_root)
+                for wt in ('thumbnail', 'view_image', 'metadata'):
+                    self.metadata_db.file_work_batch_insert(paths, wt, scan_root=_root)
 
             job = SourceJob(
                 job_id=f"daemon_idx::{path}",

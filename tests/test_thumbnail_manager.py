@@ -81,3 +81,47 @@ def test_thumbnail_caching_with_modifications(clean_environment):
     assert os.path.exists(async_thumbnail_path)
 
     thumbnail_manager.shutdown()
+
+
+class TestGetMountPoint:
+    """Tests for _get_mount_point remote path detection."""
+
+    def _make_tm(self, remote_paths=None):
+        config = MockConfigManager({
+            "cache_dir": "/tmp/test_cache",
+            "thumbnail_size": 128,
+            "remote_paths": remote_paths or [],
+        })
+        db = MetadataDatabase(":memory:")
+        tm = ThumbnailManager(config, db, num_workers=1)
+        return tm
+
+    def test_config_remote_path_matches(self):
+        tm = self._make_tm(remote_paths=["/mnt/nas"])
+        assert tm._get_mount_point("/mnt/nas/photos/a.jpg") == "/mnt/nas"
+        tm.shutdown()
+
+    def test_config_remote_path_no_match(self):
+        tm = self._make_tm(remote_paths=["/mnt/nas"])
+        assert tm._get_mount_point("/home/user/photos/a.jpg") is None
+        tm.shutdown()
+
+    def test_macos_fallback_volumes(self):
+        tm = self._make_tm()
+        assert tm._get_mount_point("/Volumes/storage/photos/a.jpg") == "/Volumes/storage"
+        tm.shutdown()
+
+    def test_local_path_returns_none(self):
+        tm = self._make_tm()
+        assert tm._get_mount_point("/home/user/photos/a.jpg") is None
+        tm.shutdown()
+
+    def test_config_takes_precedence_over_volumes(self):
+        tm = self._make_tm(remote_paths=["/Volumes/storage/pictures"])
+        assert tm._get_mount_point("/Volumes/storage/pictures/a.jpg") == "/Volumes/storage/pictures"
+        tm.shutdown()
+
+    def test_config_remote_path_no_partial_match(self):
+        tm = self._make_tm(remote_paths=["/mnt/nas"])
+        assert tm._get_mount_point("/mnt/nasty/photos/a.jpg") is None
+        tm.shutdown()
