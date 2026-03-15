@@ -83,18 +83,19 @@ class BackgroundIndexer:
                 if core_files:
                     job_id = f"daemon_work::core::{scan_root}"
                     with rm.active_jobs_lock:
-                        if job_id not in rm.active_jobs:
-                            logger.info(
-                                "BackgroundIndexer: resuming %d core tasks for %s",
-                                len(core_files), scan_root,
-                            )
-                            job = SourceJob(
-                                job_id=job_id,
-                                priority=Priority.ORPHAN_SCAN,
-                                generator=self._batch_generator(list(core_files)),
-                                task_factory=self.thumbnail_manager.create_all_tasks_for_file,
-                            )
-                            rm.submit_source_job(job)
+                        already_active = job_id in rm.active_jobs
+                    if not already_active:
+                        logger.info(
+                            "BackgroundIndexer: resuming %d core tasks for %s",
+                            len(core_files), scan_root,
+                        )
+                        job = SourceJob(
+                            job_id=job_id,
+                            priority=Priority.ORPHAN_SCAN,
+                            generator=self._batch_generator(list(core_files)),
+                            task_factory=self.thumbnail_manager.create_all_tasks_for_file,
+                        )
+                        rm.submit_source_job(job)
 
             # AI work — delegate to existing submit methods (they do their
             # own skip-checks via DB queries).
@@ -148,6 +149,7 @@ class BackgroundIndexer:
 
         # Phase 2: walk un-walked directories at BACKGROUND_SCAN(10).
         rm = self.thumbnail_manager.render_manager
+        logger.info("BackgroundIndexer: Phase 2 — %d watch_paths to index", len(self.watch_paths))
         for path in self.watch_paths:
             if not os.path.exists(path):  # disk-io: watch path validation
                 logger.warning(f"BackgroundIndexer: skipping non-existent watch_path: {path}")
