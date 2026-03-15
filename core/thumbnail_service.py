@@ -159,17 +159,19 @@ class ThumbnailService:
     def get_subdirectories(self, parent_path: str) -> List[FolderNode]:
         """Return FolderNodes for immediate subdirectories that contain images."""
         rows = self.db.get_subdirectory_info(parent_path)
-        return [
-            FolderNode(
+        nodes = []
+        for r in rows:
+            image_paths = sorted(self.db.get_directory_files(r['path'], recursive=True))
+            nodes.append(FolderNode(
                 path=r['path'],
                 name=r['name'],
                 parent_path=parent_path,
                 image_count=r['image_count'],
                 recursive_count=r['recursive_count'],
                 preview_paths=r['preview_paths'],
-            )
-            for r in rows
-        ]
+                image_paths=image_paths,
+            ))
+        return nodes
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None) -> List[str]:

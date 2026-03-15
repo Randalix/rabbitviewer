@@ -16,3 +16,4 @@ class FolderNode:
     image_count: int = 0                        # direct children count
     recursive_count: int = 0                    # including subdirectories
     preview_paths: List[str] = field(default_factory=list)  # up to 4 thumbnail paths
+    image_paths: List[str] = field(default_factory=list)    # all images sorted by name

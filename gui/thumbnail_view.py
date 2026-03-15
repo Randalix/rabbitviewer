@@ -87,7 +87,9 @@ class ThumbnailLabel(ItemCard):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if not getattr(self, 'is_folder', False):
+        if getattr(self, 'is_folder', False):
+            self._queueFolderInspectorEvent(event.position())
+        else:
             self._queueInspectorEvent(event.position())
         super().mouseMoveEvent(event)
 
@@ -108,16 +110,63 @@ class ThumbnailLabel(ItemCard):
             logger.error("Error queuing inspector event from thumbnail: %s", e, exc_info=True)
 
     def _flushInspectorEvent(self):
+        # Folder cards use a separate image path from the folder's contents
+        folder_image = getattr(self, '_pending_folder_image', None)
+        if folder_image:
+            self._pending_folder_image = None
+            self._pending_norm_pos = None
+            event_system.publish(InspectorEventData(
+                event_type=EventType.INSPECTOR_UPDATE,
+                source="thumbnail_view",
+                timestamp=time.time(),
+                image_path=folder_image,
+                normalized_position=QPointF(0.5, 0.5),
+            ))
+            return
         pos = self._pending_norm_pos
         if pos is None:
             return
         self._pending_norm_pos = None
-        event_data = InspectorEventData(
+        event_system.publish(InspectorEventData(
             event_type=EventType.INSPECTOR_UPDATE,
             source="thumbnail_view",
             timestamp=time.time(),
             image_path=self.original_path,
             normalized_position=pos,
+        ))
+
+    def _queueFolderInspectorEvent(self, pos: QPointF):
+        """Map X position to a folder image and publish an inspector event."""
+        node = getattr(self, '_folder_node', None)
+        if not node or not node.image_paths:
+            return
+        try:
+            widget_rect = self.rect()
+            if widget_rect.width() <= 0:
+                return
+            norm_x = max(0.0, min(1.0, pos.x() / widget_rect.width()))
+            idx = min(int(norm_x * len(node.image_paths)), len(node.image_paths) - 1)
+            image_path = node.image_paths[idx]
+            # Publish with centered position so the inspector shows the full image
+            self._pending_norm_pos = QPointF(0.5, 0.5)
+            self._pending_folder_image = image_path
+            if not self._inspector_timer.isActive():
+                self._inspector_timer.start()
+        except (AttributeError, TypeError) as e:
+            logger.error("Error queuing folder inspector event: %s", e, exc_info=True)
+
+    def _flushFolderInspectorEvent(self):
+        """Flush a pending folder inspector event."""
+        image_path = getattr(self, '_pending_folder_image', None)
+        if not image_path:
+            return
+        self._pending_folder_image = None
+        event_data = InspectorEventData(
+            event_type=EventType.INSPECTOR_UPDATE,
+            source="thumbnail_view",
+            timestamp=time.time(),
+            image_path=image_path,
+            normalized_position=QPointF(0.5, 0.5),
         )
         event_system.publish(event_data)
 

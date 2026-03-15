@@ -96,7 +96,7 @@ DEFAULT_CONFIG = {
             "description": "Open metadata info panel"
         },
         "navigate_parent": {
-            "sequence": "Backspace",
+            "sequence": "Alt+Up",
             "description": "Navigate to parent folder"
         },
         "menu:tags": {
