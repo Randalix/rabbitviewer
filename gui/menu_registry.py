@@ -1,7 +1,6 @@
 import logging
 import subprocess
 import sys
-import threading
 import time
 
 from core.event_system import event_system, EventType, EventData
@@ -24,48 +23,19 @@ def _publish(event_type):
 
 # -- Bookmark menu helpers ------------------------------------------------
 
-def _build_bookmark_children(node, operation: str, script_api_ref: list):
+def _build_bookmark_children(node, operation: str):
     from core.bookmark_manager import load_bookmarks
     bookmarks = load_bookmarks()
+    move = (operation == "move")
     node.children = [
         MenuNode(
             label=bm.name,
             key=bm.key,
-            action=_bookmark_action(bm.path, operation, script_api_ref),
+            script="bookmark_transfer",
+            script_kwargs={"dest_dir": bm.path, "move": move},
         )
         for bm in bookmarks
     ]
-
-
-def _bookmark_action(dest_dir: str, operation: str, script_api_ref: list):
-    def _do():
-        # why: ScriptAPI methods use _on_main_thread() which deadlocks if
-        # called from the Qt main thread; run in a background thread like scripts.
-        threading.Thread(target=_run, daemon=True,
-                         name=f"bookmark-{operation}").start()
-
-    def _run():
-        api = script_api_ref[0]
-        if api is None:
-            return
-        selected = api.get_selected_images()
-        if not selected:
-            return
-        all_paths = api.expand_group_paths(sorted(selected))
-        if not all_paths:
-            return
-        op_name = f"bookmark_{operation}"
-        api.daemon_tasks([(op_name, all_paths, {"dest_dir": dest_dir})])
-        from core.event_system import StatusMessageEventData
-        n = len(all_paths)
-        verb = "Copying" if operation == "copy" else "Moving"
-        event_system.publish(StatusMessageEventData(
-            event_type=EventType.STATUS_MESSAGE, source="bookmark",
-            timestamp=time.time(),
-            message=f"{verb} {n} file{'s' if n != 1 else ''} to {dest_dir}",
-            timeout=4000,
-        ))
-    return _do
 
 
 def _edit_bookmarks():
@@ -81,16 +51,7 @@ def _edit_bookmarks():
         logger.warning("Failed to open bookmarks file: %s", BOOKMARKS_PATH)
 
 
-def build_menus(script_api_ref: list = None) -> dict:
-    """Build all modal menu trees.
-
-    *script_api_ref* is a single-element list holding the live ScriptAPI
-    (set after ScriptManager init).  Bookmark actions read ``[0]`` at
-    invocation time so the reference can be late-bound.
-    """
-    if script_api_ref is None:
-        script_api_ref = [None]
-
+def build_menus() -> dict:
     sort_menu = MenuNode("Sort", children=[
         MenuNode("Date", key="d", script="sort_by_date", visible=_thumbnail_only),
         MenuNode("Name", key="n", script="sort_by_name", visible=_thumbnail_only),
@@ -122,11 +83,11 @@ def build_menus(script_api_ref: list = None) -> dict:
     # Bookmark menu — children are rebuilt from YAML each time it opens.
     copy_submenu = MenuNode(
         "Copy to", key="c",
-        refresh=lambda node: _build_bookmark_children(node, "copy", script_api_ref),
+        refresh=lambda node: _build_bookmark_children(node, "copy"),
     )
     move_submenu = MenuNode(
         "Move to", key="m",
-        refresh=lambda node: _build_bookmark_children(node, "move", script_api_ref),
+        refresh=lambda node: _build_bookmark_children(node, "move"),
     )
     bookmark_menu = MenuNode("Bookmark", children=[
         copy_submenu,

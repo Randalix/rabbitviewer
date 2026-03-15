@@ -26,6 +26,7 @@ class MenuNode:
     label: str
     key: str = ""
     script: str = ""
+    script_kwargs: dict = field(default_factory=dict)
     children: list = field(default_factory=list)
     visible: Optional[Callable] = None
     action: Optional[Callable] = None
@@ -201,7 +202,7 @@ class ModalMenu(QWidget):
             elif item.script:
                 logger.debug(f"ModalMenu: running script '{item.script}'")
                 self._close()
-                self._script_manager.run_script(item.script)
+                self._script_manager.run_script(item.script, **item.script_kwargs)
         else:
             logger.debug(f"ModalMenu: unmapped key '{text}', dismissing")
             self._close()

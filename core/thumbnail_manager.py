@@ -1499,22 +1499,22 @@ class ThumbnailManager:
                 results[name] = {"error": str(e)}
         return results
 
-    def _op_send2trash(self, file_paths: List[str], **_kw) -> Dict[str, Any]:
+    def _op_send2trash(self, file_paths: List[str]) -> Dict[str, Any]:
         from core.file_ops import trash_with_sidecars
         return trash_with_sidecars(file_paths)
 
-    def _op_remove_records(self, file_paths: List[str], **_kw) -> Dict[str, Any]:
+    def _op_remove_records(self, file_paths: List[str]) -> Dict[str, Any]:
         success = self.metadata_db.remove_records(file_paths)
         return {"success": success, "count": len(file_paths)}
 
     def _op_bookmark_copy(self, file_paths: List[str], *,
-                          dest_dir: str, **_kw) -> Dict[str, Any]:
+                          dest_dir: str) -> Dict[str, Any]:
         from core.bookmark_manager import execute_bookmark_transfer
         return execute_bookmark_transfer(file_paths, dest_dir, move=False,
                                          db=self.metadata_db)
 
     def _op_bookmark_move(self, file_paths: List[str], *,
-                          dest_dir: str, **_kw) -> Dict[str, Any]:
+                          dest_dir: str) -> Dict[str, Any]:
         from core.bookmark_manager import execute_bookmark_transfer
         return execute_bookmark_transfer(file_paths, dest_dir, move=True,
                                          db=self.metadata_db)
