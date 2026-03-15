@@ -318,8 +318,6 @@ def _run_gui(args, config_manager):
     if recovered:
         logger.info(f"Recovered {recovered} pending file writes from prior session")
 
-    watcher.start()
-
     # --- Qt Application ---
     if sys.platform == 'darwin':
         _set_macos_app_name("Rabbit Viewer")
@@ -383,6 +381,10 @@ def _run_gui(args, config_manager):
     window.show()
     app.processEvents()
     logger.info("[startup] window shown, services ready")
+
+    # Start watchdog after the window is visible so NAS directory probing
+    # doesn't block the GUI from appearing (~9s on networked volumes).
+    watcher.start()
 
     if target_dir:
         def _load():
