@@ -4,6 +4,7 @@ import os
 import argparse
 import signal
 import subprocess
+import threading
 import time
 
 # why: __name__ is "__main__" at runtime; "rabbitviewer" is a stable name
@@ -382,9 +383,9 @@ def _run_gui(args, config_manager):
     app.processEvents()
     logger.info("[startup] window shown, services ready")
 
-    # Start watchdog after the window is visible so NAS directory probing
-    # doesn't block the GUI from appearing (~9s on networked volumes).
-    watcher.start()
+    # Start watchdog in a background thread so NAS directory probing
+    # (~9-16s on networked volumes) doesn't freeze the GUI.
+    threading.Thread(target=watcher.start, daemon=True).start()
 
     if target_dir:
         def _load():
