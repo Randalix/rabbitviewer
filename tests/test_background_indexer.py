@@ -60,6 +60,9 @@ class _StubLedger:
     def pending_write_get_all(self):
         return []
 
+    def get_files_missing_thumbnails(self, watch_paths):
+        return []
+
     def file_work_get_all_roots(self):
         return []
 

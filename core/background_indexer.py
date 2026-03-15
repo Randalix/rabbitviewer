@@ -132,6 +132,32 @@ class BackgroundIndexer:
             yield batch
 
     # ------------------------------------------------------------------
+    #  Phase 1.75: recover files in DB with no thumbnail
+    # ------------------------------------------------------------------
+
+    def _recover_incomplete_files(self) -> None:
+        """Submit work for files in the DB that have no thumbnail.
+
+        This catches files that were discovered by a prior scan but whose
+        thumbnail tasks never ran (e.g. due to the resume_pending_work
+        deadlock fixed in 71cac8c).
+        """
+        missing = self.metadata_db.get_files_missing_thumbnails(self.watch_paths)
+        if not missing:
+            return
+
+        logger.info("BackgroundIndexer: %d files in DB missing thumbnails — submitting recovery jobs",
+                     len(missing))
+        rm = self.thumbnail_manager.render_manager
+        job = SourceJob(
+            job_id="recover_incomplete",
+            priority=Priority.BACKGROUND_SCAN,
+            generator=self._batch_generator(missing),
+            task_factory=self.thumbnail_manager.create_all_tasks_for_file,
+        )
+        rm.submit_source_job(job)
+
+    # ------------------------------------------------------------------
     #  Phase 2: checkpoint-aware filesystem walk
     # ------------------------------------------------------------------
 
@@ -146,6 +172,10 @@ class BackgroundIndexer:
 
         # Phase 1.5: resume pending work from file_work ledger.
         self.resume_pending_work()
+
+        # Phase 1.75: recover files in DB that never got thumbnails (e.g.
+        # after a prior deadlock prevented task creation).
+        self._recover_incomplete_files()
 
         # Phase 2: walk un-walked directories at BACKGROUND_SCAN(10).
         rm = self.thumbnail_manager.render_manager

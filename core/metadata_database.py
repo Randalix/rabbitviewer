@@ -1863,6 +1863,24 @@ class MetadataDatabase:
             logger.error(f"ledger_get_walked_dirs failed: {e}")
             return set()
 
+    def get_files_missing_thumbnails(self, watch_paths: list) -> List[str]:
+        """Return file paths under *watch_paths* that have a DB record but no thumbnail."""
+        if not watch_paths:
+            return []
+        try:
+            clauses = " OR ".join(["file_path LIKE ?"] * len(watch_paths))
+            params = [p.rstrip("/") + "/%" for p in watch_paths]
+            with self._lock:
+                cursor = self.conn.execute(
+                    f"SELECT file_path FROM image_metadata "
+                    f"WHERE thumbnail_path IS NULL AND ({clauses})",
+                    params,
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error("get_files_missing_thumbnails failed: %s", e)
+            return []
+
     def ledger_prune_complete(self, scan_root: str) -> int:
         """Remove fully-processed entries for a scan root."""
         try:
