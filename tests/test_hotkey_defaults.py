@@ -50,3 +50,40 @@ def test_default_hotkeys_have_sequence():
         assert isinstance(entry, dict), f"hotkey '{name}' should be a dict"
         assert "sequence" in entry, f"hotkey '{name}' missing 'sequence' key"
         assert entry["sequence"], f"hotkey '{name}' has empty sequence"
+
+
+def test_no_duplicate_sequences():
+    """Every key sequence in DEFAULT_CONFIG must map to exactly one action."""
+    seq_to_actions: dict[str, list[str]] = {}
+    for name, entry in DEFAULT_CONFIG["hotkeys"].items():
+        if not isinstance(entry, dict):
+            continue
+        sequences = []
+        if "sequence" in entry:
+            sequences.append(entry["sequence"])
+        if "extra_sequences" in entry:
+            sequences.extend(entry["extra_sequences"])
+        for seq in sequences:
+            normalised = seq.strip()
+            seq_to_actions.setdefault(normalised, []).append(name)
+
+    dupes = {seq: actions for seq, actions in seq_to_actions.items() if len(actions) > 1}
+    assert not dupes, (
+        f"Duplicate key sequences in DEFAULT_CONFIG['hotkeys']: "
+        + ", ".join(f"'{seq}' -> {actions}" for seq, actions in sorted(dupes.items()))
+    )
+
+
+def test_default_config_covers_all_actions():
+    """Every non-script/menu action in DEFAULT_CONFIG should have a handler registered."""
+    actions = _extract_add_action_names(
+        "gui/hotkey_manager.py",
+        "gui/main_window.py",
+    )
+    default_hotkeys = set(DEFAULT_CONFIG["hotkeys"].keys())
+    # Config entries that don't need a code-side add_action (scripts/menus are dynamic)
+    config_only = {k for k in default_hotkeys if k.startswith("script:") or k.startswith("menu:")}
+    orphaned = (default_hotkeys - config_only) - actions
+    assert not orphaned, (
+        f"Hotkey config entries with no registered add_action() handler: {sorted(orphaned)}"
+    )
