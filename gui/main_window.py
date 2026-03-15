@@ -375,6 +375,20 @@ class MainWindow(QMainWindow):
         if not self.info_panels:
             self._info_panel_slot = 0
 
+    def _toggle_breadcrumb_bar(self):
+        if not self.breadcrumb_bar:
+            from gui.breadcrumb_bar import BreadcrumbBar
+            self.breadcrumb_bar = BreadcrumbBar(service=self.service, parent=self)
+
+        if self.breadcrumb_bar.isVisible():
+            self.breadcrumb_bar.hide()
+        else:
+            path = self.thumbnail_view.current_directory_path if self.thumbnail_view else None
+            if path:
+                self.breadcrumb_bar.set_path(path)
+                self.breadcrumb_bar.show()
+                self.breadcrumb_bar.raise_()
+
     def open_filter_dialog(self):
         if not self.filter_dialog:
             self.filter_dialog = FilterDialog(self)
@@ -742,6 +756,8 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
         event_system.subscribe(EventType.OPEN_COMPARE_SPLIT, lambda _: self._open_compare_view("split"))
         event_system.subscribe(EventType.NAVIGATE_PARENT, lambda _: self.thumbnail_view.navigate_to_parent())
+        event_system.subscribe(EventType.OPEN_BREADCRUMB, lambda _: self._toggle_breadcrumb_bar())
+        event_system.subscribe(EventType.NAVIGATE_TO_FOLDER, lambda e: self._handle_folder_navigation(e.path))
         event_system.subscribe(EventType.OPEN_RECENT_DIRECTORY, self._handle_open_recent)
 
     def _handle_inspector_event(self, event_data):
@@ -885,6 +901,8 @@ class MainWindow(QMainWindow):
     def _handle_folder_navigation(self, folder_path: str):
         self.last_known_directory = folder_path
         self.thumbnail_view.navigate_to_folder(folder_path)
+        if self.breadcrumb_bar and self.breadcrumb_bar.isVisible():
+            self.breadcrumb_bar.set_path(folder_path)
 
     def open_media_view(self, file_path: str):
         if _is_video(file_path):

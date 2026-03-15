@@ -76,6 +76,7 @@ class EventType(Enum):
     OPEN_MODAL_MENU = "open_modal_menu"
 
     # Directory events
+    NAVIGATE_TO_FOLDER = "navigate_to_folder"
     OPEN_RECENT_DIRECTORY = "open_recent_directory"
 
     # Status messages
