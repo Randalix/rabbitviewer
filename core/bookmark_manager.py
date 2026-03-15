@@ -1,0 +1,116 @@
+"""Bookmark copy/move with rsync-va skip semantics and DB tracking."""
+import logging
+import os
+import shutil
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from core.metadata_database import MetadataDatabase
+
+import yaml
+
+logger = logging.getLogger(__name__)
+
+BOOKMARKS_PATH = os.path.expanduser("~/.rabbitviewer/bookmarks.yaml")
+
+
+@dataclass(frozen=True)
+class Bookmark:
+    key: str
+    name: str
+    path: str
+
+
+def load_bookmarks() -> List[Bookmark]:
+    try:
+        with open(BOOKMARKS_PATH, "r") as f:  # disk-io: bookmark config load
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        logger.warning("Failed to load bookmarks: %s", e)
+        return []
+
+    result = []
+    for entry in data.get("bookmarks", []):
+        key = entry.get("key", "")
+        name = entry.get("name", "")
+        path = os.path.expanduser(entry.get("path", ""))
+        if key and path:
+            result.append(Bookmark(key=key, name=name or path, path=path))
+    return result
+
+
+def _should_transfer(src: str, dst: str) -> bool:
+    if not os.path.exists(dst):  # disk-io: check dest exists for rsync skip
+        return True
+    try:
+        src_stat = os.stat(src)  # disk-io: compare size+mtime for rsync skip
+        dst_stat = os.stat(dst)  # disk-io: compare size+mtime for rsync skip
+        if src_stat.st_size != dst_stat.st_size:
+            return True
+        # Compare mtime with 1-second tolerance (FAT/network fs granularity)
+        if abs(src_stat.st_mtime - dst_stat.st_mtime) > 1.0:
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def transfer_file(src: str, dest_dir: str, move: bool = False) -> str:
+    """Returns "copied", "moved", "skipped", or "error:<message>"."""
+    basename = os.path.basename(src)
+    dst = os.path.join(dest_dir, basename)
+
+    if not os.path.isfile(src):  # disk-io: verify source exists before transfer
+        return f"error:source not found: {src}"
+
+    if not _should_transfer(src, dst):
+        return "skipped"
+
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        if move:
+            shutil.move(src, dst)
+            return "moved"
+        else:
+            shutil.copy2(src, dst)
+            return "copied"
+    except OSError as e:
+        return f"error:{e}"
+
+
+def execute_bookmark_transfer(
+    file_paths: List[str],
+    dest_dir: str,
+    move: bool,
+    db: Optional["MetadataDatabase"] = None,
+) -> dict:
+    """DB records survive GUI closure so the daemon can retry incomplete transfers."""
+    dest_dir = os.path.expanduser(dest_dir)
+    op = "move" if move else "copy"
+    results = {"copied": 0, "moved": 0, "skipped": 0, "errors": []}
+
+    if db:
+        db.file_transfer_batch_insert(file_paths, dest_dir, op)
+
+    for src in file_paths:
+        status = transfer_file(src, dest_dir, move=move)
+
+        if status in ("copied", "moved", "skipped"):
+            results[status] += 1
+            if db:
+                db.file_transfer_mark_complete(src, dest_dir, op, status)
+        else:
+            results["errors"].append(status)
+            if db:
+                db.file_transfer_mark_complete(src, dest_dir, op, "failed")
+
+    total = len(file_paths)
+    done = results["copied"] + results["moved"]
+    skip = results["skipped"]
+    errs = len(results["errors"])
+    logger.info(
+        "Bookmark %s to %s: %d done, %d skipped, %d errors (of %d)",
+        op, dest_dir, done, skip, errs, total,
+    )
+    return results

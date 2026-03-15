@@ -214,6 +214,19 @@ class MetadataDatabase:
                     ON file_work(scan_root, work_type)
                 ''')
 
+                # Bookmark file-transfer ledger: tracks copy/move intent
+                # so the daemon can resume interrupted transfers.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS file_transfers (
+                        source_path TEXT NOT NULL,
+                        dest_dir    TEXT NOT NULL,
+                        operation   TEXT NOT NULL,
+                        status      TEXT NOT NULL DEFAULT 'pending',
+                        created_at  REAL NOT NULL,
+                        PRIMARY KEY (source_path, dest_dir, operation)
+                    )
+                ''')
+
                 # Face recognition: detected faces with embeddings
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS face_detections (
@@ -1974,6 +1987,74 @@ class MetadataDatabase:
                 return cursor.rowcount
         except sqlite3.Error as e:
             logger.error("file_work_clear_all failed: %s", e)
+            return 0
+
+    # ------------------------------------------------------------------
+    #  File Transfer Ledger (bookmark copy/move)
+    # ------------------------------------------------------------------
+
+    def file_transfer_batch_insert(self, file_paths: List[str],
+                                   dest_dir: str, operation: str) -> None:
+        """INSERT OR IGNORE — idempotent; safe to call before confirming file state."""
+        if not file_paths:
+            return
+        now = time.time()
+        rows = [(fp, dest_dir, operation, "pending", now) for fp in file_paths]
+        try:
+            with self._lock:
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO file_transfers "
+                    "(source_path, dest_dir, operation, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    rows,
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("file_transfer_batch_insert failed: %s", e)
+
+    def file_transfer_mark_complete(self, source_path: str, dest_dir: str,
+                                    operation: str, status: str) -> None:
+        # why: status transitions are final — no retry logic, just audit trail
+        try:
+            with self._lock:
+                self.conn.execute(
+                    "UPDATE file_transfers SET status = ? "
+                    "WHERE source_path = ? AND dest_dir = ? AND operation = ?",
+                    (status, source_path, dest_dir, operation),
+                )
+                self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("file_transfer_mark_complete failed: %s", e)
+
+    def file_transfer_get_pending(self, dest_dir: str,
+                                  operation: str) -> List[str]:
+        # TODO: daemon resume path for interrupted transfers
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "SELECT source_path FROM file_transfers "
+                    "WHERE dest_dir = ? AND operation = ? AND status = 'pending'",
+                    (dest_dir, operation),
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error("file_transfer_get_pending failed: %s", e)
+            return []
+
+    def file_transfer_cleanup_completed(self, max_age_seconds: float = 86400) -> int:
+        # TODO: call from daemon startup or periodic maintenance
+        cutoff = time.time() - max_age_seconds
+        try:
+            with self._lock:
+                cursor = self.conn.execute(
+                    "DELETE FROM file_transfers "
+                    "WHERE status != 'pending' AND created_at < ?",
+                    (cutoff,),
+                )
+                self.conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logger.error("file_transfer_cleanup_completed failed: %s", e)
             return 0
 
     def ledger_reset_all(self) -> int:

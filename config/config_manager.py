@@ -111,6 +111,10 @@ DEFAULT_CONFIG = {
             "sequence": "Space",
             "description": "Open with external application"
         },
+        "menu:bookmark": {
+            "sequence": "B",
+            "description": "Copy/move files to bookmarked directories"
+        },
         "script:delete_selected": {
             "sequence": "Shift+R",
             "description": "Delete selected images",

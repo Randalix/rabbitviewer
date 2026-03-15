@@ -401,7 +401,10 @@ class ThumbnailService:
             self._compound_task_counter += 1
             task_id = f"script_task::{self._compound_task_counter}"
 
-        op_tuples = [(op['name'], op['file_paths']) for op in operations]
+        op_tuples = [
+            (op['name'], op['file_paths'], op.get('kwargs', {}))
+            for op in operations
+        ]
         queued = self.rm.submit_task(
             task_id,
             Priority.NORMAL,

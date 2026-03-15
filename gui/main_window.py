@@ -121,7 +121,8 @@ class MainWindow(QMainWindow):
         self.script_manager.load_scripts(scripts_dir)
 
         self._setup_hotkeys()
-        self.modal_menu = ModalMenu(self, build_menus(), self.script_manager)
+        self._script_api_ref = [self.script_manager.api]
+        self.modal_menu = ModalMenu(self, build_menus(self._script_api_ref), self.script_manager)
         self._setup_event_subscriptions()
 
         if show_at_startup():

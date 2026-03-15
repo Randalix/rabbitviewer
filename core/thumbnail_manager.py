@@ -74,6 +74,8 @@ class ThumbnailManager:
         self._task_operations: Dict[str, Callable] = {
             "send2trash": self._op_send2trash,
             "remove_records": self._op_remove_records,
+            "bookmark_copy": self._op_bookmark_copy,
+            "bookmark_move": self._op_bookmark_move,
         }
 
         # Limit speculative view tasks to 1 concurrent worker so user
@@ -384,7 +386,12 @@ class ThumbnailManager:
             return None
 
         # Slow step: exiftool -JpgFromRaw, 7-17s per CR3 on NAS.
-        result = self._process_view_image_task(image_path, md5_hash, cancel_event=cancel_event)
+        from plugins.exiftool_process import ExifToolCancelled
+        try:
+            result = self._process_view_image_task(image_path, md5_hash, cancel_event=cancel_event)
+        except ExifToolCancelled:
+            logger.debug("View image cancelled for %s", os.path.basename(image_path))
+            return None
         if not result:
             logger.error(f"View image generation failed for {image_path}.")
             return None
@@ -995,7 +1002,8 @@ class ThumbnailManager:
             return None
 
         start_time = time.time()
-        view_image_path = plugin.process_view_image(image_path, md5_hash)
+        view_image_path = plugin.process_view_image(image_path, md5_hash,
+                                                    cancel_event=cancel_event)
         duration = time.time() - start_time
         logger.debug(f"plugin.process_view_image for {os.path.basename(image_path)} took {duration:.4f} seconds.")
         if not view_image_path:
@@ -1470,31 +1478,46 @@ class ThumbnailManager:
     def get_task_operation(self, name: str) -> Optional[Callable]:
         return self._task_operations.get(name)
 
-    def execute_compound_task(self, operations: List[Tuple[str, List[str]]]) -> Dict[str, Any]:
-        """Execute a sequence of named operations. Runs in a RenderManager worker thread."""
+    def execute_compound_task(self, operations: list) -> Dict[str, Any]:
+        """Execute a sequence of named operations. Runs in a RenderManager worker thread.
+
+        Each element is ``(name, file_paths)`` or ``(name, file_paths, kwargs)``.
+        """
         results: Dict[str, Any] = {}
-        for name, file_paths in operations:
+        for op in operations:
+            name, file_paths = op[0], op[1]
+            kwargs = op[2] if len(op) > 2 else {}
             handler = self._task_operations.get(name)
             if not handler:
                 logger.error(f"Unknown task operation: {name}")
                 results[name] = {"error": f"unknown operation: {name}"}
                 continue
             try:
-                results[name] = handler(file_paths)
+                results[name] = handler(file_paths, **kwargs)
             except Exception as e:  # why: task operations are user-registered handlers; any exception must not crash the worker loop
                 logger.error(f"Task operation '{name}' failed: {e}", exc_info=True)
                 results[name] = {"error": str(e)}
         return results
 
-    def _op_send2trash(self, file_paths: List[str]) -> Dict[str, Any]:
-        """Move files (and their XMP sidecars) to system trash."""
+    def _op_send2trash(self, file_paths: List[str], **_kw) -> Dict[str, Any]:
         from core.file_ops import trash_with_sidecars
         return trash_with_sidecars(file_paths)
 
-    def _op_remove_records(self, file_paths: List[str]) -> Dict[str, Any]:
-        """Remove database records and associated cache files."""
+    def _op_remove_records(self, file_paths: List[str], **_kw) -> Dict[str, Any]:
         success = self.metadata_db.remove_records(file_paths)
         return {"success": success, "count": len(file_paths)}
+
+    def _op_bookmark_copy(self, file_paths: List[str], *,
+                          dest_dir: str, **_kw) -> Dict[str, Any]:
+        from core.bookmark_manager import execute_bookmark_transfer
+        return execute_bookmark_transfer(file_paths, dest_dir, move=False,
+                                         db=self.metadata_db)
+
+    def _op_bookmark_move(self, file_paths: List[str], *,
+                          dest_dir: str, **_kw) -> Dict[str, Any]:
+        from core.bookmark_manager import execute_bookmark_transfer
+        return execute_bookmark_transfer(file_paths, dest_dir, move=True,
+                                         db=self.metadata_db)
 
     def shutdown(self) -> None:
         """Gracefully shuts down the ThumbnailManager and its associated RenderManager."""

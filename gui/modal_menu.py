@@ -29,6 +29,7 @@ class MenuNode:
     children: list = field(default_factory=list)
     visible: Optional[Callable] = None
     action: Optional[Callable] = None
+    refresh: Optional[Callable] = None  # called before showing to rebuild children
 
 
 class ModalMenu(QWidget):
@@ -102,6 +103,11 @@ class ModalMenu(QWidget):
     # ------------------------------------------------------------------
 
     def _show_node(self, node: MenuNode):
+        if node.refresh:
+            try:
+                node.refresh(node)
+            except Exception:  # why: refresh callbacks load external config (e.g. bookmarks YAML); must not crash the menu
+                logger.exception("MenuNode refresh failed for '%s'", node.label)
         self._current_node = node
         self._visible_items = [
             child for child in node.children
@@ -185,7 +191,7 @@ class ModalMenu(QWidget):
         text = event.text().lower()
         item = self._key_map.get(text)
         if item:
-            if item.children:
+            if item.children or item.refresh:
                 self._breadcrumb.append(item.label)
                 self._show_node(item)
             elif item.action:

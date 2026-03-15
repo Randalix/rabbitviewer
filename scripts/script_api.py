@@ -108,12 +108,15 @@ class ScriptAPI:
     def daemon_tasks(self, operations: List[tuple]) -> bool:
         """Submit compound task operations to the daemon for async execution.
 
-        Each tuple is ``(operation_name, file_paths)`` where *operation_name*
-        is a key in the daemon's task operation registry (e.g. ``"send2trash"``,
-        ``"remove_records"``).
+        Each tuple is ``(name, file_paths)`` or ``(name, file_paths, kwargs)``.
         """
         try:
-            ops = [{"name": name, "file_paths": paths} for name, paths in operations]
+            ops = []
+            for op in operations:
+                d = {"name": op[0], "file_paths": op[1]}
+                if len(op) > 2:
+                    d["kwargs"] = op[2]
+                ops.append(d)
             response = self.service.run_tasks(ops)
             if response is None:
                 logger.error("daemon_tasks failed: no response (connection issue)")
