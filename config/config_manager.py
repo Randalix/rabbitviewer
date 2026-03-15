@@ -48,7 +48,7 @@ DEFAULT_CONFIG = {
             "description": "Toggle inspector window"
         },
         "pin_inspector": {
-            "sequence": "Shift+P",
+            "sequence": "Shift+I",
             "description": "Pin/unpin inspector to current image"
         },
         "toggle_face_palette": {

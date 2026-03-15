@@ -74,7 +74,7 @@ hotkeys:
     sequence: I
     description: Toggle inspector window
   pin_inspector:
-    sequence: P
+    sequence: Shift+I
     description: Pin/unpin inspector to current image
   "script:set_rating_0":
     sequence: "0"
