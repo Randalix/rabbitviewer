@@ -144,7 +144,8 @@ class RawPlugin(BasePlugin):
             logger.error("Unexpected error in process_thumbnail for %s: %s", image_path, e, exc_info=True)
             return None
 
-    def process_view_image(self, image_path: str, md5_hash: str) -> Optional[str]:
+    def process_view_image(self, image_path: str, md5_hash: str,
+                           cancel_event=None) -> Optional[str]:
         view_path = self.get_view_image_path(md5_hash)
         if os.path.exists(view_path):  # disk-io: cache file check
             return view_path

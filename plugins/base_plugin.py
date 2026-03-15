@@ -186,7 +186,8 @@ class BasePlugin(ABC):
         pass
 
     @abstractmethod
-    def process_view_image(self, image_path: str, md5_hash: str) -> Optional[str]:
+    def process_view_image(self, image_path: str, md5_hash: str,
+                           cancel_event=None) -> Optional[str]:
         """
         Process an image to create its full-resolution view image. This can be slower.
         Returns the path to the generated view image, or None on failure.

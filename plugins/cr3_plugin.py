@@ -114,7 +114,8 @@ class CR3Plugin(BasePlugin):
             pass
         return None
 
-    def _extract_jpg_from_raw_to_memory(self, image_path: str) -> Optional[bytes]:
+    def _extract_jpg_from_raw_to_memory(self, image_path: str,
+                                        cancel_event=None) -> Optional[bytes]:
         """
         Extracts the embedded preview JPG into an in-memory bytes buffer via the
         persistent exiftool process. Tries JpgFromRaw first, falls back to PreviewImage.
@@ -124,7 +125,8 @@ class CR3Plugin(BasePlugin):
         # First attempt: JpgFromRaw (typically highest quality)
         logger.debug(f"Attempting to extract JpgFromRaw from {os.path.basename(image_path)}...")
         try:
-            data = et.execute(["-JpgFromRaw", "-b", image_path])
+            data = et.execute(["-JpgFromRaw", "-b", image_path],
+                              cancel_event=cancel_event)
             if data:
                 logger.debug("Successfully extracted JpgFromRaw.")
                 return data
@@ -134,7 +136,8 @@ class CR3Plugin(BasePlugin):
         # Fallback: PreviewImage
         logger.debug(f"JpgFromRaw empty/failed; falling back to PreviewImage for {os.path.basename(image_path)}.")
         try:
-            data = et.execute(["-PreviewImage", "-b", image_path])
+            data = et.execute(["-PreviewImage", "-b", image_path],
+                              cancel_event=cancel_event)
             if data:
                 logger.debug("Successfully extracted PreviewImage.")
                 return data
@@ -265,7 +268,8 @@ class CR3Plugin(BasePlugin):
             logger.error(f"Unexpected error in process_thumbnail for {image_path}: {e}", exc_info=True)
             return None
 
-    def process_view_image(self, image_path: str, md5_hash: str) -> Optional[str]:
+    def process_view_image(self, image_path: str, md5_hash: str,
+                           cancel_event=None) -> Optional[str]:
         """
         Generates the full-resolution view image from the raw file's embedded JPG.
         """
@@ -275,7 +279,8 @@ class CR3Plugin(BasePlugin):
 
         try:
             orientation = self._get_orientation_from_cr3(image_path)
-            image_bytes = self._extract_jpg_from_raw_to_memory(image_path)
+            image_bytes = self._extract_jpg_from_raw_to_memory(
+                image_path, cancel_event=cancel_event)
 
             if image_bytes:
                 if self.generate_view_image(image_path, image_bytes, orientation, view_image_path):

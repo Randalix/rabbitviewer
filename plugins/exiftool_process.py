@@ -61,6 +61,10 @@ def is_exiftool_available() -> bool:
     return _resolve_exiftool() is not None
 
 
+class ExifToolCancelled(Exception):
+    """Raised when an exiftool command is cancelled via cancel_event."""
+
+
 class ExifToolProcess:
     """Wraps a single persistent exiftool -stay_open process."""
 
@@ -81,16 +85,24 @@ class ExifToolProcess:
             stderr=subprocess.DEVNULL,
         )
 
-    def execute(self, args: List[str]) -> bytes:
-        """Send args to the persistent process and return its stdout bytes."""
+    def execute(self, args: List[str],
+                cancel_event: Optional[threading.Event] = None) -> bytes:
+        """Send args to the persistent process and return its stdout bytes.
+
+        Raises ``ExifToolCancelled`` if *cancel_event* is set during execution.
+        The exiftool process is restarted after a cancel to flush stale output.
+        """
         try:
-            return self._do_execute(args)
+            return self._do_execute(args, cancel_event=cancel_event)
+        except ExifToolCancelled:
+            raise  # why: don't retry a deliberate cancellation
         except Exception as e:
             logger.warning("ExifToolProcess: execute failed (%s); restarting.", e)
             self._restart()
-            return self._do_execute(args)
+            return self._do_execute(args, cancel_event=cancel_event)
 
-    def _do_execute(self, args: List[str], timeout: float = 30.0) -> bytes:
+    def _do_execute(self, args: List[str], timeout: float = 30.0,
+                    cancel_event: Optional[threading.Event] = None) -> bytes:
         self._counter += 1
         exec_id = self._counter
         sentinel = f"{{ready{exec_id}}}\n".encode()
@@ -103,12 +115,19 @@ class ExifToolProcess:
         sentinel_len = len(sentinel)
         deadline = time.monotonic() + timeout
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                # why: restart to flush the abandoned command's output;
+                # the sentinel from this exec_id would corrupt the next call.
+                self._restart()
+                raise ExifToolCancelled(f"exiftool command cancelled (exec_id={exec_id})")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(f"exiftool did not respond within {timeout}s")
-            ready, _, _ = select.select([self._process.stdout], [], [], remaining)
+            # why: cap select timeout at 0.5s so cancel_event is polled promptly
+            poll_time = min(remaining, 0.5) if cancel_event is not None else remaining
+            ready, _, _ = select.select([self._process.stdout], [], [], poll_time)
             if not ready:
-                raise TimeoutError(f"exiftool did not respond within {timeout}s")
+                continue  # select timed out — re-check cancel_event and deadline
             chunk = self._process.stdout.read1(65536)  # type: ignore[union-attr]
             if not chunk:
                 raise RuntimeError("exiftool process closed stdout unexpectedly")
