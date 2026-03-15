@@ -42,6 +42,7 @@ class EventType(Enum):
     INSPECTOR_UPDATE = "inspector_update"
     
     # UI command events
+    OPEN_BREADCRUMB = "open_breadcrumb"
     OPEN_FILTER = "open_filter"
     OPEN_TAG_EDITOR = "open_tag_editor"
     OPEN_TAG_FILTER = "open_tag_filter"
@@ -73,6 +74,9 @@ class EventType(Enum):
     # Script / menu events
     RUN_SCRIPT = "run_script"
     OPEN_MODAL_MENU = "open_modal_menu"
+
+    # Directory events
+    OPEN_RECENT_DIRECTORY = "open_recent_directory"
 
     # Status messages
     STATUS_MESSAGE = "status_message"
@@ -178,6 +182,10 @@ class ThumbnailOverlayEventData(EventData):
     params: dict = field(default_factory=dict)
     position: str = "center"
     duration: Optional[int] = None  # ms; None = permanent
+
+@dataclass
+class DirectoryEventData(EventData):
+    path: str = ""
 
 # High-frequency events that are not appended to history to avoid evicting
 # genuinely useful events and to reduce lock hold time.

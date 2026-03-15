@@ -94,6 +94,7 @@ class MainWindow(QMainWindow):
             self.setStyleSheet("QWidget { border: 1px solid red; }")
 
         self.filter_dialog = None
+        self.breadcrumb_bar = None
         self.tag_editor_dialog = None
         self.tag_filter_dialog = None
         self.comfyui_dialog = None
@@ -741,6 +742,7 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
         event_system.subscribe(EventType.OPEN_COMPARE_SPLIT, lambda _: self._open_compare_view("split"))
         event_system.subscribe(EventType.NAVIGATE_PARENT, lambda _: self.thumbnail_view.navigate_to_parent())
+        event_system.subscribe(EventType.OPEN_RECENT_DIRECTORY, self._handle_open_recent)
 
     def _handle_inspector_event(self, event_data):
         self.current_hovered_image = event_data.image_path
@@ -829,11 +831,16 @@ class MainWindow(QMainWindow):
     def load_directory(self, directory_path: str, recursive: bool = True):
         logger.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")
         self.last_known_directory = directory_path
+        from core.recent_directories import add as add_recent
+        add_recent(directory_path)
         logger.info("MainWindow: Calling thumbnail_view.load_directory...")
         self.thumbnail_view.load_directory(directory_path, recursive)
         logger.info("MainWindow: Directory loading completed, setting current widget...")
         self.stacked_widget.setCurrentWidget(self.thumbnail_view)
         logger.info("MainWindow: ThumbnailView is now the current widget")
+
+    def _handle_open_recent(self, event_data):
+        self.load_directory(event_data.path)
 
     def get_removed_images(self) -> Set[str]:
         return set(self._removed_images)
