@@ -1,5 +1,5 @@
-from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QWidget, QApplication
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFontMetrics, QPainter
 
 
@@ -87,6 +87,23 @@ class ScrollingLabel(QWidget):
     # ------------------------------------------------------------------
     # Qt overrides
     # ------------------------------------------------------------------
+
+    def enterEvent(self, event):
+        QApplication.setOverrideCursor(Qt.PointingHandCursor)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        QApplication.restoreOverrideCursor()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._text:
+            QApplication.clipboard().setText(self._text)
+            from core.event_system import EventType, event_system, StatusSection
+            event_system.emit(EventType.STATUS_MESSAGE, message="Path copied", section=StatusSection.PROCESS, timeout=2000)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
