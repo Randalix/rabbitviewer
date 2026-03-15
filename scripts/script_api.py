@@ -67,14 +67,24 @@ class ScriptAPI:
         return self._on_main_thread(_get)
 
     def get_selected_images(self) -> Set[str]:
-        """Get paths of all currently selected images.
+        """Get paths of all currently selected images (excludes folders).
 
         Delegates to MainWindow.get_effective_selection() which returns
         the explicit selection, falling back to the hovered image.
         """
-        return self._on_main_thread(
-            lambda: set(self.main_window.get_effective_selection())
-        )
+        def _get():
+            paths = set(self.main_window.get_effective_selection())
+            folder_paths = self.main_window.thumbnail_view.folder_paths
+            return paths - folder_paths if folder_paths else paths
+        return self._on_main_thread(_get)
+
+    def get_selected_folders(self) -> Set[str]:
+        """Get paths of all currently selected folders."""
+        def _get():
+            paths = set(self.main_window.get_effective_selection())
+            folder_paths = self.main_window.thumbnail_view.folder_paths
+            return paths & folder_paths if folder_paths else set()
+        return self._on_main_thread(_get)
 
     def get_benchmark_results(self) -> Dict[str, float]:
         """Return comprehensive benchmark results."""
@@ -174,13 +184,15 @@ class ScriptAPI:
             self._operation_stats['set_selection_error'] = str(e)
 
     def get_all_images(self) -> List[str]:
-        """Get paths of all images currently loaded in the viewer."""
+        """Get paths of all images currently loaded in the viewer (excludes folders)."""
         try:
             def _get():
                 view = self.main_window.thumbnail_view
                 if not view:
                     return []
-                return [str(Path(path).absolute()) for path in view.current_files]
+                folder_paths = view.folder_paths
+                return [str(Path(path).absolute()) for path in view.current_files
+                        if path not in folder_paths]
             return self._on_main_thread(_get)
         except Exception as e:  # why: user scripts may pass garbage; view may be mid-teardown
             logger.error(f"Error in get_all_images: {e}", exc_info=True)

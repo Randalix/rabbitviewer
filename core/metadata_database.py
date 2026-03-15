@@ -1286,6 +1286,107 @@ class MetadataDatabase:
             logger.error(f"Failed to get directory files for {directory_path} from DB: {e}")
             return []
 
+    def get_subdirectory_info(self, parent_path: str) -> List[Dict[str, Any]]:
+        """Discover immediate subdirectories with image counts and preview thumbnails.
+
+        Returns a list of dicts with keys: path, name, image_count,
+        recursive_count, preview_paths.  All data comes from the existing
+        image_metadata table — no filesystem access.
+        """
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                search_path = os.path.join(parent_path, '')
+
+                # Single query: compute per-subdirectory counts and previews.
+                # SUBSTR extracts the relative path after parent_path/.
+                # INSTR finds the first '/' — everything before it is the
+                # immediate subdirectory name.  Direct-child files (no '/')
+                # map to NULL and are excluded.
+                cursor.execute("""
+                    WITH files AS (
+                        SELECT
+                            file_path,
+                            thumbnail_path,
+                            CASE
+                                WHEN INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') > 0
+                                THEN SUBSTR(file_path, LENGTH(?) + 1,
+                                     INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1)
+                                ELSE NULL
+                            END as subdir,
+                            CASE
+                                WHEN INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') > 0
+                                THEN SUBSTR(file_path,
+                                     LENGTH(?) + 1 + INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/'))
+                                     NOT LIKE '%/%'
+                                ELSE 0
+                            END as is_direct
+                        FROM image_metadata
+                        WHERE file_path LIKE ?
+                    )
+                    SELECT
+                        subdir,
+                        COUNT(*) as recursive_count,
+                        SUM(is_direct) as direct_count
+                    FROM files
+                    WHERE subdir IS NOT NULL
+                    GROUP BY subdir
+                    ORDER BY subdir
+                """, (search_path, search_path, search_path,
+                      search_path, search_path, search_path,
+                      search_path + '%'))
+                subdir_rows = cursor.fetchall()
+
+                if not subdir_rows:
+                    return []
+
+                # Fetch up to 4 preview thumbnails per subdirectory in one query
+                placeholders = ','.join('?' * len(subdir_rows))
+                subdir_names = [row[0] for row in subdir_rows]
+                preview_map: Dict[str, List[str]] = {name: [] for name in subdir_names}
+
+                cursor.execute(f"""
+                    SELECT subdir, thumbnail_path FROM (
+                        SELECT
+                            SUBSTR(file_path, LENGTH(?) + 1,
+                                   INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1) as subdir,
+                            thumbnail_path,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY SUBSTR(file_path, LENGTH(?) + 1,
+                                    INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1)
+                            ) as rn
+                        FROM image_metadata
+                        WHERE file_path LIKE ?
+                          AND thumbnail_path IS NOT NULL
+                          AND thumbnail_path != ''
+                          AND INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') > 0
+                          AND SUBSTR(file_path, LENGTH(?) + 1,
+                              INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1) IN ({placeholders})
+                    )
+                    WHERE rn <= 4
+                """, (search_path, search_path, search_path, search_path,
+                      search_path + '%', search_path, search_path, search_path,
+                      *subdir_names))
+
+                for subdir_name, thumb_path in cursor.fetchall():
+                    if subdir_name in preview_map:
+                        preview_map[subdir_name].append(thumb_path)
+
+                results = []
+                for subdir_name, recursive_count, direct_count in subdir_rows:
+                    results.append({
+                        'path': os.path.join(parent_path, subdir_name),
+                        'name': subdir_name,
+                        'image_count': direct_count,
+                        'recursive_count': recursive_count,
+                        'preview_paths': preview_map.get(subdir_name, []),
+                    })
+
+                return results
+        except sqlite3.Error as e:
+            logger.error(f"Failed to get subdirectory info for {parent_path}: {e}")
+            return []
+
     def batch_ensure_records_exist(self, file_paths: List[str]):
         """
         Efficiently creates minimal DB records for a list of files if they don't already exist.

@@ -95,6 +95,10 @@ DEFAULT_CONFIG = {
             "sequence": "M",
             "description": "Open metadata info panel"
         },
+        "navigate_parent": {
+            "sequence": "Backspace",
+            "description": "Navigate to parent folder"
+        },
         "menu:tags": {
             "sequence": "T",
             "description": "Open tags menu"

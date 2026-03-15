@@ -31,6 +31,7 @@ class EventType(Enum):
     # Navigation events
     NAVIGATE_NEXT = "navigate_next"
     NAVIGATE_PREVIOUS = "navigate_previous"
+    NAVIGATE_PARENT = "navigate_parent"
     
     # View events
     VIEW_CHANGE = "view_change"

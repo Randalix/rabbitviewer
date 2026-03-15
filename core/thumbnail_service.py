@@ -9,6 +9,7 @@ import time
 from typing import List, Optional, Dict, Any
 
 from core.directory_scanner import DirectoryScanner, ReconcileContext
+from core.folder_node import FolderNode
 from core.notifications import Notification, FilesRemovedData, ImageEntryModel
 from core.rendermanager import Priority, TaskType, SourceJob
 
@@ -154,6 +155,21 @@ class ThumbnailService:
             'files': sorted(db_files),
             'thumbnail_paths': thumb_map,
         }
+
+    def get_subdirectories(self, parent_path: str) -> List[FolderNode]:
+        """Return FolderNodes for immediate subdirectories that contain images."""
+        rows = self.db.get_subdirectory_info(parent_path)
+        return [
+            FolderNode(
+                path=r['path'],
+                name=r['name'],
+                parent_path=parent_path,
+                image_count=r['image_count'],
+                recursive_count=r['recursive_count'],
+                preview_paths=r['preview_paths'],
+            )
+            for r in rows
+        ]
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None) -> List[str]:

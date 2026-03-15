@@ -132,6 +132,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_view.set_service(self.service)
         self.thumbnail_view.set_daemon_signals(self.daemon_signals)
         self.thumbnail_view.doubleClicked.connect(self._handle_thumbnail_double_click)
+        self.thumbnail_view.folderNavigated.connect(self._handle_folder_navigation)
         self.thumbnail_view.benchmarkComplete.connect(self._handle_benchmark_result)
         self.stacked_widget.addWidget(self.thumbnail_view)
 
@@ -739,6 +740,7 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
         event_system.subscribe(EventType.OPEN_COMPARE_SPLIT, lambda _: self._open_compare_view("split"))
+        event_system.subscribe(EventType.NAVIGATE_PARENT, lambda _: self.thumbnail_view.navigate_to_parent())
 
     def _handle_inspector_event(self, event_data):
         self.current_hovered_image = event_data.image_path
@@ -871,6 +873,11 @@ class MainWindow(QMainWindow):
         if not target_image:
             return
         self.open_media_view(target_image)
+
+    @Slot(str)
+    def _handle_folder_navigation(self, folder_path: str):
+        self.last_known_directory = folder_path
+        self.thumbnail_view.navigate_to_folder(folder_path)
 
     def open_media_view(self, file_path: str):
         if _is_video(file_path):

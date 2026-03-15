@@ -43,6 +43,7 @@ class HotkeyManager(QObject):
 		self.add_action("pin_inspector", lambda: None)  # placeholder; main_window overrides
 		self.add_action("show_hotkey_help", lambda: None)  # placeholder; main_window overrides
 		self.add_action("toggle_info_panel", lambda: None)  # placeholder; main_window overrides
+		self.add_action("navigate_parent", lambda: event_system.publish(EventData(event_type=EventType.NAVIGATE_PARENT, source="hotkey_manager", timestamp=time.time())))
 
 
 	def _on_focus_changed(self, old, new):
