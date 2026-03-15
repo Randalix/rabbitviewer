@@ -121,6 +121,7 @@ class ThumbnailLabel(ItemCard):
                 timestamp=time.time(),
                 image_path=folder_image,
                 normalized_position=QPointF(0.5, 0.5),
+                cache_only=True,
             ))
             return
         pos = self._pending_norm_pos
@@ -785,22 +786,18 @@ class ThumbnailViewWidget(QFrame):
                 len(files), thumb_count, directory_path,
             )
 
-            # Discover subdirectories for non-recursive browsing
+            # Emit files and thumbnails first so the grid populates immediately
+            self._initial_files_signal.emit(sorted(files))
+            if thumbnail_paths:
+                logger.info("[startup] %d cached thumbnail paths from initial response", len(thumbnail_paths))
+                self._initial_thumbs_signal.emit(thumbnail_paths)
+
+            # Discover subdirectories after files are emitted (slower DB queries)
             if not recursive:
                 folder_nodes = self.service.get_subdirectories(directory_path)
                 if folder_nodes:
                     logger.info("[folders] found %d subdirectories in %s", len(folder_nodes), directory_path)
                     self._initial_folders_signal.emit(folder_nodes)
-
-            # Emit via the dedicated signal so the DB-response batch always shows
-            # placeholders immediately, even if fast-scan notifications arrived first
-            # and consumed the is_first_batch shortcut in _add_image_batch.
-            self._initial_files_signal.emit(sorted(files))
-            # Feed cached thumbnail paths directly into the preview pipeline
-            # so the GUI loads QImages from local cache without a daemon round-trip.
-            if thumbnail_paths:
-                logger.info("[startup] %d cached thumbnail paths from initial response", len(thumbnail_paths))
-                self._initial_thumbs_signal.emit(thumbnail_paths)
         else:
             logger.error("Failed to request file list for %s from daemon. Response: %s", directory_path, response)
 

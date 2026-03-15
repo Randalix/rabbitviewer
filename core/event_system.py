@@ -119,6 +119,7 @@ class ViewEventData(EventData):
 class InspectorEventData(EventData):
     image_path: str
     normalized_position: QPointF
+    cache_only: bool = False  # when True, show cached thumbnail/fullres only (no new requests)
 
 
 class StatusSection(Enum):

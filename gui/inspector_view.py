@@ -147,7 +147,8 @@ class InspectorView(QWidget):
         self._desired_image_path = image_path
         self._desired_norm_pos = norm_pos
         self._current_image_path = image_path
-        self._image_inspector.handle_update(image_path, norm_pos)
+        cache_only = event_data.cache_only
+        self._image_inspector.handle_update(image_path, norm_pos, cache_only=cache_only)
 
     @Slot(object)
     def _on_previews_ready(self, data: PreviewsReadyData) -> None:
