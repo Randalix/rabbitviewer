@@ -1,46 +1,39 @@
 """Crops load asynchronously on a background thread so the window opens instantly."""
 import logging
 import os
+import random
 import time
 import threading
 from typing import Optional, List, Dict
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel,
-    QPushButton, QMenu, QFrame, QInputDialog,
+    QWidget, QVBoxLayout, QScrollArea, QLabel,
+    QMenu, QFrame, QInputDialog,
 )
 from PySide6.QtCore import Qt, Signal, QSettings, QEvent
 from PySide6.QtGui import QPixmap, QImage
 
 from core.event_system import event_system, EventType, FacePersonFilterEventData
+from gui.components.item_card import ItemCard
 
 logger = logging.getLogger(__name__)
 
 _BG = "#1e1e1e"
-_BG_TOOLBAR = "#181818"
 _TEXT = "#dcdcdc"
 _TEXT_DIM = "#888888"
 _BORDER = "#2a2a2a"
-_CARD_BG = "#252525"
-_CARD_HOVER = "#333333"
-_SELECT_BORDER = "orange"
 _CARD_SIZE = 100
 _CROP_SIZE = 76
-_CARD_SPACING = 4
 _SECTION_HEADER_HEIGHT = 20
 
 
-class PersonCard(QWidget):
+class PersonCard(ItemCard):
 
-    def __init__(self, person_id: str, name: str, parent=None):
-        super().__init__(parent)
+    def __init__(self, person_id: str, name: str, config: dict = None, parent=None):
+        super().__init__(_CARD_SIZE, config or {}, parent)
         self.person_id = person_id
         self._name = name
-        self._selected = False
-
-        self.setFixedSize(_CARD_SIZE, _CARD_SIZE)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMouseTracking(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -50,7 +43,6 @@ class PersonCard(QWidget):
         self._crop_label = QLabel()
         self._crop_label.setFixedSize(_CROP_SIZE, _CROP_SIZE)
         self._crop_label.setAlignment(Qt.AlignCenter)
-        self._crop_label.setStyleSheet("background: #333; border-radius: 3px;")
         layout.addWidget(self._crop_label, alignment=Qt.AlignCenter)
 
         display_name = name or "Unnamed"
@@ -61,24 +53,13 @@ class PersonCard(QWidget):
         self._name_label.setStyleSheet(f"color: {_TEXT}; font-size: 10px;")
         layout.addWidget(self._name_label)
 
-        self.setStyleSheet(self._style_for(False))
+    def _style_selector(self) -> str:
+        return "PersonCard"
 
     def setCrop(self, pixmap: QPixmap):
         if not pixmap.isNull():
             self._crop_label.setPixmap(pixmap.scaled(
                 _CROP_SIZE, _CROP_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-
-    def setSelected(self, selected: bool):
-        if self._selected != selected:
-            self._selected = selected
-            self.setStyleSheet(self._style_for(selected))
-
-    @staticmethod
-    def _style_for(selected: bool) -> str:
-        border = _SELECT_BORDER if selected else "transparent"
-        return (f"PersonCard {{ background: {_CARD_BG}; border: 2px solid {border};"
-                f" border-radius: 4px; }}"
-                f" PersonCard:hover {{ background: {_CARD_HOVER}; }}")
 
 
 class FacePalette(QWidget):
@@ -91,12 +72,12 @@ class FacePalette(QWidget):
         self._config_manager = config_manager
         self._service = None
         self._crop_generation = 0  # incremented on refresh to drop stale crops
+        self._current_files: Optional[List[str]] = None  # scoped to thumbnail view
+        self._gui_config = config_manager.get("gui", {}) if config_manager else {}
 
         # Selection state
         self._selected_person_ids: List[str] = []
         self._person_cards: Dict[str, PersonCard] = {}  # person_id -> card
-        self._card_order: List[str] = []  # ordered person_ids for range selection
-        self._anchor_person_id: Optional[str] = None
 
         self.setWindowTitle("People")
         self.setMinimumSize(300, 250)
@@ -118,6 +99,22 @@ class FacePalette(QWidget):
         self._service = service
         self._refresh_grid()
 
+    def set_current_files(self, file_paths: List[str]):
+        self._current_files = file_paths
+        self._refresh_grid()
+
+    def get_selection(self) -> List[str]:
+        return list(self._selected_person_ids)
+
+    def restore_selection(self, person_ids: List[str]):
+        """Restore a previously saved selection, dropping IDs that no longer exist."""
+        self._selected_person_ids = [
+            pid for pid in person_ids if pid in self._person_cards
+        ]
+        self._sync_selection_visuals()
+        if self._selected_person_ids:
+            self._emit_filter()
+
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -129,31 +126,6 @@ class FacePalette(QWidget):
                 border: 1px solid {_BORDER};
             }}
         """)
-
-        toolbar = QWidget()
-        toolbar.setStyleSheet(f"background: {_BG_TOOLBAR};")
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(8, 4, 8, 4)
-
-        title = QLabel("People")
-        title.setStyleSheet(f"color: {_TEXT}; font-size: 13px; font-weight: bold;")
-        toolbar_layout.addWidget(title)
-        toolbar_layout.addStretch()
-
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setFixedHeight(22)
-        self._clear_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: #464646; color: {_TEXT};
-                border: none; border-radius: 3px; font-size: 11px;
-                padding: 0 8px;
-            }}
-            QPushButton:hover {{ background: #555; }}
-        """)
-        self._clear_btn.clicked.connect(self._clear_selection)
-        self._clear_btn.setVisible(False)
-        toolbar_layout.addWidget(self._clear_btn)
-        main_layout.addWidget(toolbar)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -188,7 +160,6 @@ class FacePalette(QWidget):
         for card in self._person_cards.values():
             card.deleteLater()
         self._person_cards.clear()
-        self._card_order.clear()
         self._named_ids.clear()
         self._unnamed_ids.clear()
         self._crop_generation += 1
@@ -199,7 +170,10 @@ class FacePalette(QWidget):
             self._empty_label.setVisible(True)
             return
 
-        persons = self._service.get_all_persons()
+        if self._current_files is not None:
+            persons = self._service.get_persons_for_files(self._current_files)
+        else:
+            persons = self._service.get_all_persons()
         if not persons:
             self._named_header.setVisible(False)
             self._unnamed_header.setVisible(False)
@@ -218,12 +192,10 @@ class FacePalette(QWidget):
         for person in named:
             self._create_card(person)
             self._named_ids.append(person['person_id'])
-            self._card_order.append(person['person_id'])
 
         for person in unnamed:
             self._create_card(person)
             self._unnamed_ids.append(person['person_id'])
-            self._card_order.append(person['person_id'])
 
         self._layout_cards()
         self._start_crop_loader(persons)
@@ -231,7 +203,7 @@ class FacePalette(QWidget):
     def _create_card(self, person: dict) -> PersonCard:
         card = PersonCard(
             person['person_id'], person['name'],
-            parent=self._grid_container)
+            config=self._gui_config, parent=self._grid_container)
         card.setSelected(person['person_id'] in self._selected_person_ids)
         self._person_cards[person['person_id']] = card
         card.show()
@@ -242,11 +214,18 @@ class FacePalette(QWidget):
     # ------------------------------------------------------------------
 
     def _layout_cards(self):
-        """No grid teardown needed — just reposition existing cards."""
-        margin = 8
-        available = self._scroll.viewport().width() - 2 * margin
-        cols = max(1, available // (_CARD_SIZE + _CARD_SPACING))
-        y = margin
+        """Reposition cards using the same column/centering math as VirtualGridManager."""
+        spacing = self._gui_config.get("spacing", 5)
+        available = self._scroll.viewport().width()
+        cell = _CARD_SIZE + spacing
+        content_width = available - 2 * spacing
+        cols = max(1, int((content_width + spacing) / cell)) if cell > 0 else 1
+
+        # Center the grid horizontally (mirrors VirtualGridManager._x_offset).
+        grid_width = spacing + cols * cell
+        x_offset = max(0, (available - grid_width) // 2)
+
+        y = spacing
 
         def _place_section(ids: list, y_start: int) -> int:
             y = y_start
@@ -256,27 +235,27 @@ class FacePalette(QWidget):
                     continue
                 col = i % cols
                 row = i // cols
-                x = margin + col * (_CARD_SIZE + _CARD_SPACING)
-                card.move(x, y + row * (_CARD_SIZE + _CARD_SPACING))
+                x = x_offset + spacing + col * cell
+                card.move(x, y + row * cell)
             if ids:
                 rows = (len(ids) + cols - 1) // cols
-                y += rows * (_CARD_SIZE + _CARD_SPACING)
+                y += rows * cell
             return y
 
         if self._named_ids:
-            self._named_header.move(margin, y)
-            self._named_header.resize(available, _SECTION_HEADER_HEIGHT)
+            self._named_header.move(x_offset + spacing, y)
+            self._named_header.resize(content_width, _SECTION_HEADER_HEIGHT)
             y += _SECTION_HEADER_HEIGHT
             y = _place_section(self._named_ids, y)
-            y += _CARD_SPACING
+            y += spacing
 
         if self._unnamed_ids:
-            self._unnamed_header.move(margin, y)
-            self._unnamed_header.resize(available, _SECTION_HEADER_HEIGHT)
+            self._unnamed_header.move(x_offset + spacing, y)
+            self._unnamed_header.resize(content_width, _SECTION_HEADER_HEIGHT)
             y += _SECTION_HEADER_HEIGHT
             y = _place_section(self._unnamed_ids, y)
 
-        self._grid_container.setFixedHeight(y + margin)
+        self._grid_container.setFixedHeight(y + spacing)
 
     # ------------------------------------------------------------------
     #  Crop cache
@@ -425,30 +404,28 @@ class FacePalette(QWidget):
 
         pid = card.person_id
         modifiers = event.modifiers()
+        selected_set = set(self._selected_person_ids)
 
-        if modifiers & Qt.ControlModifier:
-            if pid in self._selected_person_ids:
-                self._selected_person_ids.remove(pid)
-            else:
-                self._selected_person_ids.append(pid)
-            self._anchor_person_id = pid
-        elif modifiers & Qt.ShiftModifier:
-            if self._anchor_person_id and self._anchor_person_id in self._card_order:
-                start = self._card_order.index(self._anchor_person_id)
-                end = self._card_order.index(pid) if pid in self._card_order else start
-                low, high = min(start, end), max(start, end)
-                for rid in self._card_order[low:high + 1]:
-                    if rid not in self._selected_person_ids:
-                        self._selected_person_ids.append(rid)
-            else:
-                self._selected_person_ids = [pid]
-                self._anchor_person_id = pid
-        else:
-            if self._selected_person_ids == [pid]:
+        if modifiers & Qt.ShiftModifier and modifiers & Qt.ControlModifier:
+            # Shift+Ctrl: replace (same as plain click)
+            if pid in selected_set:
                 self._selected_person_ids = []
             else:
                 self._selected_person_ids = [pid]
-            self._anchor_person_id = pid
+        elif modifiers & Qt.ControlModifier:
+            # Ctrl+click: remove only (no-op if not selected)
+            if pid in selected_set:
+                self._selected_person_ids.remove(pid)
+        elif modifiers & Qt.ShiftModifier:
+            # Shift+click: add single item to selection
+            if pid not in selected_set:
+                self._selected_person_ids.append(pid)
+        else:
+            # Plain click: replace (clear all if clicked is already selected)
+            if pid in selected_set:
+                self._selected_person_ids = []
+            else:
+                self._selected_person_ids = [pid]
 
         self._sync_selection_visuals()
         self._emit_filter()
@@ -476,7 +453,6 @@ class FacePalette(QWidget):
     def _sync_selection_visuals(self):
         for pid, card in self._person_cards.items():
             card.setSelected(pid in self._selected_person_ids)
-        self._clear_btn.setVisible(bool(self._selected_person_ids))
 
     def _clear_selection(self):
         self._selected_person_ids.clear()
@@ -512,6 +488,7 @@ class FacePalette(QWidget):
 
         rename_action = menu.addAction("Rename")
         feature_action = menu.addAction("Set as Feature Face")
+        shuffle_action = menu.addAction("Shuffle Preview")
         menu.addSeparator()
 
         merge_action = None
@@ -519,6 +496,7 @@ class FacePalette(QWidget):
             merge_action = menu.addAction(
                 f"Merge {len(self._selected_person_ids)} people")
 
+        ungroup_action = menu.addAction("Ungroup")
         hide_action = menu.addAction("Hide")
 
         action = menu.exec(event.globalPos())
@@ -529,8 +507,18 @@ class FacePalette(QWidget):
             self._rename_person(pid)
         elif action == feature_action:
             self._set_feature_face_dialog(pid)
+        elif action == shuffle_action:
+            self._shuffle_preview(pid)
         elif action == merge_action:
             self._merge_selected(pid)
+        elif action == ungroup_action:
+            self._service.ungroup_person(pid)
+            self._invalidate_crop_cache(pid)
+            if pid in self._selected_person_ids:
+                self._selected_person_ids.remove(pid)
+            self._refresh_grid()
+            self._sync_selection_visuals()
+            self._emit_filter()
         elif action == hide_action:
             self._service.hide_person(pid, True)
             if pid in self._selected_person_ids:
@@ -561,6 +549,31 @@ class FacePalette(QWidget):
             self._invalidate_crop_cache(person_id)
             self._refresh_grid()
             self._sync_selection_visuals()
+
+    def _shuffle_preview(self, person_id: str):
+        if not self._service:
+            return
+        faces = self._service.get_faces_for_person(person_id)
+        if not faces:
+            return
+        try:
+            from core.face_inference import bytes_to_embedding
+            from core.face_clustering import compute_person_mean
+            embeddings = [bytes_to_embedding(f['embedding']) for f in faces]
+            mean = compute_person_mean(embeddings)
+            if mean is not None:
+                scores = [float(mean @ emb) for emb in embeddings]
+                top = max(scores)
+                candidates = [f for f, s in zip(faces, scores) if s >= top * 0.9]
+            else:
+                candidates = faces
+        except Exception:
+            candidates = faces
+        chosen = random.choice(candidates)
+        self._service.set_feature_face(person_id, chosen['face_id'])
+        self._invalidate_crop_cache(person_id)
+        self._refresh_grid()
+        self._sync_selection_visuals()
 
     def _merge_selected(self, target_id: str):
         if not self._service:

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 _ValidationErrors = (ValueError, TypeError, KeyError)
 from gui.picture_base import PictureBase
+from gui.components.item_card import ItemCard
 from gui.components.virtual_grid_manager import VirtualGridManager
 from core.selection import ReplaceSelectionCommand, AddToSelectionCommand, RemoveFromSelectionCommand
 from core.event_system import (event_system, EventType, EventData, InspectorEventData,
@@ -38,23 +39,18 @@ class ImageState:
     loaded: bool = False
     prioritized: bool = False
 
-class ThumbnailLabel(QLabel):
+class ThumbnailLabel(ItemCard):
 
     def __init__(self, file_path: str, size: int, config: dict):
-        super().__init__()
+        super().__init__(size, config)
         self.file_path = file_path
         self.original_path = file_path
         self.size = size
         self.loaded = False
-        self.selected = False
         self.config = config
 
         self._original_idx: int = -1
         self._overlay_manager: OverlayManager | None = None
-        self.setFixedSize(size, size)
-        self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet(self._makeStyleSheet())
-        self.setMouseTracking(True)
 
         # Throttle inspector events to ~60 fps so rapid mouse movement does not
         # flood the event system and block the GUI thread with socket calls.
@@ -63,21 +59,6 @@ class ThumbnailLabel(QLabel):
         self._inspector_timer.setSingleShot(True)
         self._inspector_timer.setInterval(16)  # ~60 fps
         self._inspector_timer.timeout.connect(self._flushInspectorEvent)
-
-    def _makeStyleSheet(self) -> str:
-        border_width = self.config.get("border_width", 1)
-        border_color = self.config.get(
-            "select_border_color",
-            "orange") if self.selected else "transparent"
-        return f"""
-            QLabel {{
-                background-color: {self.config.get("placeholder_color", "#1a1a1a")};
-                border: {border_width}px solid {border_color};
-            }}
-            QLabel:hover {{
-                border: {border_width}px solid {self.config.get("hover_border_color", "#2d59b6")};
-            }}
-        """
 
     def updateThumbnail(self, pixmap: QPixmap):
         if not pixmap.isNull():
@@ -143,12 +124,6 @@ class ThumbnailLabel(QLabel):
             except Exception:
                 # why: renderer crash must not leave QPainter open or break label rendering
                 logger.exception("[overlay] paintEvent error for idx %d", self._original_idx)
-
-    def setSelected(self, selected: bool):
-        if self.selected != selected:
-            self.selected = selected
-            self.setStyleSheet(self._makeStyleSheet())
-
 
 class ThumbnailViewWidget(QFrame):
     doubleClicked = Signal(str)
