@@ -122,6 +122,11 @@ class TestCacheSizeManager:
         mgr._evicting = False
         mgr._enabled = True
         mgr._notified_full = False
+        mgr._cache_dir = ""
+        mgr._max_disk_usage_pct = 90.0
+        mgr._disk_full = False
+        mgr._disk_check_time = 0.0
+        mgr._notified_disk_full = False
         mgr._lock = __import__("threading").Lock()
         mgr.refresh()
 
@@ -141,6 +146,11 @@ class TestCacheSizeManager:
         mgr._evicting = False
         mgr._enabled = True
         mgr._notified_full = False
+        mgr._cache_dir = ""
+        mgr._max_disk_usage_pct = 90.0
+        mgr._disk_full = False
+        mgr._disk_check_time = 0.0
+        mgr._notified_disk_full = False
         mgr._lock = __import__("threading").Lock()
         mgr.refresh()  # picks up 60 KB
 

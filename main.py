@@ -56,7 +56,10 @@ def _init_core(config_manager):
     thumbnail_manager = ThumbnailManager(config_manager, metadata_db)
 
     max_cache_mb = config_manager.get("max_cache_size_mb", 0)
-    cache_size_manager = CacheSizeManager(metadata_db, max_cache_mb)
+    max_disk_pct = config_manager.get("max_disk_usage_pct", 90.0)
+    cache_size_manager = CacheSizeManager(metadata_db, max_cache_mb,
+                                          cache_dir=cache_dir,
+                                          max_disk_usage_pct=max_disk_pct)
     thumbnail_manager.cache_size_manager = cache_size_manager
     thumbnail_manager.render_manager.cache_size_manager = cache_size_manager
 
