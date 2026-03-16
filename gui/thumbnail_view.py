@@ -942,10 +942,22 @@ class ThumbnailViewWidget(QFrame):
         else:
             logger.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
 
+    def _path_belongs_to_current_directory(self, path: str) -> bool:
+        """Return True if *path* is (or is under) the currently browsed directory."""
+        cur = self.current_directory_path
+        if not cur:
+            return False
+        rp = os.path.realpath(path)
+        rc = os.path.realpath(cur)
+        return rp == rc or rp.startswith(rc + os.sep)
+
     @Slot(object)
     def _on_scan_progress(self, data: ScanProgressData) -> None:
         logger.debug("[trace] scan_progress: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
         try:
+            if not self._path_belongs_to_current_directory(data.path):
+                logger.debug("Ignoring scan_progress for '%s' (current directory: '%s')", data.path, self.current_directory_path)
+                return
             first_batch = not self._startup_first_scan_progress
             if first_batch and self._startup_t0 is not None:
                 self._startup_first_scan_progress = True
@@ -974,6 +986,9 @@ class ThumbnailViewWidget(QFrame):
     @Slot(object)
     def _on_scan_complete(self, data: ScanCompleteData) -> None:
         logger.debug("[trace] scan_complete: all_files=%d, is_loading=%s", len(self.all_files), self._is_loading)
+        if not self._path_belongs_to_current_directory(data.path):
+            logger.debug("Ignoring scan_complete for '%s' (current directory: '%s')", data.path, self.current_directory_path)
+            return
         if self._startup_t0 is not None:
             elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
             logger.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
