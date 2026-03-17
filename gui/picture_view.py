@@ -8,17 +8,16 @@ logger = logging.getLogger(__name__)
 import os
 import time
 import threading
-from .picture_base import PictureBase
+from .picture_base import PictureBase, WHEEL_ZOOM_STEP
 from core.event_system import event_system, EventType, InspectorEventData, StatusMessageEventData, StatusSection
 from network.daemon_signals import DaemonSignals
 from core.notifications import PreviewsReadyData
 
 class PictureView(QWidget):
 
-    # Signals
-    escapePressed = Signal()  # Signal for when Escape is pressed
-    zoomChanged = Signal(float)  # Signal with new zoom level
-    imageChanged = Signal(str)  # Signal emitted when current image changes
+    escapePressed = Signal()
+    zoomChanged = Signal(float)
+    imageChanged = Signal(str)
     closeRequested = Signal()
     _rating_ready = Signal(str, int)  # (path, rating) — marshalled from bg thread
 
@@ -29,7 +28,7 @@ class PictureView(QWidget):
         self.setMouseTracking(True)
 
         self.config_manager = config_manager
-        self._current_path = None # This will store the ORIGINAL path
+        self._current_path = None
         self._picture_base = PictureBase()
         self._picture_base.viewStateChanged.connect(self.update)
         self._rating_ready.connect(self._on_rating_ready)
@@ -53,6 +52,13 @@ class PictureView(QWidget):
         self._wheel_idle_timer.setInterval(150)
         self._wheel_idle_timer.timeout.connect(self._onWheelIdle)
 
+        # why: named timer so closeEvent can stop it; anonymous singleShot
+        # would fire on a deleted C++ widget if the user navigates away.
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.setInterval(1000)
+        self._retry_timer.timeout.connect(self._retry_load_current)
+
         self.service = None
 
     def set_service(self, service):
@@ -63,7 +69,6 @@ class PictureView(QWidget):
             self.escapePressed.emit()
 
     def _queueInspectorUpdate(self, event_pos: QPointF) -> None:
-        """Coalesce rapid mouse-move events; publish at most once per 16 ms."""
         if not self._current_path or not self._picture_base.has_image():
             return
         self._pending_inspector_pos = event_pos
@@ -90,23 +95,20 @@ class PictureView(QWidget):
             logger.error(f"Error updating inspector in picture view: {e}", exc_info=True)
 
     def loadImage(self, image_path: str, force_reload: bool = False) -> bool:
-        # image_path here is always the ORIGINAL path
         if image_path == self._current_path and not force_reload:
-            return True  # Already loaded, and not forced to reload
-        
+            return True
+
         if not self.service:
             logger.error("Service not initialized in PictureView.")
             return False
 
-        # Capture current view state before loading so we can restore it
         _prev_fit = self._picture_base.isFitMode()
         _prev_center = QPointF(self._picture_base.viewState().center)
         _prev_fit_zoom = self._picture_base.calculateFitZoom()
         _prev_zoom = self._picture_base.viewState().zoom
-        
-        # Request the view image at FULLRES_REQUEST priority. Always returns JSON.
-        # view_image_source="memory" → bytes available via get_cached_view_image.
-        # view_image_path set → disk-cached. Neither → generation queued.
+
+        # why: three-way result — "memory" means bytes in daemon cache,
+        # "view_image_path" means disk-cached, neither means generation queued.
         result = self.service.request_view_image(image_path)
 
         if result is None:
@@ -120,20 +122,17 @@ class PictureView(QWidget):
                 message="Connecting...",
                 section=StatusSection.PROCESS,
             ))
-            QTimer.singleShot(1000, lambda p=image_path: self._retry_load(p))
+            self._retry_timer.start()
             return False
 
         if result.get('view_image_source') == "memory":
-            # Mem-cached on daemon — fetch raw bytes via dedicated call.
             image_bytes = self.service.get_cached_view_image(image_path)
             success = self._picture_base.loadImageFromBytes(image_bytes) if image_bytes else False
         elif result.get('view_image_path'):
-            # Disk-cached — load from path.
             success = self._picture_base.loadImageFromPath(result['view_image_path'])
         else:
-            # Generation queued — show placeholder and wait for previews_ready notification.
-            self._picture_base.setImage(QImage())  # Clear the view
-            self._current_path = image_path  # Set path so notification handler knows what to load
+            self._picture_base.setImage(QImage())
+            self._current_path = image_path
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE,
                 source="picture_view",
@@ -148,16 +147,15 @@ class PictureView(QWidget):
                 message=f"Generating preview for {os.path.basename(image_path)}...",
                 section=StatusSection.PROCESS,
             ))
-            return False  # Indicate loading is in progress
+            return False
 
         if success:
-            # Apply DB orientation as a visual transform (rotation is metadata-only).
+            # why: rotation is metadata-only — apply as a visual transform.
             self._apply_db_orientation(image_path)
 
-            self._current_path = image_path  # Store original path for navigation and external use
-            self.imageChanged.emit(self._current_path)  # Emit signal with original path
+            self._current_path = image_path
+            self.imageChanged.emit(self._current_path)
 
-            # Update filepath section immediately
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE,
                 source="picture_view",
@@ -265,10 +263,9 @@ class PictureView(QWidget):
             logger.info(f"Loading newly generated view image via notification: {data.image_entry.path}")
             self.loadImage(data.image_entry.path, force_reload=True)
 
-    def _retry_load(self, image_path: str) -> None:
-        """Retry loading an image after a transient comm failure, if still current."""
-        if self._current_path == image_path:
-            self.loadImage(image_path, force_reload=True)
+    def _retry_load_current(self) -> None:
+        if self._current_path:
+            self.loadImage(self._current_path, force_reload=True)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         if not self._picture_base.has_image():
@@ -369,7 +366,6 @@ class PictureView(QWidget):
 
         # why: exponential scaling — trackpads send smaller deltas (~15-30)
         # so they produce proportionally finer adjustments vs mouse notches (120).
-        from .picture_base import WHEEL_ZOOM_STEP
         log_zoom = math.log(self._picture_base.viewState().zoom)
         log_zoom += WHEEL_ZOOM_STEP * (delta / 120.0)
         new_zoom = math.exp(log_zoom)
@@ -398,6 +394,7 @@ class PictureView(QWidget):
     def closeEvent(self, event):
         self._inspector_timer.stop()
         self._wheel_idle_timer.stop()
+        self._retry_timer.stop()
         if self._daemon_signals:
             self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
         super().closeEvent(event)
