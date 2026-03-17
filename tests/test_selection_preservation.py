@@ -78,7 +78,8 @@ def _ensure_qt_stubs():
 
 _ensure_qt_stubs()
 
-from gui.thumbnail_view import ThumbnailViewWidget, ImageState
+from gui.thumbnail_view import ThumbnailViewWidget
+from gui.thumbnail_model import ImageState
 
 
 # ---------------------------------------------------------------------------
@@ -87,48 +88,52 @@ from gui.thumbnail_view import ThumbnailViewWidget, ImageState
 
 def _make_view(all_files, selected_paths=None):
     """Build a minimal ThumbnailViewWidget with selection state."""
+    from gui.thumbnail_model import ThumbnailModel
+    from gui.selection_interaction import SelectionInteraction
     view = object.__new__(ThumbnailViewWidget)
+    view.model = ThumbnailModel()
+    view.selection = SelectionInteraction(view.model, lambda idx, sel: None)
 
-    view.all_files = list(all_files)
-    view._all_files_set = set(view.all_files)
-    view.current_files = list(view.all_files)
+    view.model.all_files = list(all_files)
+    view.model.all_files_set = set(view.model.all_files)
+    view.model.current_files = list(view.model.all_files)
 
-    view._current_filter = ""
-    view._current_star_filter = [True] * 6
-    view._current_tag_filter = []
-    view._hidden_indices = set()
-    view._visible_to_original_mapping = {}
-    view._original_to_visible_mapping = {}
-    view._visible_original_indices = []
-    view._last_layout_file_count = len(view.all_files)
+    view.model.current_filter = ""
+    view.model.current_star_filter = [True] * 6
+    view.model.current_tag_filter = []
+    view.model.hidden_indices = set()
+    view.model.visible_to_original = {}
+    view.model.original_to_visible = {}
+    view.model.visible_original_indices = []
+    view.model.last_layout_file_count = len(view.model.all_files)
 
-    view._path_to_idx = {}
-    view.image_states = {}
-    for i, f in enumerate(view.all_files):
-        view._path_to_idx[f] = i
-        view.image_states[i] = ImageState()
-        view._visible_to_original_mapping[i] = i
-        view._original_to_visible_mapping[i] = i
-        view._visible_original_indices.append(i)
+    view.model.path_to_idx = {}
+    view.model.image_states = {}
+    for i, f in enumerate(view.model.all_files):
+        view.model.path_to_idx[f] = i
+        view.model.image_states[i] = ImageState()
+        view.model.visible_to_original[i] = i
+        view.model.original_to_visible[i] = i
+        view.model.visible_original_indices.append(i)
 
     # Selection state
     selected_paths = set(selected_paths or [])
-    view._current_selection = selected_paths
-    view._selected_indices = {view._path_to_idx[p] for p in selected_paths if p in view._path_to_idx}
-    view._last_preview_selected = set()
-    view._drag_start_index = -1
-    view._drag_last_index = -1
-    view._selection_mode = None
-    view.selection_anchor_index = None
+    view.selection._current_selection = selected_paths
+    view.selection._selected_indices = {view.model.path_to_idx[p] for p in selected_paths if p in view.model.path_to_idx}
+    view.selection._last_preview_selected = set()
+    view.selection._drag_start_index = -1
+    view.selection._drag_last_index = -1
+    view.selection._selection_mode = None
+    view.selection.selection_anchor_index = None
 
     # Mocks for methods called by remove_images / reorder_files
     view._filter_in_flight = False
     view._filter_pending = False
     view._filter_update_timer = MagicMock()
     view._virtual_grid = MagicMock()
-    view._initial_thumb_paths = {}
-    view._thumb_path_cache = {}
-    view._pixmap_cache = {}
+    view.model.initial_thumb_paths = {}
+    view.model.thumb_path_cache = {}
+    view.model.pixmap_cache = {}
     view.labels = {}
     view.service = MagicMock()
     view.filtersApplied = MagicMock()
@@ -144,14 +149,14 @@ def _make_view(all_files, selected_paths=None):
     view._scan_coalesce_timer = MagicMock()
     view._scan_batch_pending = False
     view._scan_first_batch_flushed = False
-    view._scan_active = False
+    view.model.scan_active = False
     view._sync_virtual_viewport = MagicMock()
     view._recycle_label = MagicMock()
     view.benchmarkComplete = MagicMock()
     view._is_loading = False
-    view._group_mode = False
-    view._grouped_raw_paths = set()
-    view._raw_to_primary = {}
+    view.model.group_mode = False
+    view.model.grouped_raw_paths = set()
+    view.model.raw_to_primary = {}
     view._last_redraw_time = 0
 
     return view
@@ -166,22 +171,22 @@ class TestRecomputeSelectedIndices:
     def test_basic_recompute(self):
         view = _make_view(["/a.jpg", "/b.jpg", "/c.jpg"], selected_paths=["/a.jpg", "/c.jpg"])
         # Manually corrupt indices to simulate stale state
-        view._selected_indices = {99, 100}
+        view.selection._selected_indices = {99, 100}
         view._recompute_selected_indices()
-        assert view._selected_indices == {0, 2}
+        assert view.selection._selected_indices == {0, 2}
 
     def test_recompute_drops_removed_paths(self):
         """Paths in _current_selection but not in _path_to_idx are silently dropped."""
         view = _make_view(["/a.jpg", "/b.jpg"])
-        view._current_selection = {"/a.jpg", "/gone.jpg"}
+        view.selection._current_selection = {"/a.jpg", "/gone.jpg"}
         view._recompute_selected_indices()
-        assert view._selected_indices == {0}
+        assert view.selection._selected_indices == {0}
 
     def test_recompute_empty_selection(self):
         view = _make_view(["/a.jpg", "/b.jpg"])
-        view._current_selection = set()
+        view.selection._current_selection = set()
         view._recompute_selected_indices()
-        assert view._selected_indices == set()
+        assert view.selection._selected_indices == set()
 
 
 # ===================================================================
@@ -206,7 +211,7 @@ class TestRemoveImagesSelection:
 
         # Indices should be recomputed for the new layout
         # After removing /b.jpg: /a.jpg=0, /c.jpg=1, /d.jpg=2
-        assert view._selected_indices == {0, 1}
+        assert view.selection._selected_indices == {0, 1}
 
     def test_removing_selected_file_updates_selection(self):
         """Removing a selected file should update selection to surviving paths."""
@@ -261,27 +266,27 @@ class TestReorderFilesSelection:
         """Selection paths should survive an index remap via reorder_files."""
         files = ["/a.jpg", "/b.jpg", "/c.jpg"]
         view = _make_view(files, selected_paths=["/a.jpg", "/c.jpg"])
-        assert view._selected_indices == {0, 2}
+        assert view.selection._selected_indices == {0, 2}
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget.reorder_files(view, ["/c.jpg", "/b.jpg", "/a.jpg"])
 
         # Paths unchanged, but indices should be remapped
-        assert view._current_selection == {"/a.jpg", "/c.jpg"}
+        assert view.selection._current_selection == {"/a.jpg", "/c.jpg"}
         # After reverse sort: /c.jpg=0, /b.jpg=1, /a.jpg=2
-        assert view._selected_indices == {0, 2}
+        assert view.selection._selected_indices == {0, 2}
 
     def test_reorder_noop_preserves_selection(self):
         """If reorder is a no-op (same order), selection should be unchanged."""
         files = ["/a.jpg", "/b.jpg", "/c.jpg"]
         view = _make_view(files, selected_paths=["/b.jpg"])
-        assert view._selected_indices == {1}
+        assert view.selection._selected_indices == {1}
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget.reorder_files(view, ["/a.jpg", "/b.jpg", "/c.jpg"])
 
         # Same order → early return, indices unchanged
-        assert view._selected_indices == {1}
+        assert view.selection._selected_indices == {1}
 
     def test_reorder_with_subset(self):
         """reorder_files with fewer paths drops unknown paths but preserves selection."""
@@ -292,9 +297,9 @@ class TestReorderFilesSelection:
             # /b.jpg dropped from ordered list
             ThumbnailViewWidget.reorder_files(view, ["/c.jpg", "/a.jpg"])
 
-        assert view._current_selection == {"/a.jpg", "/c.jpg"}
+        assert view.selection._current_selection == {"/a.jpg", "/c.jpg"}
         # After reorder: /c.jpg=0, /a.jpg=1
-        assert view._selected_indices == {0, 1}
+        assert view.selection._selected_indices == {0, 1}
 
 
 # ===================================================================

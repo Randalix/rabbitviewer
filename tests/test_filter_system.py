@@ -249,24 +249,26 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     """Build a minimal stand-in with filter state and methods from ThumbnailViewWidget."""
     from gui.thumbnail_view import ThumbnailViewWidget
 
+    from gui.thumbnail_model import ThumbnailModel
     view = object.__new__(ThumbnailViewWidget)
+    view.model = ThumbnailModel()
 
-    view.all_files = list(all_files or [])
-    view._all_files_set = set(view.all_files)
-    view.current_files = list(view.all_files)
+    view.model.all_files = list(all_files or [])
+    view.model.all_files_set = set(view.model.all_files)
+    view.model.current_files = list(view.model.all_files)
     view._is_loading = is_loading
     view._folder_is_cached = False
 
-    view._current_filter = ""
-    view._current_star_filter = [True, True, True, True, True, True]
-    view._current_tag_filter = []
-    view._clip_search_paths = None
-    view._person_filter_paths = None
-    view._hidden_indices = set()
-    view._visible_to_original_mapping = {}
-    view._original_to_visible_mapping = {}
-    view._visible_original_indices = []
-    view._last_layout_file_count = 0
+    view.model.current_filter = ""
+    view.model.current_star_filter = [True, True, True, True, True, True]
+    view.model.current_tag_filter = []
+    view.model.clip_search_paths = None
+    view.model.person_filter_paths = None
+    view.model.hidden_indices = set()
+    view.model.visible_to_original = {}
+    view.model.original_to_visible = {}
+    view.model.visible_original_indices = []
+    view.model.last_layout_file_count = 0
 
     view._filter_in_flight = False
     view._filter_pending = False
@@ -279,7 +281,7 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     view.filtersApplied = MagicMock()
     view._filtered_paths_ready = MagicMock()
     view._viewport_executor = MagicMock()
-    view.image_states = {}
+    view.model.image_states = {}
 
     return view
 
@@ -313,9 +315,9 @@ class TestIsLoadingCachedFolder:
         view._startup_t0 = None
         view._startup_first_scan_progress = False
         view._startup_inline_thumb_count = 0
-        view._initial_thumb_paths = {}
-        view._path_to_idx = {}
-        view._pixmap_cache = {}
+        view.model.initial_thumb_paths = {}
+        view.model.path_to_idx = {}
+        view.model.pixmap_cache = {}
 
         files = ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
 
@@ -333,9 +335,9 @@ class TestIsLoadingCachedFolder:
         view._startup_t0 = None
         view._startup_first_scan_progress = False
         view._startup_inline_thumb_count = 0
-        view._initial_thumb_paths = {}
-        view._path_to_idx = {}
-        view._pixmap_cache = {}
+        view.model.initial_thumb_paths = {}
+        view.model.path_to_idx = {}
+        view.model.pixmap_cache = {}
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._on_initial_files_received(view, [])
@@ -364,7 +366,7 @@ class TestIsLoadingCachedFolder:
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files, is_loading=True, service=mock_client)
-        view._current_star_filter = [False, False, True, False, False, False]
+        view.model.current_star_filter = [False, False, True, False, False, False]
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget.reapply_filters(view)
@@ -382,29 +384,29 @@ class TestClearFilter:
     def test_clear_filter_resets_text(self):
         from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
-        view._current_filter = "sunset"
+        view.model.current_filter = "sunset"
         ThumbnailViewWidget.clear_filter(view)
-        assert view._current_filter == ""
+        assert view.model.current_filter == ""
 
     def test_clear_filter_resets_star_states(self):
         from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
-        view._current_star_filter = [False, False, True, False, False, False]
+        view.model.current_star_filter = [False, False, True, False, False, False]
         ThumbnailViewWidget.clear_filter(view)
-        assert view._current_star_filter == [True, True, True, True, True, True]
+        assert view.model.current_star_filter == [True, True, True, True, True, True]
 
     def test_clear_filter_resets_hidden_indices(self):
         from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
-        view._hidden_indices = {0, 3, 7}
+        view.model.hidden_indices = {0, 3, 7}
         ThumbnailViewWidget.clear_filter(view)
-        assert view._hidden_indices == set()
+        assert view.model.hidden_indices == set()
 
     def test_clear_filter_starts_debounce_timer(self):
         from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
-        view._current_filter = "test"
-        view._current_star_filter = [False] * 6
+        view.model.current_filter = "test"
+        view.model.current_star_filter = [False] * 6
         ThumbnailViewWidget.clear_filter(view)
         view._filter_update_timer.start.assert_called_once()
 
@@ -454,7 +456,7 @@ class TestApplyFilter:
         from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
         ThumbnailViewWidget.apply_filter(view, "beach")
-        assert view._current_filter == "beach"
+        assert view.model.current_filter == "beach"
         view._filter_update_timer.start.assert_called()
 
     def test_apply_star_filter_sets_states(self):
@@ -462,7 +464,7 @@ class TestApplyFilter:
         view = _make_filter_view()
         new_states = [True, False, True, False, True, False]
         ThumbnailViewWidget.apply_star_filter(view, new_states)
-        assert view._current_star_filter == new_states
+        assert view.model.current_star_filter == new_states
         view._filter_update_timer.start.assert_called()
 
 
@@ -479,16 +481,16 @@ class TestApplyFilterResults:
         visible = {"/img/a.jpg", "/img/c.jpg"}
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._apply_filter_results(view, visible)
-        assert view._hidden_indices == {1, 3}
+        assert view.model.hidden_indices == {1, 3}
 
     def test_all_visible_clears_hidden(self):
         from gui.thumbnail_view import ThumbnailViewWidget
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files)
-        view._hidden_indices = {0, 1}
+        view.model.hidden_indices = {0, 1}
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._apply_filter_results(view, set(files))
-        assert view._hidden_indices == set()
+        assert view.model.hidden_indices == set()
 
     def test_none_visible_hides_all(self):
         from gui.thumbnail_view import ThumbnailViewWidget
@@ -496,7 +498,7 @@ class TestApplyFilterResults:
         view = _make_filter_view(all_files=files)
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._apply_filter_results(view, set())
-        assert view._hidden_indices == {0, 1, 2}
+        assert view.model.hidden_indices == {0, 1, 2}
 
 
 # ===================================================================
