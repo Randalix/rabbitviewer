@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Set, List, TYPE_CHECKING
 import threading
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QApplication
+from PySide6.QtWidgets import QMainWindow, QStackedWidget, QApplication
 from PySide6.QtCore import Slot, QPointF, QTimer, Signal, QSettings
 import logging
 logger = logging.getLogger(__name__)
@@ -54,13 +54,13 @@ class MainWindow(QMainWindow):
         self.service = service
         self.daemon_signals = daemon_signals
 
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self._layout = QVBoxLayout(self.central_widget)
-        self._layout.setContentsMargins(0, 0, 0, 0)
+        from .tiling_manager import TilingManager
+
+        self._tiling = TilingManager()
+        self.setCentralWidget(self._tiling)
 
         self.stacked_widget = QStackedWidget()
-        self._layout.addWidget(self.stacked_widget)
+        self._tiling.set_main_content(self.stacked_widget)
 
         self.status_bar = None
 
@@ -266,19 +266,19 @@ class MainWindow(QMainWindow):
             if not _is_video(neighbor):
                 self._prefetch_view_image_async(neighbor)
 
-    def _open_inspector_window(self):
+    def _open_inspector(self):
         from .inspector_view import InspectorView
-        inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot, parent=self)
+        inspector = InspectorView(self.config_manager, inspector_index=self._inspector_slot)
         self._inspector_slot += 1
         inspector.set_service(self.service)
         inspector.set_daemon_signals(self.daemon_signals)
         self.inspector_views.append(inspector)
         inspector.closed.connect(lambda: self._on_inspector_closed(inspector))
-        inspector.show()
+        self._tiling.dock_right(inspector)
+
         if self.picture_view and self.stacked_widget.currentWidget() == self.picture_view:
             self._prime_inspector_from_picture_view(inspector)
         elif self.current_hovered_image:
-            # Prime only the new inspector with the currently hovered thumbnail.
             event_data = InspectorEventData(
                 event_type=EventType.INSPECTOR_UPDATE,
                 source="main_window",
@@ -287,13 +287,15 @@ class MainWindow(QMainWindow):
                 normalized_position=QPointF(0.5, 0.5),
             )
             inspector.prime(event_data)
-        logger.info("Opened new Inspector window.")
+        logger.info("Opened tiled Inspector view.")
 
     def _on_inspector_closed(self, inspector):
         try:
             self.inspector_views.remove(inspector)
         except ValueError:
             return  # already removed by closeEvent teardown loop
+        self._tiling.undock(inspector)
+        inspector.deleteLater()
         if not self.inspector_views:
             self._inspector_slot = 0
 
@@ -725,9 +727,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_gui_server'):
             self._gui_server.stop()
 
-        # Close any other windows like inspectors and info panels
+        # Tear down tiled inspectors
         for inspector in list(self.inspector_views):
-            inspector.close()
+            inspector.cleanup()
         self.inspector_views.clear()
         for panel in list(self.info_panels):
             panel.close()
@@ -738,6 +740,7 @@ class MainWindow(QMainWindow):
         if self.comfyui_dialog:
             self.comfyui_dialog.close()
             self.comfyui_dialog = None
+        self._tiling.save_state()
         settings = QSettings("RabbitViewer", "MainWindow")
         settings.setValue("geometry", self.saveGeometry())
         settings.sync()
@@ -768,7 +771,7 @@ class MainWindow(QMainWindow):
         hotkeys_config = self.config_manager.get("hotkeys", {})
         self.hotkey_manager = HotkeyManager(self, hotkeys_config)
 
-        self.hotkey_manager.add_action("toggle_inspector", self._open_inspector_window)
+        self.hotkey_manager.add_action("toggle_inspector", self._open_inspector)
         self.hotkey_manager.add_action("pin_inspector", self._pin_last_inspector)
         self.hotkey_manager.add_action("escape_picture_view", self._close_active_media_view)
         self.hotkey_manager.add_action("close_or_quit", self._handle_close_or_quit)
@@ -958,7 +961,7 @@ class MainWindow(QMainWindow):
         elif self.video_view and self.stacked_widget.currentWidget() is self.video_view:
             self.close_video_view()
         elif self.inspector_views:
-            self.inspector_views[-1].close()
+            self.inspector_views[-1].cleanup()
         elif self.info_panels:
             self.info_panels[-1].close()
         elif self.face_palettes:
