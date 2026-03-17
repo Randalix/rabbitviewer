@@ -229,8 +229,10 @@ class TestExiftoolAtomicReplace:
         mock_plugin = MagicMock()
         mock_plugin.is_available.return_value = True
         mock_plugin.write_tags.return_value = True
-        tm.plugin_registry = MagicMock()
-        tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
+        mock_registry = MagicMock()
+        mock_registry.get_plugin_for_format.return_value = mock_plugin
+        tm.plugin_registry = mock_registry
+        tm.metadata_writer.plugin_registry = mock_registry
 
         tm.write_tags_to_file(path, ["animal"])
 
@@ -264,8 +266,10 @@ class TestExiftoolAtomicReplace:
         mock_plugin = MagicMock()
         mock_plugin.is_available.return_value = True
         mock_plugin.write_rating.return_value = True
-        tm.plugin_registry = MagicMock()
-        tm.plugin_registry.get_plugin_for_format.return_value = mock_plugin
+        mock_registry = MagicMock()
+        mock_registry.get_plugin_for_format.return_value = mock_plugin
+        tm.plugin_registry = mock_registry
+        tm.metadata_writer.plugin_registry = mock_registry
 
         tm.write_rating_to_file(path, 5)
 

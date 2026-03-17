@@ -29,6 +29,10 @@ def _get_numpy():
         return None
 
 
+def is_available() -> bool:
+    return _get_numpy() is not None
+
+
 def _load_and_preprocess_image(image_path: str):
     """Returns (1, 3, 224, 224) float32 array, or None."""
     np = _get_numpy()

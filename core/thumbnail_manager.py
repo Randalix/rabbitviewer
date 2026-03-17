@@ -1,29 +1,24 @@
 
 import os
-import pathlib
-import hashlib
 import stat as stat_mod
 import time
 import logging
 import fnmatch
 import threading
 from collections import OrderedDict
-from typing import Optional, Dict, List, Set, Tuple, Any, Callable
+from typing import Optional, Dict, List, Set, Any, Callable
 from core.metadata_database import MetadataDatabase
-from core.rendermanager import Priority, RenderManager, RenderTask, TaskType
+from core.priority import NATIVELY_VIEWABLE
+from core.rendermanager import Priority, RenderManager, RenderTask
 from core.source_cache import SourceExistsCache
+from core.ai_task_coordinator import AITaskCoordinator
+from core.metadata_writer import MetadataWriter
+from core.volume_prober import VolumeProber
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import shutdown_all as _shutdown_exiftool_processes
 from core import notifications as protocol
 
 logger = logging.getLogger(__name__)
-
-# Formats that Qt/PIL can load directly without extraction.
-# When orientation == 1, the GUI can display the original file as-is.
-_NATIVELY_VIEWABLE = frozenset({
-    '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp',
-})
-
 
 # Bump when cached image generation changes in a way that invalidates
 # existing thumbnails/view-images (e.g., orientation handling).
@@ -55,11 +50,15 @@ class ThumbnailManager:
         
         self.render_manager = RenderManager(num_workers=num_workers)
         self.render_manager.start()
-        self.watchdog_handler = watchdog_handler
+        self._watchdog_handler = watchdog_handler
 
-        self._volume_cache: Dict[str, Tuple[bool, float]] = {}   # mount_point → (ok, expiry)
+        self.volume_prober = VolumeProber(config_manager)
+        self.metadata_writer = MetadataWriter(
+            config_manager, self.plugin_registry, metadata_database,
+            self.render_manager, watchdog_handler=watchdog_handler)
+        self.ai_coordinator = AITaskCoordinator(
+            config_manager, metadata_database, self.render_manager)
         self.cache_size_manager = None  # set by daemon after construction
-        self._volume_cache_lock = threading.Lock()
         self.source_cache = SourceExistsCache(ttl=30.0)
 
         # In-memory LRU cache for fast fullres extractions (below threshold → RAM only).
@@ -82,6 +81,14 @@ class ThumbnailManager:
         # requests at FULLRES_REQUEST are never starved.
         self._speculative_view_sem = threading.Semaphore(1)
 
+    @property
+    def watchdog_handler(self):
+        return self._watchdog_handler
+
+    @watchdog_handler.setter
+    def watchdog_handler(self, handler):
+        self._watchdog_handler = handler
+        self.metadata_writer.watchdog_handler = handler
 
     # -- Cache version migration -----------------------------------------------
 
@@ -190,7 +197,7 @@ class ThumbnailManager:
         if not plugin:
             logger.error(f"ThumbnailManager: No plugin found for {image_path}")
             return None
-        md5_hash = self._hash_file(image_path)
+        md5_hash = self.volume_prober.hash_file(image_path)
         if not md5_hash:
             return None
 
@@ -266,7 +273,7 @@ class ThumbnailManager:
             self.metadata_db.ledgers.file_work_remove(image_path, 'thumbnail')
             raise FileNotFoundError(f"Original file not found, record will be cleaned up: {image_path}")
 
-        if not self._is_volume_accessible(image_path):
+        if not self.volume_prober.is_accessible(image_path):
             return None
 
         # Re-check validity — another task may have already processed this file.
@@ -291,7 +298,7 @@ class ThumbnailManager:
             self.metadata_db.ledgers.file_work_remove(image_path, 'thumbnail')
             return None
 
-        header_result = self._read_file_header(image_path)
+        header_result = self.volume_prober.read_file_header(image_path)
         if not header_result:
             return None
         md5_hash, prefetch_buffer = header_result
@@ -358,7 +365,7 @@ class ThumbnailManager:
             self.metadata_db.ledgers.file_work_remove(image_path, 'view_image')
             raise FileNotFoundError(f"Original file not found: {image_path}")
 
-        if not self._is_volume_accessible(image_path):
+        if not self.volume_prober.is_accessible(image_path):
             return None
 
         # Re-check: view image may already exist (disk or memory cache).
@@ -378,7 +385,7 @@ class ThumbnailManager:
             self.metadata_db.ledgers.file_work_remove(image_path, 'view_image')
             return None
 
-        md5_hash = self._hash_file(image_path)
+        md5_hash = self.volume_prober.hash_file(image_path)
         if not md5_hash:
             return None
 
@@ -590,285 +597,16 @@ class ThumbnailManager:
         )
         self.render_manager.notify(notification)
 
-    # ── CLIP embedding generation ───────────────────────────────
-
-    def _generate_clip_embedding(self, file_path: str, cancel_event=None):
-        """Runs in RenderManager worker thread."""
-        from core import clip_inference
-
-        if cancel_event and cancel_event.is_set():
-            return
-
-        # Use cached thumbnail to avoid NAS read
-        paths = self.metadata_db.images.get_thumbnail_paths(file_path)
-        thumb = paths.get('thumbnail_path') if paths else None
-
-        embedding = clip_inference.encode_image(
-            file_path, thumbnail_path=thumb, config_manager=self.config_manager)
-        if embedding is None:
-            logger.debug("CLIP embedding failed for %s", file_path)
-            return
-
-        blob = clip_inference.embedding_to_bytes(embedding)
-        self.metadata_db.embeddings.upsert_embedding(file_path, blob)
-        self.metadata_db.ledgers.file_work_remove(file_path, 'clip')
-        logger.debug("CLIP embedding stored for %s", file_path)
-
-    def create_clip_embed_tasks(self, file_paths, priority: Priority) -> List[RenderTask]:
-        """Task factory for clip_index SourceJob."""
-        if isinstance(file_paths, str):
-            file_paths = [file_paths]
-        tasks = []
-        for fp in file_paths:
-            tasks.append(RenderTask(
-                task_id=f"clip_embed::{fp}",
-                priority=priority,
-                func=self._generate_clip_embedding,
-                args=(fp,),
-            ))
-        return tasks
+    # -- AI task delegation (see core/ai_task_coordinator.py) -----------------
 
     def submit_clip_indexing_job(self, directory: str, file_paths: List[str]):
-        """No-op if numpy missing or AI disabled in config."""
-        from core import clip_inference
-        if not clip_inference._get_numpy() or not self.config_manager.get("ai.enabled", True):
-            return
-        if not self.config_manager.get("ai.clip_search.enabled", True):
-            return
-
-        missing = self.metadata_db.embeddings.get_files_missing_embeddings(file_paths)
-        if not missing:
-            return
-
-        logger.info("CLIP indexing: %d files to embed in %s", len(missing), directory)
-
-        def _clip_generator():
-            batch = []
-            for fp in missing:
-                batch.append(fp)
-                if len(batch) >= 10:
-                    yield batch
-                    batch = []
-            if batch:
-                yield batch
-
-        from core.priority import SourceJob
-        job = SourceJob(
-            job_id=f"clip_index::{directory}",
-            priority=Priority.CLIP_INDEX,
-            task_priority=Priority.CLIP_INDEX,
-            generator=_clip_generator(),
-            task_factory=self.create_clip_embed_tasks,
-            create_tasks=True,
-        )
-        self.render_manager.submit_source_job(job)
-
-    # ── Auto-orientation ────────────────────────────────────────
-
-    def _auto_orient_task(self, file_path: str, cancel_event=None):
-        """Runs in RenderManager worker thread. Skips if orientation set or pending write."""
-        from core import orientation_model
-
-        if cancel_event and cancel_event.is_set():
-            return
-
-        # Guard: skip if orientation already set
-        current_orient = self.metadata_db.images.get_orientation(file_path)
-        if current_orient != 1:
-            self.metadata_db.ledgers.file_work_remove(file_path, 'auto_orient')
-            return
-
-        # Guard: skip if there's a pending orientation write
-        if self.metadata_db.ledgers.pending_write_exists(file_path, 'orientation'):
-            self.metadata_db.ledgers.file_work_remove(file_path, 'auto_orient')
-            return
-
-        paths = self.metadata_db.images.get_thumbnail_paths(file_path)
-        thumb = paths.get('thumbnail_path') if paths else None
-
-        result = orientation_model.predict_orientation(
-            file_path, thumbnail_path=thumb, config_manager=self.config_manager)
-        if result is None:
-            return
-
-        orientation, confidence = result
-        threshold = self.config_manager.get("ai.auto_orient.confidence_threshold", 0.9)
-        if confidence < threshold:
-            logger.debug("Auto-orient: low confidence %.2f for %s", confidence, file_path)
-            return
-        if orientation == 1:
-            return  # already correct
-
-        self.metadata_db.images.set_orientation(file_path, orientation)
-        self.metadata_db.ledgers.file_work_remove(file_path, 'auto_orient')
-        logger.info("Auto-orient: set orientation=%d (conf=%.2f) for %s",
-                     orientation, confidence, file_path)
-
-    def create_auto_orient_tasks(self, file_paths, priority: Priority) -> List[RenderTask]:
-        """Task factory for auto_orient SourceJob."""
-        if isinstance(file_paths, str):
-            file_paths = [file_paths]
-        tasks = []
-        for fp in file_paths:
-            tasks.append(RenderTask(
-                task_id=f"auto_orient::{fp}",
-                priority=priority,
-                func=self._auto_orient_task,
-                args=(fp,),
-            ))
-        return tasks
+        self.ai_coordinator.submit_clip_indexing_job(directory, file_paths)
 
     def submit_auto_orient_job(self, directory: str, file_paths: List[str]):
-        """No-op if AI or auto_orient disabled in config."""
-        if not self.config_manager.get("ai.enabled", True):
-            return
-        if not self.config_manager.get("ai.auto_orient.enabled", False):
-            return
-
-        # Only process files with default orientation (1 = unset)
-        orientations = self.metadata_db.images.batch_get_orientations(file_paths)
-        candidates = [fp for fp in file_paths if orientations.get(fp, 1) == 1]
-        if not candidates:
-            return
-
-        logger.info("Auto-orient: %d candidates in %s", len(candidates), directory)
-
-        def _orient_generator():
-            batch = []
-            for fp in candidates:
-                batch.append(fp)
-                if len(batch) >= 10:
-                    yield batch
-                    batch = []
-            if batch:
-                yield batch
-
-        from core.priority import SourceJob
-        job = SourceJob(
-            job_id=f"auto_orient::{directory}",
-            priority=Priority.CLIP_INDEX,
-            task_priority=Priority.CLIP_INDEX,
-            generator=_orient_generator(),
-            task_factory=self.create_auto_orient_tasks,
-            create_tasks=True,
-        )
-        self.render_manager.submit_source_job(job)
-
-    # ── Face detection + recognition ──────────────────────────────
-
-    def _face_detect_task(self, file_path: str, cancel_event=None):
-        from core import face_inference, face_clustering
-
-        if cancel_event and cancel_event.is_set():
-            return
-
-        # Use view image (full-res cache) for face detection — thumbnails are
-        # too small (128px) for SCRFD's 640×640 input and ArcFace alignment.
-        paths = self.metadata_db.images.get_thumbnail_paths(file_path)
-        view_img = paths.get('view_image_path') if paths else None
-
-        # Skip non-PIL-readable files (RAW formats) when no view image exists yet.
-        # They'll be retried on the next scan once view images are generated.
-        ext = os.path.splitext(file_path)[1].lower()
-        if not view_img and ext not in _NATIVELY_VIEWABLE:
-            logger.debug("Face detection: skipping %s (no view image for RAW file)", file_path)
-            return
-
-        confidence = self.config_manager.get("ai.face_recognition.detection_confidence", 0.5)
-        faces = face_inference.detect_and_embed(
-            file_path, view_image_path=view_img,
-            config_manager=self.config_manager,
-            confidence_threshold=confidence)
-        if not faces:
-            return
-
-        import uuid
-        threshold = self.config_manager.get("ai.face_recognition.recognition_threshold", 0.6)
-
-        # Single query for all person embeddings instead of N queries
-        all_face_rows = self.metadata_db.faces.get_all_person_embeddings()
-        from collections import defaultdict
-        by_person = defaultdict(list)
-        for row in all_face_rows:
-            emb = face_inference.bytes_to_embedding(row['embedding'])
-            if emb is not None:
-                by_person[row['person_id']].append(emb)
-        person_means = []
-        for person_id, embeddings in by_person.items():
-            mean = face_clustering.compute_person_mean(embeddings)
-            if mean is not None:
-                person_means.append((person_id, mean))
-
-        new_face_data = []
-        for face in faces:
-            face_id = str(uuid.uuid4())
-            emb_bytes = face_inference.embedding_to_bytes(face['embedding'])
-            self.metadata_db.faces.insert_face_detection(
-                face_id, file_path, emb_bytes, face['bbox'],
-                face['confidence'], 'buffalo_l')
-            new_face_data.append((face_id, face['embedding']))
-
-        assignments = face_clustering.assign_faces(new_face_data, person_means, threshold)
-        for face_id, person_id in assignments:
-            if person_id:
-                self.metadata_db.faces.assign_face_to_person(face_id, person_id)
-            else:
-                new_person_id = str(uuid.uuid4())
-                self.metadata_db.faces.create_person(new_person_id, feature_face_id=face_id)
-                self.metadata_db.faces.assign_face_to_person(face_id, new_person_id)
-
-        self.metadata_db.ledgers.file_work_remove(file_path, 'face_detect')
-        logger.debug("Face detection: %d faces in %s", len(faces), file_path)
-
-    def create_face_detect_tasks(self, file_paths, priority: Priority) -> List[RenderTask]:
-        if isinstance(file_paths, str):
-            file_paths = [file_paths]
-        tasks = []
-        for fp in file_paths:
-            tasks.append(RenderTask(
-                task_id=f"face_detect::{fp}",
-                priority=priority,
-                func=self._face_detect_task,
-                args=(fp,),
-            ))
-        return tasks
+        self.ai_coordinator.submit_auto_orient_job(directory, file_paths)
 
     def submit_face_detection_job(self, directory: str, file_paths: List[str]):
-        """No-op if AI or face recognition disabled in config."""
-        from core import face_inference
-        if not face_inference._get_numpy() or not self.config_manager.get("ai.enabled", True):
-            return
-        if not self.config_manager.get("ai.face_recognition.enabled", True):
-            return
-        if not self.config_manager.get("ai.face_recognition.auto_index", True):
-            return
-
-        missing = self.metadata_db.faces.get_files_missing_faces(file_paths)
-        if not missing:
-            return
-
-        logger.info("Face detection: %d files to process in %s", len(missing), directory)
-
-        def _face_generator():
-            batch = []
-            for fp in missing:
-                batch.append(fp)
-                if len(batch) >= 10:
-                    yield batch
-                    batch = []
-            if batch:
-                yield batch
-
-        from core.priority import SourceJob
-        job = SourceJob(
-            job_id=f"face_detect::{directory}",
-            priority=Priority.CLIP_INDEX,
-            task_priority=Priority.CLIP_INDEX,
-            generator=_face_generator(),
-            task_factory=self.create_face_detect_tasks,
-            create_tasks=True,
-        )
-        self.render_manager.submit_source_job(job)
+        self.ai_coordinator.submit_face_detection_job(directory, file_paths)
 
     def request_view_image(self, image_path: str) -> Optional[str]:
         """Requests view image generation at FULLRES_REQUEST priority.
@@ -895,7 +633,7 @@ class ThumbnailManager:
 
         # Fast path: natively viewable format with no rotation needed.
         _, ext = os.path.splitext(image_path)
-        if ext.lower() in _NATIVELY_VIEWABLE:
+        if ext.lower() in NATIVELY_VIEWABLE:
             meta = self.metadata_db.images.get_metadata(image_path)
             if meta and meta.get('orientation') == 1:
                 return "direct:" + image_path
@@ -1047,7 +785,7 @@ class ThumbnailManager:
             )
             return
 
-        if not self._is_volume_accessible(image_path):
+        if not self.volume_prober.is_accessible(image_path):
             return
 
         start_time = time.time()
@@ -1067,7 +805,7 @@ class ThumbnailManager:
     def _process_full_metadata_task(self, image_path: str):
         if not self.source_cache.exists(image_path):
             return
-        if not self._is_volume_accessible(image_path):
+        if not self.volume_prober.is_accessible(image_path):
             return
         # Re-check: another worker may have completed this between scheduling and execution
         if not self.metadata_db.images.needs_full_metadata(image_path):
@@ -1078,68 +816,16 @@ class ThumbnailManager:
         duration = time.time() - start_time
         logger.debug(f"Full metadata for {os.path.basename(image_path)} took {duration:.4f}s")
 
-    def _resolve_write_mode(self, ext: str) -> str:
-        overrides = self.config_manager.get("metadata.format_write_mode", {})
-        if ext in overrides:
-            return overrides[ext]
-        return self.config_manager.get("metadata.default_write_mode", "sidecar")
-
-    # Maps write_type → plugin method names and ledger payload key.
-    _WRITE_DISPATCH = {
-        'rating': {
-            'embedded': 'write_rating_embedded',
-            'sidecar': 'write_rating',
-            'payload_key': 'rating',
-        },
-        'tags': {
-            'embedded': 'write_tags_embedded',
-            'sidecar': 'write_tags',
-            'payload_key': 'tags',
-        },
-        'orientation': {
-            'embedded': 'write_orientation_embedded',
-            'sidecar': 'write_orientation',
-            'payload_key': 'orientation',
-        },
-    }
-
-    def _write_to_file(self, file_path: str, write_type: str, value) -> bool:
-        from plugins.base_plugin import sidecar_path_for
-
-        dispatch = self._WRITE_DISPATCH[write_type]
-
-        if not os.path.exists(file_path):  # disk-io: write guard
-            logger.warning("File not found, cannot write %s: %s", write_type, file_path)
-            return False
-
-        ext = os.path.splitext(file_path)[1].lower()
-        mode = self._resolve_write_mode(ext)
-
-        if self.watchdog_handler:
-            suppress_path = file_path if mode == "embedded" else sidecar_path_for(file_path)
-            self.watchdog_handler.ignore_next_modification(suppress_path)
-
-        plugin = self.plugin_registry.get_plugin_for_format(ext)
-        if plugin and plugin.is_available():
-            success = getattr(plugin, dispatch[mode])(file_path, value)
-            if success:
-                self.metadata_db.ledgers.pending_write_remove(
-                    file_path, write_type, {dispatch['payload_key']: value})
-            else:
-                logger.error("Plugin failed to write %s for %s", write_type, file_path)
-            return success
-
-        logger.warning("No plugin found for format %s to write %s for %s", ext, write_type, file_path)
-        return False
+    # -- Write-back delegation (see core/metadata_writer.py) ------------------
 
     def write_rating_to_file(self, file_path: str, rating: int) -> bool:
-        return self._write_to_file(file_path, 'rating', rating)
+        return self.metadata_writer.write_rating(file_path, rating)
 
     def write_tags_to_file(self, file_path: str, tag_names: list) -> bool:
-        return self._write_to_file(file_path, 'tags', tag_names)
+        return self.metadata_writer.write_tags(file_path, tag_names)
 
     def write_orientation_to_file(self, file_path: str, orientation: int) -> bool:
-        return self._write_to_file(file_path, 'orientation', orientation)
+        return self.metadata_writer.write_orientation(file_path, orientation)
 
     def invalidate_cached_images(self, file_path: str):
         """Deletes cached thumbnail, view image, and mem-cache entry for regeneration."""
@@ -1164,94 +850,6 @@ class ThumbnailManager:
     
     def get_supported_formats(self) -> List[str]:
         return list(self.supported_formats)
-
-    def _get_mount_point(self, path: str) -> Optional[str]:
-        """Return the remote mount prefix for *path*, or None for local paths.
-
-        Checks ``remote_paths`` config first, then falls back to the macOS
-        ``/Volumes/X`` heuristic.
-        """
-        for prefix in self.config_manager.get("remote_paths", []):
-            try:
-                pathlib.PurePath(path).relative_to(prefix)
-                return prefix
-            except ValueError:
-                continue
-        # why: macOS mounts network shares and external volumes under /Volumes/<name>
-        parts = pathlib.PurePath(path).parts
-        if len(parts) >= 3 and parts[1] == "Volumes":
-            return str(pathlib.Path(parts[0]) / parts[1] / parts[2])
-        return None
-
-    def _is_volume_accessible(self, path: str, timeout: float = 2.0) -> bool:
-        """
-        Returns False if the volume containing *path* does not respond within
-        *timeout* seconds. Results are cached per mount point for 60 s.
-        Local paths always return True without probing.
-        Callers that return early on False do not requeue the skipped task;
-        the file will be processed again only on the next scan or watchdog event.
-        """
-        mount_point = self._get_mount_point(path)
-        if mount_point is None:
-            return True
-
-        now = time.time()
-        with self._volume_cache_lock:
-            cached = self._volume_cache.get(mount_point)
-            if cached is not None and now < cached[1]:
-                return cached[0]
-
-        responded = threading.Event()
-        def _probe():
-            try:
-                os.stat(mount_point)  # disk-io: volume accessibility probe
-                responded.set()
-            except OSError:
-                pass   # event stays unset; timeout path handles it
-
-        threading.Thread(target=_probe, daemon=True).start()
-        accessible = responded.wait(timeout)
-
-        with self._volume_cache_lock:
-            self._volume_cache[mount_point] = (accessible, now + 60.0)
-
-        if not accessible:
-            logger.warning("Volume inaccessible (timeout %.1fs): %s — skipping task.", timeout, mount_point)
-        return accessible
-
-    def _hash_file(self, file_path: str) -> Optional[str]:
-        """Generate MD5 hash of the first 256KB of the file for performance.
-        Reads only 256KB — callers that also need the prefetch buffer should
-        call _read_file_header directly to avoid a second I/O round-trip.
-        """
-        result = self._read_file_header(file_path, prefetch_size=256 * 1024)
-        return result[0] if result else None
-
-    def _read_file_header(self, file_path: str, prefetch_size: int = 512 * 1024) -> Optional[Tuple[str, bytes]]:
-        """
-        Read the first *prefetch_size* bytes of *file_path* in a single syscall.
-
-        Returns ``(md5_of_first_256KB, header_bytes)`` so callers can both
-        identify the file and inspect its binary structure without a second NAS
-        round-trip.  Returns ``None`` on error.
-        """
-        start_time = time.time()
-        try:
-            with open(file_path, "rb") as f:  # disk-io: prefetch header read
-                header = f.read(prefetch_size)
-
-            # Hash only the first 256 KB so the digest stays compatible with
-            # thumbnails already on disk from previous runs.
-            hash_chunk = header[:256 * 1024]
-            md5 = hashlib.md5(hash_chunk).hexdigest()
-
-            duration = time.time() - start_time
-            logger.debug(f"read_file_header {os.path.basename(file_path)}: {len(header)} B in {duration:.4f}s")
-            return md5, header
-        except OSError as e:
-            duration = time.time() - start_time
-            logger.error(f"ThumbnailManager: Error reading header of {file_path} after {duration:.4f}s: {e}")
-            return None
 
     def request_metadata_extraction(self, image_paths: List[str], priority: Priority = Priority.NORMAL):
         logger.info(f"Queueing metadata extraction for {len(image_paths)} images with {priority.name} priority.")
@@ -1485,31 +1083,6 @@ class ThumbnailManager:
         self.metadata_db.close()
         logger.info("ThumbnailManager: Shutdown complete.")
 
-    # ------------------------------------------------------------------
-    #  Pending-write recovery
-    # ------------------------------------------------------------------
-
     def recover_pending_writes(self) -> int:
-        pending = self.metadata_db.ledgers.pending_write_get_all()
-        if not pending:
-            return 0
-
-        count = 0
-        for row in pending:
-            fp = row['file_path']
-            wt = row['write_type']
-            dispatch = self._WRITE_DISPATCH.get(wt)
-            if not dispatch:
-                logger.warning("Unknown pending write type: %s for %s", wt, fp)
-                continue
-            value = row['payload'][dispatch['payload_key']]
-            self.render_manager.submit_task(
-                f"write_{wt}::{fp}", Priority.NORMAL,
-                self._write_to_file, fp, wt, value,
-                task_type=TaskType.SIMPLE,
-            )
-            count += 1
-
-        logger.info("Recovered %d pending file writes from prior session", count)
-        return count
+        return self.metadata_writer.recover_pending_writes()
 

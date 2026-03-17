@@ -54,6 +54,10 @@ def _get_numpy():
         return None
 
 
+def is_available() -> bool:
+    return _get_numpy() is not None
+
+
 def _get_pil():
     try:
         from PIL import Image

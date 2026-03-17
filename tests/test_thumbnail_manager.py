@@ -98,30 +98,30 @@ class TestGetMountPoint:
 
     def test_config_remote_path_matches(self):
         tm = self._make_tm(remote_paths=["/mnt/nas"])
-        assert tm._get_mount_point("/mnt/nas/photos/a.jpg") == "/mnt/nas"
+        assert tm.volume_prober.get_mount_point("/mnt/nas/photos/a.jpg") == "/mnt/nas"
         tm.shutdown()
 
     def test_config_remote_path_no_match(self):
         tm = self._make_tm(remote_paths=["/mnt/nas"])
-        assert tm._get_mount_point("/home/user/photos/a.jpg") is None
+        assert tm.volume_prober.get_mount_point("/home/user/photos/a.jpg") is None
         tm.shutdown()
 
     def test_macos_fallback_volumes(self):
         tm = self._make_tm()
-        assert tm._get_mount_point("/Volumes/storage/photos/a.jpg") == "/Volumes/storage"
+        assert tm.volume_prober.get_mount_point("/Volumes/storage/photos/a.jpg") == "/Volumes/storage"
         tm.shutdown()
 
     def test_local_path_returns_none(self):
         tm = self._make_tm()
-        assert tm._get_mount_point("/home/user/photos/a.jpg") is None
+        assert tm.volume_prober.get_mount_point("/home/user/photos/a.jpg") is None
         tm.shutdown()
 
     def test_config_takes_precedence_over_volumes(self):
         tm = self._make_tm(remote_paths=["/Volumes/storage/pictures"])
-        assert tm._get_mount_point("/Volumes/storage/pictures/a.jpg") == "/Volumes/storage/pictures"
+        assert tm.volume_prober.get_mount_point("/Volumes/storage/pictures/a.jpg") == "/Volumes/storage/pictures"
         tm.shutdown()
 
     def test_config_remote_path_no_partial_match(self):
         tm = self._make_tm(remote_paths=["/mnt/nas"])
-        assert tm._get_mount_point("/mnt/nasty/photos/a.jpg") is None
+        assert tm.volume_prober.get_mount_point("/mnt/nasty/photos/a.jpg") is None
         tm.shutdown()

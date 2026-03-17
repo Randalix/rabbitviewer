@@ -141,9 +141,21 @@ submit_source_job(job)
 
 ### ThumbnailManager — `core/thumbnail_manager.py`
 
-Domain layer over `RenderManager`. Owns all image-specific workflows and the task operation registry for generic daemon task dispatch (used by `ScriptAPI.daemon_tasks()`). Registered operations: `send2trash`, `remove_records`.
+Domain layer over `RenderManager`. Owns all image-specific workflows and the task operation registry for generic daemon task dispatch (used by `ScriptAPI.daemon_tasks()`). Registered operations: `send2trash`, `remove_records`. Delegates AI tasks to `AITaskCoordinator`, file write-back to `MetadataWriter`, and volume/file-header I/O to `VolumeProber`.
 
-**Tag write-back:** `_write_tags_to_file` mirrors the rating write-back pattern — suppresses watchdog, resolves plugin, calls `plugin.write_tags()` which clears then rewrites `XMP:Subject` via exiftool. Queued at `NORMAL` priority after the DB update completes synchronously.
+### VolumeProber — `core/volume_prober.py`
+
+NAS/network volume accessibility probing and file header reading. Caches volume reachability per mount point for 60 s. Provides `hash_file()` and `read_file_header()` for single-syscall file identification. Used by ThumbnailManager worker tasks to skip unreachable volumes and identify files for cache keying.
+
+### MetadataWriter — `core/metadata_writer.py`
+
+File write-back dispatcher for rating, tags, and orientation. Routes writes to the correct plugin method (embedded vs sidecar) based on per-format config. Owns the `_WRITE_DISPATCH` table and pending-write recovery (`recover_pending_writes`). Suppresses watchdog events on the written path.
+
+**Tag write-back:** `write_tags` suppresses watchdog, resolves plugin, calls `plugin.write_tags()` which clears then rewrites `XMP:Subject` via exiftool. Queued at `NORMAL` priority after the DB update completes synchronously.
+
+### AITaskCoordinator — `core/ai_task_coordinator.py`
+
+Coordinates CLIP embedding, auto-orientation, and face detection SourceJobs. Each AI feature follows an identical pattern: task function, task factory, and job submission with a shared batched generator. All jobs run at `CLIP_INDEX` priority.
 
 **Two-phase scan flow for a GUI directory request:**
 

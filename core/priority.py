@@ -154,3 +154,10 @@ class ImageEntry:
     def all_files(self) -> Tuple[str, ...]:
         """Return the image path plus all sidecar paths."""
         return (self.path,) + self.sidecars
+
+
+# Formats that Qt/PIL can load directly without extraction.
+# When orientation == 1, the GUI can display the original file as-is.
+NATIVELY_VIEWABLE = frozenset({
+    '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp',
+})

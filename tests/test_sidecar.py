@@ -418,6 +418,7 @@ class TestWriteModeDispatch:
 
     def _make_tm(self, default_mode="sidecar", format_overrides=None):
         from core.thumbnail_manager import ThumbnailManager
+        from core.metadata_writer import MetadataWriter
 
         config = MagicMock()
         def fake_get(key, default=None):
@@ -429,25 +430,30 @@ class TestWriteModeDispatch:
         config.get = fake_get
 
         db = MagicMock()
+        plugin_registry = MagicMock()
+        watchdog_handler = MagicMock()
         tm = ThumbnailManager.__new__(ThumbnailManager)
         tm.config_manager = config
         tm.metadata_db = db
-        tm.watchdog_handler = MagicMock()
-        tm.plugin_registry = MagicMock()
+        tm.plugin_registry = plugin_registry
+        tm.metadata_writer = MetadataWriter(
+            config, plugin_registry, db, MagicMock(),
+            watchdog_handler=watchdog_handler)
+        tm.watchdog_handler = watchdog_handler
         return tm
 
     def test_resolve_default_sidecar(self):
         tm = self._make_tm(default_mode="sidecar")
-        assert tm._resolve_write_mode(".jpg") == "sidecar"
+        assert tm.metadata_writer._resolve_write_mode(".jpg") == "sidecar"
 
     def test_resolve_default_embedded(self):
         tm = self._make_tm(default_mode="embedded")
-        assert tm._resolve_write_mode(".cr3") == "embedded"
+        assert tm.metadata_writer._resolve_write_mode(".cr3") == "embedded"
 
     def test_resolve_format_override(self):
         tm = self._make_tm(default_mode="sidecar", format_overrides={".jpg": "embedded"})
-        assert tm._resolve_write_mode(".jpg") == "embedded"
-        assert tm._resolve_write_mode(".cr3") == "sidecar"
+        assert tm.metadata_writer._resolve_write_mode(".jpg") == "embedded"
+        assert tm.metadata_writer._resolve_write_mode(".cr3") == "sidecar"
 
     def test_dispatch_rating_sidecar(self, tmp_path):
         tm = self._make_tm(default_mode="sidecar")
