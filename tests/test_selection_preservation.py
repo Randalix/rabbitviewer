@@ -127,9 +127,6 @@ def _make_view(all_files, selected_paths=None):
     view.selection.selection_anchor_index = None
 
     # Mocks for methods called by remove_images / reorder_files
-    view._filter_in_flight = False
-    view._filter_pending = False
-    view._filter_update_timer = MagicMock()
     view._virtual_grid = MagicMock()
     view.model.initial_thumb_paths = {}
     view.model.thumb_path_cache = {}
@@ -137,21 +134,23 @@ def _make_view(all_files, selected_paths=None):
     view.labels = {}
     view.service = MagicMock()
     view.filtersApplied = MagicMock()
-    view._filtered_paths_ready = MagicMock()
     view._viewport_executor = MagicMock()
-    view._startup_t0 = None
-    view._startup_first_scan_progress = False
+    view._startup_thumbnails_emitted = False
     view._startup_inline_thumb_count = 0
-    view._needs_heatmap_seed = False
     view._hovered_label = None
     view.thumbnailLeft = MagicMock()
     view._benchmark_timer = MagicMock()
-    view._scan_coalesce_timer = MagicMock()
-    view._scan_batch_pending = False
-    view._scan_first_batch_flushed = False
     view.model.scan_active = False
     view._sync_virtual_viewport = MagicMock()
     view._recycle_label = MagicMock()
+
+    # Delegated controllers
+    view._filter_controller = MagicMock()
+    view._filter_controller.needs_heatmap_seed = False
+    view._notifications = MagicMock()
+    view._notifications.scan_batch_pending = False
+    view._notifications.scan_first_batch_flushed = False
+    view._notifications._scan_coalesce_timer = MagicMock()
     view.benchmarkComplete = MagicMock()
     view._is_loading = False
     view.model.group_mode = False

@@ -23,7 +23,6 @@ from gui.selection_interaction import SelectionInteraction
 from core.event_system import (event_system, EventType, EventData, InspectorEventData,
     StatusMessageEventData, ThumbnailHoveredEventData)
 from network.daemon_signals import DaemonSignals
-from core.notifications import PreviewsReadyData, ScanProgressData, ScanCompleteData, FilesRemovedData
 from core.event_system import ThumbnailOverlayEventData
 from gui.overlay_manager import OverlayManager, OverlayDescriptor, BULK_THRESHOLD
 from gui.overlay_renderers import render_stars, render_badge
@@ -31,6 +30,8 @@ from core.file_grouping import FileGroup
 from core.folder_node import FolderNode
 from gui.thumbnail_model import ThumbnailModel
 from gui.viewport_prioritizer import ViewportPrioritizer
+from gui.filter_controller import FilterController
+from gui.thumbnail_notifications import NotificationHandler
 
 class ThumbnailLabel(ItemCard):
 
@@ -264,7 +265,6 @@ class ThumbnailViewWidget(QFrame):
     _initial_files_signal = Signal(list)
     _initial_thumbs_signal = Signal(dict)
     _initial_folders_signal = Signal(list)   # list of FolderNode
-    _filtered_paths_ready = Signal(object)  # set of visible paths from daemon
     folderNavigated = Signal(str)            # emitted when user navigates into a folder
 
     def __init__(self, config_manager=None, parent=None):
@@ -313,22 +313,8 @@ class ThumbnailViewWidget(QFrame):
 
         self.prioritizer = ViewportPrioritizer(self.model, self._send_heatmap)
 
-        # Startup timing — reset in load_directory, logged at each pipeline milestone.
-        self._startup_t0: Optional[float] = None
-        self._startup_first_scan_progress: bool = False
-        self._needs_heatmap_seed: bool = False
-        self._startup_first_previews_ready: bool = False
         self._startup_thumbnails_emitted: bool = False
         self._startup_inline_thumb_count: int = 0
-
-        self._filter_update_timer = QTimer(self)
-        self._filter_update_timer.setSingleShot(True)
-        self._filter_update_timer.setInterval(200)
-        self._filter_update_timer.timeout.connect(self.reapply_filters)
-
-        self._preview_tick_timer = QTimer(self)
-        self._preview_tick_timer.setInterval(16)  # ~60 fps drain rate
-        self._preview_tick_timer.timeout.connect(self._tick_preview_loading)
 
         # Fires periodically while scrolling so thumbnails update continuously,
         # not just after scrolling stops.  Stopped when idle (no scroll for one
@@ -341,33 +327,21 @@ class ThumbnailViewWidget(QFrame):
         self._scroll_idle_timer.setInterval(200)
         self._scroll_idle_timer.timeout.connect(self._on_scroll_idle)
 
-        # Coalesce rapid scan batches into fewer layout updates.
-        # singleShot: fires 250ms after first batch in a burst, NOT restarted
-        # per batch, so flushes happen every ~250ms during continuous scanning.
-        self._scan_coalesce_timer = QTimer(self)
-        self._scan_coalesce_timer.setSingleShot(True)
-        self._scan_coalesce_timer.setInterval(250)
-        self._scan_coalesce_timer.timeout.connect(self._flush_scan_layout)
-        self._scan_batch_pending = False
-        self._scan_first_batch_flushed = False
-
         self._viewport_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewport")
 
+        # Delegated controllers
+        self._filter_controller = FilterController(self, self.model, self._viewport_executor)
+        self._notifications = NotificationHandler(self, self.model, self.prioritizer, self._filter_controller)
+        self._notifications.preview_tick_timer.timeout.connect(self._tick_preview_loading)
+
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
-        event_system.subscribe(EventType.FACE_PERSON_FILTER, self._on_face_person_filter)
-        event_system.subscribe(EventType.TEXT_FILTER_CHANGED, self._on_text_filter_event)
-        event_system.subscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
-        event_system.subscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
-        event_system.subscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
 
         self.overlay_manager = OverlayManager(request_update=self._request_label_update)
         self.overlay_manager.register_renderer("stars", render_stars)
         self.overlay_manager.register_renderer("badge", render_badge)
-        self._daemon_signals: Optional[DaemonSignals] = None
         self._initial_files_signal.connect(self._on_initial_files_received)
         self._initial_thumbs_signal.connect(self._on_initial_thumbs_received)
         self._initial_folders_signal.connect(self._on_initial_folders_received)
-        self._filtered_paths_ready.connect(self._on_filtered_paths_ready)
 
         self._hovered_label: Optional[ThumbnailLabel] = None
         self._thumbnail_generated_signal.connect(self._on_thumbnail_ready, Qt.QueuedConnection)
@@ -376,8 +350,6 @@ class ThumbnailViewWidget(QFrame):
         # why: separate from _is_loading — cached folders clear _is_loading in
         # _on_initial_files_received (immediate), uncached folders wait for scan_complete.
         self._folder_is_cached = False
-        self._filter_in_flight = False
-        self._filter_pending = False
 
 
     def _initializeLayout(self):
@@ -399,6 +371,7 @@ class ThumbnailViewWidget(QFrame):
 
     def set_service(self, service):
         self.service = service
+        self._filter_controller.service = service
 
     # -- External API compatibility shims ------------------------------------
     # These delegate to self.model so that main_window.py and script_api.py
@@ -643,18 +616,14 @@ class ThumbnailViewWidget(QFrame):
         self._priority_update_timer.start()
 
     def load_directory(self, directory_path: str, recursive: bool = True):
-        self._startup_t0 = time.perf_counter()
-        self._startup_first_scan_progress = False
-        self._startup_first_previews_ready = False
+        self._notifications.reset_startup(time.perf_counter())
         self._startup_thumbnails_emitted = False
         self._startup_inline_thumb_count = 0
         logger.info("[startup] load_directory called for %s", directory_path)
         self.clear_layout()
         # Set scan state AFTER clear_layout() which resets _scan_active to False
-        self._scan_batch_pending = False
-        self._scan_first_batch_flushed = False
+        self._notifications.reset()
         self.model.scan_active = True
-        self._scan_coalesce_timer.stop()
         event_system.publish(StatusMessageEventData(
             event_type=EventType.STATUS_MESSAGE,
             source="thumbnail_view",
@@ -808,34 +777,9 @@ class ThumbnailViewWidget(QFrame):
                         label.update()
 
     def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
-        self._daemon_signals = daemon_signals
-        daemon_signals.previews_ready.connect(self._on_previews_ready)
-        daemon_signals.scan_progress.connect(self._on_scan_progress)
-        daemon_signals.files_removed.connect(self._on_files_removed)
-        daemon_signals.scan_complete.connect(self._on_scan_complete)
+        self._notifications.set_daemon_signals(daemon_signals)
 
-    @Slot(object)
-    def _on_previews_ready(self, data: PreviewsReadyData) -> None:
-        logger.debug("[trace] previews_ready: all_files=%d, is_loading=%s", len(self.model.all_files), self._is_loading)
-        if not self._startup_first_previews_ready and self._startup_t0 is not None:
-            self._startup_first_previews_ready = True
-            elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-            logger.info("[startup] first previews_ready: %.0f ms after load_directory", elapsed_ms)
-        image_path = data.image_entry.path
-        logger.info("ThumbnailViewWidget received notification: Previews ready for %s", image_path)
-        if data.thumbnail_path:
-            # Skip notifications for files not in the current directory.
-            # Daemon background work (watchdog, previous sessions) can produce
-            # previews_ready for unrelated files that waste tick slots.
-            if image_path not in self.model.path_to_idx:
-                return
-            self.prioritizer.queue_previews([(image_path, data.thumbnail_path)])
-            if not self._preview_tick_timer.isActive():
-                self._preview_tick_timer.start()
-        else:
-            logger.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
-
-    def _path_belongs_to_current_directory(self, path: str) -> bool:
+    def path_belongs_to_current_directory(self, path: str) -> bool:
         """Return True if *path* is (or is under) the currently browsed directory."""
         cur = self.current_directory_path
         if not cur:
@@ -843,75 +787,6 @@ class ThumbnailViewWidget(QFrame):
         rp = os.path.realpath(path)
         rc = os.path.realpath(cur)
         return rp == rc or rp.startswith(rc + os.sep)
-
-    @Slot(object)
-    def _on_scan_progress(self, data: ScanProgressData) -> None:
-        if not self._path_belongs_to_current_directory(data.path):
-            return
-        logger.debug("[trace] scan_progress: all_files=%d, is_loading=%s", len(self.model.all_files), self._is_loading)
-        try:
-            first_batch = not self._startup_first_scan_progress
-            if first_batch and self._startup_t0 is not None:
-                self._startup_first_scan_progress = True
-                elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-                logger.info("[startup] first scan_progress: %.0f ms after load_directory (%d files in batch)", elapsed_ms, len(data.files))
-            logger.info("Received scan_progress batch for '%s' with %d files.", data.path, len(data.files))
-            self._add_image_batch(sorted(f.path for f in data.files))
-            # Mark that the first layout after this batch should seed the
-            # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
-            # here because model.visible_to_original is not yet populated —
-            # label creation and layout update happen asynchronously via timers.
-            if first_batch:
-                self._needs_heatmap_seed = True
-        except Exception as e:
-            # why: protocol extensions in future daemon versions may produce
-            # unexpected field types; isolate to prevent notification loop crash.
-            logger.error("Unexpected exception in scan_progress handler: %s", e, exc_info=True)
-
-    @Slot(object)
-    def _on_files_removed(self, data: FilesRemovedData) -> None:
-        logger.debug("[trace] files_removed: all_files=%d, is_loading=%s", len(self.model.all_files), self._is_loading)
-        if data.files:
-            logger.info("Removing %d ghost files from view.", len(data.files))
-            self.remove_images([f.path for f in data.files])
-
-    @Slot(object)
-    def _on_scan_complete(self, data: ScanCompleteData) -> None:
-        logger.debug("[trace] scan_complete: all_files=%d, is_loading=%s", len(self.model.all_files), self._is_loading)
-        if not self._path_belongs_to_current_directory(data.path):
-            logger.debug("Ignoring scan_complete for '%s' (current directory: '%s')", data.path, self.model.current_directory_path)
-            return
-        if self._startup_t0 is not None:
-            elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-            logger.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
-        logger.info(
-            "[virtual] scan_complete: all_files=%d, labels=%d, current_files(in layout)=%d",
-            len(self.model.all_files), len(self.labels), len(self.model.current_files),
-        )
-        self._filter_update_timer.stop()
-        self._scan_coalesce_timer.stop()
-        self.model.scan_active = False
-        self._is_loading = False
-        self._scan_batch_pending = False
-
-        if not self.model.hidden_indices and self._virtual_grid:
-            # No filter active: data structures are fully populated by the
-            # append-only fast path.  Do one final sorted reorder (no-op if
-            # all_files is already sorted) and snap the container height.
-            top_file = self._get_first_visible_file()
-            logger.info(
-                "[virtual] scan_complete: final sort, top_file=%s, all_files=%d",
-                os.path.basename(top_file) if top_file else None, len(self.model.all_files),
-            )
-            self._virtual_grid.snap_height_to_exact()
-            self.reorder_files(sorted(self.model.all_files))
-            if top_file:
-                self.scroll_to_top(top_file)
-                self._sync_virtual_viewport()
-            QTimer.singleShot(100, self._prioritize_visible_thumbnails)
-        else:
-            # Filter active: full rebuild unavoidable.
-            self.reapply_filters()
 
     def _add_image_batch(self, files: List[str]):
         """Adds a batch of new file paths.
@@ -934,16 +809,16 @@ class ThumbnailViewWidget(QFrame):
         if not self.model.hidden_indices and not self.model.group_mode:
             if self.model.scan_active:
                 self.model.append_to_visible(result.new_files)
-                self._scan_batch_pending = True
+                self._notifications.scan_batch_pending = True
                 logger.debug(
                     "[virtual] _scan_active append: +%d files (current_files=%d, coalesce_active=%s)",
-                    len(result.new_files), len(self.model.current_files), self._scan_coalesce_timer.isActive(),
+                    len(result.new_files), len(self.model.current_files), self._notifications._scan_coalesce_timer.isActive(),
                 )
-                if not self._scan_first_batch_flushed:
-                    self._scan_coalesce_timer.stop()
-                    self._flush_scan_layout()
-                elif not self._scan_coalesce_timer.isActive():
-                    self._scan_coalesce_timer.start()
+                if not self._notifications.scan_first_batch_flushed:
+                    self._notifications._scan_coalesce_timer.stop()
+                    self._notifications._flush_scan_layout()
+                elif not self._notifications._scan_coalesce_timer.isActive():
+                    self._notifications._scan_coalesce_timer.start()
             else:
                 if len(result.new_files) > 50:
                     self.reorder_files(sorted(self.model.all_files))
@@ -951,24 +826,9 @@ class ThumbnailViewWidget(QFrame):
                     self._insert_sorted_incremental(result.new_files)
         else:
             if self._is_loading:
-                self._apply_filter_results(set(self.model.all_files))
+                self._filter_controller._apply_filter_results(set(self.model.all_files))
             else:
-                self._filter_update_timer.start()
-
-    def _flush_scan_layout(self):
-        """Coalesced layout update during scan."""
-        if not self._scan_batch_pending or not self._virtual_grid:
-            return
-        self._scan_batch_pending = False
-        self._scan_first_batch_flushed = True
-        logger.info(
-            "[virtual] _flush_scan_layout: current_files=%d, all_files=%d",
-            len(self.model.current_files), len(self.model.all_files),
-        )
-        self._virtual_grid.set_total_items_chunked(len(self.model.current_files))
-        self._virtual_grid.update_layout()
-        self._sync_virtual_viewport()
-        self.model.last_layout_file_count = len(self.model.all_files)
+                self._filter_controller.start_filter_timer()
 
     def _insert_sorted_incremental(self, new_files: list):
         """Insert new files at sorted positions without full rebuild."""
@@ -1140,30 +1000,16 @@ class ThumbnailViewWidget(QFrame):
     def closeEvent(self, event):
         self.selection.dispose()
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
-        event_system.unsubscribe(EventType.FACE_PERSON_FILTER, self._on_face_person_filter)
-        event_system.unsubscribe(EventType.TEXT_FILTER_CHANGED, self._on_text_filter_event)
-        event_system.unsubscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
-        event_system.unsubscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
-        event_system.unsubscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
-        if self._daemon_signals:
-            self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
-            self._daemon_signals.scan_progress.disconnect(self._on_scan_progress)
-            self._daemon_signals.files_removed.disconnect(self._on_files_removed)
-            self._daemon_signals.scan_complete.disconnect(self._on_scan_complete)
+        self._filter_controller.dispose()
+        self._notifications.dispose()
 
         # Stop timers
         if hasattr(self, '_resize_timer'):
             self._resize_timer.stop()
-        if hasattr(self, '_filter_update_timer'):
-            self._filter_update_timer.stop()
         if hasattr(self, '_priority_update_timer'):
             self._priority_update_timer.stop()
-        if hasattr(self, '_preview_tick_timer'):
-            self._preview_tick_timer.stop()
         if hasattr(self, '_scroll_idle_timer'):
             self._scroll_idle_timer.stop()
-        if hasattr(self, '_scan_coalesce_timer'):
-            self._scan_coalesce_timer.stop()
         if hasattr(self, '_viewport_executor'):
             # wait=False: in-flight viewport calls are best-effort priority hints; the
             # socket client handles broken-pipe errors on its own after widget teardown.
@@ -1184,18 +1030,13 @@ class ThumbnailViewWidget(QFrame):
         # Stop timers and cleanup thread
         if hasattr(self, '_resize_timer'):
             self._resize_timer.stop()
-        if hasattr(self, '_filter_update_timer'):
-            self._filter_update_timer.stop()
         if hasattr(self, '_priority_update_timer'):
             self._priority_update_timer.stop()
-        if hasattr(self, '_preview_tick_timer'):
-            self._preview_tick_timer.stop()
         if hasattr(self, '_scroll_idle_timer'):
             self._scroll_idle_timer.stop()
-        if hasattr(self, '_scan_coalesce_timer'):
-            self._scan_coalesce_timer.stop()
-            self._scan_batch_pending = False
-            self.model.scan_active = False
+        self._filter_controller.reset()
+        self._notifications.reset()
+        self.model.scan_active = False
         # Recycle all materialized labels via VirtualGridManager
         if hasattr(self, '_virtual_grid') and self._virtual_grid:
             self._virtual_grid.clear(self._recycle_label)
@@ -1271,10 +1112,10 @@ class ThumbnailViewWidget(QFrame):
                 logger.warning("Failed to load thumbnail: %s", thumbnail_path)
 
         if not self.prioritizer.has_pending_previews:
-            self._preview_tick_timer.stop()
-            if self._startup_t0 is not None and not self._startup_thumbnails_emitted:
+            self._notifications.preview_tick_timer.stop()
+            if self._notifications.startup_t0 is not None and not self._startup_thumbnails_emitted:
                 self._startup_thumbnails_emitted = True
-                elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
+                elapsed_ms = (time.perf_counter() - self._notifications.startup_t0) * 1000
                 logger.info("[startup] initial thumbnails drawn: %.0f ms after load_directory", elapsed_ms)
 
     def get_benchmark_results(self) -> dict:
@@ -1371,185 +1212,42 @@ class ThumbnailViewWidget(QFrame):
 
         return None
 
+    # -- Filter delegates (public API unchanged) ------------------------------
+
     def apply_filter(self, filter_text: str):
-        self.model.set_text_filter(filter_text)
-        self._filter_update_timer.start()
+        self._filter_controller.apply_filter(filter_text)
 
     def apply_star_filter(self, star_states: list):
-        self.model.set_star_filter(star_states)
-        self._filter_update_timer.start()
+        self._filter_controller.apply_star_filter(star_states)
 
     def apply_tag_filter(self, tag_names: list):
-        self.model.set_tag_filter(tag_names)
-        self._filter_update_timer.start()
+        self._filter_controller.apply_tag_filter(tag_names)
 
     def clear_filter(self):
-        self.model.clear_filters()
-        self._filter_update_timer.start()
+        self._filter_controller.clear_filter()
 
     def apply_clip_search_results(self, result_paths: list):
-        """Set CLIP search filter and reapply all filters."""
-        self.model.set_clip_search_paths(set(result_paths))
-        self._filter_update_timer.start()
+        self._filter_controller.apply_clip_search_results(result_paths)
 
     def clear_clip_search(self):
-        """Remove CLIP search filter and reapply all filters immediately."""
-        self.model.set_clip_search_paths(None)
-        self.model.hidden_indices = set()
-        self.reapply_filters()
+        self._filter_controller.clear_clip_search()
 
     def apply_person_filter(self, file_paths: list):
-        self.model.set_person_filter_paths(set(file_paths))
-        self._filter_update_timer.start()
+        self._filter_controller.apply_person_filter(file_paths)
 
     def clear_person_filter(self):
-        self.model.set_person_filter_paths(None)
-        self.reapply_filters()
-
-    def _on_face_person_filter(self, event_data):
-        person_ids = event_data.person_ids
-        if not person_ids:
-            self.clear_person_filter()
-            return
-        if not self.service:
-            return
-        file_paths = self.service.get_face_paths_for_persons(person_ids)
-        self.apply_person_filter(file_paths or [])
-
-    def _on_text_filter_event(self, event_data):
-        self.apply_filter(event_data.filter_text)
-
-    def _on_star_filter_event(self, event_data):
-        self.apply_star_filter(event_data.star_states)
-
-    def _on_tag_filter_event(self, event_data):
-        self.apply_tag_filter(event_data.tag_names)
-
-    def _on_clear_filters_event(self, event_data):
-        self.clear_filter()
+        self._filter_controller.clear_person_filter()
 
     def navigate_to_file(self, file_path: str):
-        """Scroll to and highlight a file (used by CLIP search result selection)."""
-        if file_path in self.model.current_files:
-            self.setHighlightedThumbnail(file_path)
+        self._filter_controller.navigate_to_file(file_path)
 
     def reapply_filters(self):
-        """
-        Re-applies all active filters.  When the scan is still running the
-        filter is computed locally (fast path).  Otherwise the daemon is
-        queried on a background thread so the GUI never blocks on I/O.
-        """
-        logger.info(
-            "[virtual] reapply_filters: is_loading=%s, all_files=%d, labels=%d",
-            self._is_loading, len(self.model.all_files), len(self.labels),
-        )
+        self._filter_controller.reapply_filters()
 
-        if not self.model.all_files or not self.service:
-            logger.warning("Cannot apply filters: file list or service is not ready.")
-            return
-
-        if self._is_loading:
-            # Fast path: show everything during the initial scan.
-            visible = set(self.model.all_files)
-            if self.model.clip_search_paths is not None:
-                visible = visible & self.model.clip_search_paths
-            if self.model.person_filter_paths is not None:
-                visible = visible & self.model.person_filter_paths
-            self._apply_filter_results(visible)
-            return
-
-        # Async path: submit the socket call to the executor so the GUI
-        # stays responsive while the daemon processes the query.
-        if self._filter_in_flight:
-            self._filter_pending = True
-            return
-
-        self._filter_in_flight = True
-        # Snapshot the current filter values so racing changes don't corrupt
-        # the background call with half-old / half-new state.
-        text_filter = self.model.current_filter
-        star_filter = list(self.model.current_star_filter)
-        tag_filter = list(self.model.current_tag_filter)
-        self._viewport_executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter)
-
-    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list):
-        """Runs on _viewport_executor thread — never blocks the GUI."""
-        try:
-            response = self.service.get_filtered_file_paths(
-                text_filter, star_filter, tag_names=tag_filter or None
-            )
-            if response is not None:
-                self._filtered_paths_ready.emit(set(response))
-            else:
-                logger.error("Failed to get filtered paths from daemon.")
-                self._filtered_paths_ready.emit(None)
-        except Exception as e:
-            # why: service calls can raise; broad guard ensures
-            # _filtered_paths_ready always fires to unlock _filter_in_flight.
-            logger.error("Error fetching filtered paths: %s", e, exc_info=True)
-            self._filtered_paths_ready.emit(None)
-
-    @Slot(object)
-    def _on_filtered_paths_ready(self, visible_paths):
-        self._filter_in_flight = False
-
-        if visible_paths is None:
-            visible_paths = set(self.model.all_files)
-
-        # Intersect with CLIP search results when active
-        if self.model.clip_search_paths is not None:
-            visible_paths = visible_paths & self.model.clip_search_paths
-        if self.model.person_filter_paths is not None:
-            visible_paths = visible_paths & self.model.person_filter_paths
-
-        self._apply_filter_results(visible_paths)
-
-        # If another filter change arrived while this one was in flight,
-        # re-submit with the latest filter values.
-        if self._filter_pending:
-            self._filter_pending = False
-            self.reapply_filters()
-
-    def _apply_filter_results(self, visible_paths: set):
-        new_hidden, will_update = self.model.compute_hidden_indices(visible_paths)
-
-        logger.info(
-            "[virtual] _apply_filter_results: all_files=%d, visible_paths=%d, "
-            "hidden=%d, will_update=%s",
-            len(self.model.all_files), len(visible_paths), len(new_hidden),
-            will_update,
-        )
-
-        if will_update:
-            self.model.apply_hidden_indices(new_hidden)
-            self._update_filtered_layout()
-            logger.info(
-                "[virtual] _update_filtered_layout done: current_files=%d, materialized_labels=%d",
-                len(self.model.current_files), len(self.labels),
-            )
-        else:
-            total_count = len(self.model.all_files)
-            visible_count = len(self.model.current_files)
-            hidden_count = total_count - visible_count
-
-            status_msg = f"Filter: '{self.model.current_filter}' - {visible_count}/{total_count} images displayed"
-            if hidden_count > 0:
-                status_msg += f" ({hidden_count} hidden)"
-            event_system.publish(StatusMessageEventData(
-                event_type=EventType.STATUS_MESSAGE,
-                source="thumbnail_view",
-                timestamp=time.time(),
-                message=status_msg,
-                timeout=4000
-            ))
-            self.filtersApplied.emit()
-
-    def _update_filtered_layout(self):
-        """Rebuild visible-index mappings and sync viewport."""
+    def _rebuild_layout_for_filter(self):
+        """Callback for FilterController: widget operations after filter layout rebuild."""
         if not self._virtual_grid:
             return
-
-        self.model.rebuild_visible_mappings()
 
         # Clear hover if the hovered label is now hidden
         if self._hovered_label is not None:
@@ -1565,8 +1263,8 @@ class ThumbnailViewWidget(QFrame):
         self._virtual_grid.update_layout()
         self._sync_virtual_viewport()
 
-        if self._needs_heatmap_seed:
-            self._needs_heatmap_seed = False
+        if self._filter_controller.needs_heatmap_seed:
+            self._filter_controller.needs_heatmap_seed = False
             self._prioritize_visible_thumbnails()
         else:
             QTimer.singleShot(100, self._prioritize_visible_thumbnails)
@@ -1687,10 +1385,10 @@ class ThumbnailViewWidget(QFrame):
         return len(self.model.current_files)
 
     def filter_affects_rating(self) -> bool:
-        return self.model.filter_affects_rating()
+        return self._filter_controller.filter_affects_rating()
 
     def has_active_tag_filter(self) -> bool:
-        return self.model.has_active_tag_filter()
+        return self._filter_controller.has_active_tag_filter()
 
     # -- RAW+JPG group mode ------------------------------------------------
 

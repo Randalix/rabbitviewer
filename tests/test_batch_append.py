@@ -152,9 +152,6 @@ def _make_view(all_files=None, is_loading=False):
         view.model.original_to_visible[i] = i
         view.model.visible_original_indices.append(i)
 
-    view._filter_in_flight = False
-    view._filter_pending = False
-    view._filter_update_timer = MagicMock()
     view._virtual_grid = MagicMock()
     view.model.initial_thumb_paths = {}
     view.model.thumb_path_cache = {}
@@ -162,21 +159,39 @@ def _make_view(all_files=None, is_loading=False):
     view.labels = {}
     view.service = MagicMock()
     view.filtersApplied = MagicMock()
-    view._filtered_paths_ready = MagicMock()
     view._viewport_executor = MagicMock()
-    view._startup_t0 = None
-    view._startup_first_scan_progress = False
+    view._startup_thumbnails_emitted = False
     view._startup_inline_thumb_count = 0
-    view._needs_heatmap_seed = False
     view._hovered_label = None
     view.thumbnailLeft = MagicMock()
     view._benchmark_timer = MagicMock()
-    view._scan_coalesce_timer = MagicMock()
-    view._scan_batch_pending = False
-    view._scan_first_batch_flushed = False
     view.model.scan_active = is_loading  # scan is active when loading
     view._sync_virtual_viewport = MagicMock()
     view._recycle_label = MagicMock()
+
+    # FilterController stand-in
+    view._filter_controller = MagicMock()
+    view._filter_controller._filter_update_timer = MagicMock()
+    view._filter_controller._filter_in_flight = False
+    view._filter_controller._filter_pending = False
+    view._filter_controller.needs_heatmap_seed = False
+
+    # NotificationHandler — use real class so _flush_scan_layout works
+    from gui.thumbnail_notifications import NotificationHandler
+    nh = object.__new__(NotificationHandler)
+    nh._widget = view
+    nh.model = view.model
+    nh.prioritizer = MagicMock()
+    nh._filter_controller = view._filter_controller
+    nh._scan_coalesce_timer = MagicMock()
+    nh.scan_batch_pending = False
+    nh.scan_first_batch_flushed = False
+    nh.preview_tick_timer = MagicMock()
+    nh._startup_t0 = None
+    nh._startup_first_scan_progress = False
+    nh._startup_first_previews_ready = False
+    nh._daemon_signals = None
+    view._notifications = nh
 
     return view
 
@@ -234,7 +249,7 @@ class TestAppendFastPath:
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
 
-        view._filter_update_timer.start.assert_not_called()
+        view._filter_controller._filter_update_timer.start.assert_not_called()
 
     def test_duplicate_files_ignored(self):
         """Files already in all_files are skipped."""
@@ -265,7 +280,7 @@ class TestAppendFastPath:
 
         # First batch flushes immediately via _flush_scan_layout
         view._virtual_grid.set_total_items_chunked.assert_called_with(2)
-        view._filter_update_timer.start.assert_not_called()
+        view._filter_controller._filter_update_timer.start.assert_not_called()
 
 
 # ===================================================================
@@ -282,7 +297,7 @@ class TestAppendWithFilter:
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
 
-        view._filter_update_timer.start.assert_called()
+        view._filter_controller.start_filter_timer.assert_called()
 
     def test_filter_active_during_scan_uses_immediate_apply(self):
         """When filter hides files and is_loading=True, apply immediately."""
@@ -293,7 +308,7 @@ class TestAppendWithFilter:
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
 
         # Should NOT use debounce timer
-        view._filter_update_timer.start.assert_not_called()
+        view._filter_controller._filter_update_timer.start.assert_not_called()
         # _apply_filter_results rebuilds current_files from scratch
         # The hidden_indices will be recalculated
 

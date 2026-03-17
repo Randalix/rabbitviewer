@@ -270,18 +270,27 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     view.model.visible_original_indices = []
     view.model.last_layout_file_count = 0
 
-    view._filter_in_flight = False
-    view._filter_pending = False
-
-    view._filter_update_timer = MagicMock()
     view._virtual_grid = None
     view.labels = {}
     view.service = service
 
     view.filtersApplied = MagicMock()
-    view._filtered_paths_ready = MagicMock()
     view._viewport_executor = MagicMock()
     view.model.image_states = {}
+
+    # FilterController — use the real class so filter logic is tested
+    from gui.filter_controller import FilterController
+    fc = object.__new__(FilterController)
+    fc._widget = view
+    fc.model = view.model
+    fc._executor = view._viewport_executor
+    fc.service = service
+    fc._filter_in_flight = False
+    fc._filter_pending = False
+    fc.needs_heatmap_seed = False
+    fc._filter_update_timer = MagicMock()
+    fc._filtered_paths_ready = MagicMock()
+    view._filter_controller = fc
 
     return view
 
@@ -347,32 +356,30 @@ class TestIsLoadingCachedFolder:
 
     def test_cached_folder_reapply_uses_daemon_path(self):
         """After cached folder clears _is_loading, reapply_filters submits to the daemon."""
-        from gui.thumbnail_view import ThumbnailViewWidget
-
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files, is_loading=False, service=mock_client)
+        fc = view._filter_controller
 
-        with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget.reapply_filters(view)
+        with patch("gui.filter_controller.event_system"):
+            fc.reapply_filters()
 
-        assert view._filter_in_flight is True
-        view._viewport_executor.submit.assert_called_once()
+        assert fc._filter_in_flight is True
+        fc._executor.submit.assert_called_once()
 
     def test_is_loading_true_takes_fast_path(self):
         """When _is_loading is True, reapply_filters shows all files (no daemon query)."""
-        from gui.thumbnail_view import ThumbnailViewWidget
-
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files, is_loading=True, service=mock_client)
         view.model.current_star_filter = [False, False, True, False, False, False]
+        fc = view._filter_controller
 
-        with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget.reapply_filters(view)
+        with patch("gui.filter_controller.event_system"):
+            fc.reapply_filters()
 
-        view._viewport_executor.submit.assert_not_called()
-        assert view._filter_in_flight is False
+        fc._executor.submit.assert_not_called()
+        assert fc._filter_in_flight is False
 
 
 # ===================================================================
@@ -382,33 +389,29 @@ class TestIsLoadingCachedFolder:
 class TestClearFilter:
 
     def test_clear_filter_resets_text(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
         view.model.current_filter = "sunset"
-        ThumbnailViewWidget.clear_filter(view)
+        view._filter_controller.clear_filter()
         assert view.model.current_filter == ""
 
     def test_clear_filter_resets_star_states(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
         view.model.current_star_filter = [False, False, True, False, False, False]
-        ThumbnailViewWidget.clear_filter(view)
+        view._filter_controller.clear_filter()
         assert view.model.current_star_filter == [True, True, True, True, True, True]
 
     def test_clear_filter_resets_hidden_indices(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
         view.model.hidden_indices = {0, 3, 7}
-        ThumbnailViewWidget.clear_filter(view)
+        view._filter_controller.clear_filter()
         assert view.model.hidden_indices == set()
 
     def test_clear_filter_starts_debounce_timer(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
         view.model.current_filter = "test"
         view.model.current_star_filter = [False] * 6
-        ThumbnailViewWidget.clear_filter(view)
-        view._filter_update_timer.start.assert_called_once()
+        view._filter_controller.clear_filter()
+        view._filter_controller._filter_update_timer.start.assert_called_once()
 
 
 # ===================================================================
@@ -418,32 +421,32 @@ class TestClearFilter:
 class TestFilterQueuing:
 
     def test_second_call_queues_pending(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         mock_client = MagicMock()
         files = ["/img/a.jpg"]
         view = _make_filter_view(all_files=files, service=mock_client)
-        view._filter_in_flight = True
+        fc = view._filter_controller
+        fc._filter_in_flight = True
 
-        with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget.reapply_filters(view)
+        with patch("gui.filter_controller.event_system"):
+            fc.reapply_filters()
 
-        assert view._filter_pending is True
-        view._viewport_executor.submit.assert_not_called()
+        assert fc._filter_pending is True
+        fc._executor.submit.assert_not_called()
 
     def test_pending_resubmits_after_completion(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files, service=mock_client)
-        view._filter_in_flight = True
-        view._filter_pending = True
+        fc = view._filter_controller
+        fc._filter_in_flight = True
+        fc._filter_pending = True
 
-        with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget._on_filtered_paths_ready(view, set(files))
+        with patch("gui.filter_controller.event_system"):
+            fc._on_filtered_paths_ready(set(files))
 
-        assert view._filter_in_flight is True
-        assert view._filter_pending is False
-        view._viewport_executor.submit.assert_called_once()
+        assert fc._filter_in_flight is True
+        assert fc._filter_pending is False
+        fc._executor.submit.assert_called_once()
 
 
 # ===================================================================
@@ -453,19 +456,19 @@ class TestFilterQueuing:
 class TestApplyFilter:
 
     def test_apply_filter_sets_text(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
-        ThumbnailViewWidget.apply_filter(view, "beach")
+        fc = view._filter_controller
+        fc.apply_filter("beach")
         assert view.model.current_filter == "beach"
-        view._filter_update_timer.start.assert_called()
+        fc._filter_update_timer.start.assert_called()
 
     def test_apply_star_filter_sets_states(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         view = _make_filter_view()
+        fc = view._filter_controller
         new_states = [True, False, True, False, True, False]
-        ThumbnailViewWidget.apply_star_filter(view, new_states)
+        fc.apply_star_filter(new_states)
         assert view.model.current_star_filter == new_states
-        view._filter_update_timer.start.assert_called()
+        fc._filter_update_timer.start.assert_called()
 
 
 # ===================================================================
@@ -475,29 +478,29 @@ class TestApplyFilter:
 class TestApplyFilterResults:
 
     def test_hides_non_visible_paths(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         files = ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg", "/img/d.jpg"]
         view = _make_filter_view(all_files=files)
+        fc = view._filter_controller
         visible = {"/img/a.jpg", "/img/c.jpg"}
-        with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget._apply_filter_results(view, visible)
+        with patch("gui.filter_controller.event_system"):
+            fc._apply_filter_results(visible)
         assert view.model.hidden_indices == {1, 3}
 
     def test_all_visible_clears_hidden(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files)
+        fc = view._filter_controller
         view.model.hidden_indices = {0, 1}
-        with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget._apply_filter_results(view, set(files))
+        with patch("gui.filter_controller.event_system"):
+            fc._apply_filter_results(set(files))
         assert view.model.hidden_indices == set()
 
     def test_none_visible_hides_all(self):
-        from gui.thumbnail_view import ThumbnailViewWidget
         files = ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
         view = _make_filter_view(all_files=files)
-        with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget._apply_filter_results(view, set())
+        fc = view._filter_controller
+        with patch("gui.filter_controller.event_system"):
+            fc._apply_filter_results(set())
         assert view.model.hidden_indices == {0, 1, 2}
 
 

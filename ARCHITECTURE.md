@@ -368,14 +368,19 @@ Top-level coordinator. Stacks `ThumbnailViewWidget`, `PictureView`, and `VideoVi
 
 ### ThumbnailViewWidget — `gui/thumbnail_view.py`
 
-Grid display of file placeholders (`ThumbnailLabel`). Responsibilities:
-- Receives `scan_progress` → creates placeholders
-- Receives `previews_ready` → loads `QImage` from disk, updates label
-- **Inline thumbnail loading**: `_tick_label_creation` checks `_initial_thumb_paths` (populated from the initial `get_directory_files` response) and loads cached QImages as labels are created — labels are born with thumbnails already set, no daemon round-trip needed
+Grid display of file placeholders (`ThumbnailLabel`). Delegates filter orchestration to `FilterController` and daemon notification handling to `NotificationHandler`. Responsibilities:
+- Virtual grid management (materialization, recycling, scroll sync)
 - Scroll / hover events → `_prioritize_visible_thumbnails` → heatmap computation → `update_viewport_heatmap` to daemon (delta-only IPC with generation counter for stale-request dropping)
-- Tracks `_last_thumb_pairs` and `_last_fullres_pairs` (`dict[str, int]`) for delta detection
-- Partitions `_pending_previews` so heatmap-zone items load first (O(N) partition, not sort)
-- Filter + sort via daemon query
+- Inline thumbnail loading from cached QImages
+- Selection interaction via `SelectionInteraction`
+
+### FilterController — `gui/filter_controller.py`
+
+QObject that orchestrates text/star/tag/CLIP/person filtering. Subscribes to EventSystem filter events, debounces via QTimer, and queries the daemon on a background executor. Intersects filter results with CLIP search and person filter paths. Calls back into the widget for grid rebuild after visibility changes.
+
+### NotificationHandler — `gui/thumbnail_notifications.py`
+
+QObject that handles daemon scan/preview notifications (`previews_ready`, `scan_progress`, `files_removed`, `scan_complete`). Owns scan-batch coalescing (250ms timer) and startup timing. Calls widget methods for file addition, removal, and layout updates.
 
 ### Folder Navigation — `core/folder_node.py`
 
