@@ -31,6 +31,7 @@ from gui.thumbnail_model import ThumbnailModel
 from gui.viewport_prioritizer import ViewportPrioritizer
 from gui.filter_controller import FilterController
 from gui.thumbnail_notifications import NotificationHandler
+from gui.components.edge_bar import EdgeBar, SelectionEdgeIndicator
 
 class ThumbnailViewWidget(QFrame):
     doubleClicked = Signal(str)
@@ -301,7 +302,11 @@ class ThumbnailViewWidget(QFrame):
                     return True  # Stop further processing of this event
             return False
         elif obj == self.scroll_area.viewport():
-            if event.type() == QEvent.Type.MouseButtonDblClick:
+            if event.type() == QEvent.Type.Resize:
+                self._edge_bar_top.reposition()
+                self._edge_bar_bottom.reposition()
+                self._sel_indicator.update()
+            elif event.type() == QEvent.Type.MouseButtonDblClick:
                 mouse_event = QMouseEvent(event)
                 if mouse_event.button() == Qt.LeftButton:
                     hovered_path = self.get_hovered_image_path()
@@ -373,6 +378,18 @@ class ThumbnailViewWidget(QFrame):
 
         self.main_layout.addWidget(self.scroll_area)
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
+
+        bar_height = self.gui_config.get("edge_bar_height", 3)
+        bar_color = QColor(self.gui_config.get("select_border_color", "orange"))
+        self._edge_bar_top = EdgeBar(self.scroll_area.viewport(), edge="top", height=bar_height)
+        self._edge_bar_bottom = EdgeBar(self.scroll_area.viewport(), edge="bottom", height=bar_height)
+        self._edge_bar_top.add_indicator("selection", bar_color, lambda: self._sel_indicator.scroll_to_nearest("up"))
+        self._edge_bar_bottom.add_indicator("selection", bar_color, lambda: self._sel_indicator.scroll_to_nearest("down"))
+        self._sel_indicator = SelectionEdgeIndicator(
+            self._edge_bar_top, self._edge_bar_bottom,
+            self.model, self._virtual_grid, self.scroll_area, self.selection,
+        )
+        event_system.subscribe(EventType.SELECTION_CHANGED, self._on_selection_changed_indicators)
 
     def _setupResizeTimer(self):
         self._resize_timer = QTimer(self)
@@ -778,6 +795,7 @@ class ThumbnailViewWidget(QFrame):
 
     def closeEvent(self, event):
         self.selection.dispose()
+        event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed_indicators)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
         self._filter_controller.dispose()
         self._notifications.dispose()
@@ -1128,10 +1146,14 @@ class ThumbnailViewWidget(QFrame):
         200ms after the last scroll event.
         """
         self._sync_virtual_viewport()  # materialize/recycle labels for new scroll pos
+        self._sel_indicator.update()
         if not self._priority_update_timer.isActive():
             self._prioritize_visible_thumbnails()  # immediate first update
             self._priority_update_timer.start()
         self._scroll_idle_timer.start()  # reset idle countdown
+
+    def _on_selection_changed_indicators(self, event_data) -> None:
+        self._sel_indicator.update()
 
     def _on_scroll_idle(self):
         """Called when no scroll events have fired for 200ms — stop the

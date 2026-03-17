@@ -22,7 +22,8 @@ DEFAULT_CONFIG = {
         "placeholder_color": "black",
         "statusbar_font": "Arial",
         "statusbar_font_size": 10,
-        "monospace_font": "Menlo"
+        "monospace_font": "Menlo",
+        "edge_bar_height": 3
     },
     "hotkeys": {
         "escape_picture_view": {
