@@ -322,6 +322,9 @@ class VirtualGridManager(QObject):
             self._mat_start = 0
             self._mat_end = 0
 
+    def materialized_labels(self):
+        return self._mat_labels.values()
+
     def clear(self, recycle_label: Callable[[ThumbnailLabel], None]) -> None:
         """Recycle all materialized labels."""
         for label in self._mat_labels.values():

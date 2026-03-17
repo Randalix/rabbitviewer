@@ -113,7 +113,8 @@ def _ensure_qt_stubs():
 
 _ensure_qt_stubs()
 
-from gui.thumbnail_view import ThumbnailViewWidget, ImageState
+from gui.thumbnail_view import ThumbnailViewWidget
+from gui.thumbnail_model import ImageState
 
 
 # ---------------------------------------------------------------------------
@@ -122,40 +123,42 @@ from gui.thumbnail_view import ThumbnailViewWidget, ImageState
 
 def _make_view(all_files=None, is_loading=False):
     """Build a minimal ThumbnailViewWidget stand-in with batch-append state."""
+    from gui.thumbnail_model import ThumbnailModel
     view = object.__new__(ThumbnailViewWidget)
+    view.model = ThumbnailModel()
 
-    view.all_files = list(all_files or [])
-    view._all_files_set = set(view.all_files)
-    view.current_files = list(view.all_files)
+    view.model.all_files = list(all_files or [])
+    view.model.all_files_set = set(view.model.all_files)
+    view.model.current_files = list(view.model.all_files)
     view._is_loading = is_loading
     view._folder_is_cached = False
 
-    view._current_filter = ""
-    view._current_star_filter = [True] * 6
-    view._current_tag_filter = []
-    view._hidden_indices = set()
-    view._visible_to_original_mapping = {}
-    view._original_to_visible_mapping = {}
-    view._visible_original_indices = []
-    view._last_layout_file_count = len(view.all_files)
+    view.model.current_filter = ""
+    view.model.current_star_filter = [True] * 6
+    view.model.current_tag_filter = []
+    view.model.hidden_indices = set()
+    view.model.visible_to_original = {}
+    view.model.original_to_visible = {}
+    view.model.visible_original_indices = []
+    view.model.last_layout_file_count = len(view.model.all_files)
 
     # Build identity mapping for existing files
-    view._path_to_idx = {}
-    view.image_states = {}
-    for i, f in enumerate(view.all_files):
-        view._path_to_idx[f] = i
-        view.image_states[i] = ImageState()
-        view._visible_to_original_mapping[i] = i
-        view._original_to_visible_mapping[i] = i
-        view._visible_original_indices.append(i)
+    view.model.path_to_idx = {}
+    view.model.image_states = {}
+    for i, f in enumerate(view.model.all_files):
+        view.model.path_to_idx[f] = i
+        view.model.image_states[i] = ImageState()
+        view.model.visible_to_original[i] = i
+        view.model.original_to_visible[i] = i
+        view.model.visible_original_indices.append(i)
 
     view._filter_in_flight = False
     view._filter_pending = False
     view._filter_update_timer = MagicMock()
     view._virtual_grid = MagicMock()
-    view._initial_thumb_paths = {}
-    view._thumb_path_cache = {}
-    view._pixmap_cache = {}
+    view.model.initial_thumb_paths = {}
+    view.model.thumb_path_cache = {}
+    view.model.pixmap_cache = {}
     view.labels = {}
     view.service = MagicMock()
     view.filtersApplied = MagicMock()
@@ -171,7 +174,7 @@ def _make_view(all_files=None, is_loading=False):
     view._scan_coalesce_timer = MagicMock()
     view._scan_batch_pending = False
     view._scan_first_batch_flushed = False
-    view._scan_active = is_loading  # scan is active when loading
+    view.model.scan_active = is_loading  # scan is active when loading
     view._sync_virtual_viewport = MagicMock()
     view._recycle_label = MagicMock()
 
@@ -191,13 +194,13 @@ class TestAppendFastPath:
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/c.jpg", "/img/d.jpg"])
 
-        assert len(view.all_files) == 4
-        assert len(view.current_files) == 4
+        assert len(view.model.all_files) == 4
+        assert len(view.model.current_files) == 4
         # New files get correct visible→original mapping
-        assert view._visible_to_original_mapping[2] == 2
-        assert view._visible_to_original_mapping[3] == 3
-        assert view._original_to_visible_mapping[2] == 2
-        assert view._original_to_visible_mapping[3] == 3
+        assert view.model.visible_to_original[2] == 2
+        assert view.model.visible_to_original[3] == 3
+        assert view.model.original_to_visible[2] == 2
+        assert view.model.original_to_visible[3] == 3
 
     def test_fast_path_calls_sync_viewport(self):
         """Scan fast path updates the virtual grid and syncs viewport."""
@@ -240,7 +243,7 @@ class TestAppendFastPath:
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/a.jpg", "/img/b.jpg"])
 
-        assert len(view.all_files) == 2
+        assert len(view.model.all_files) == 2
 
     def test_post_scan_arrival_sorts_into_position(self):
         """Post-scan arrivals (is_loading=False) are sorted into position."""
@@ -250,8 +253,8 @@ class TestAppendFastPath:
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
 
         # b.jpg should be sorted between a.jpg and c.jpg
-        assert view.current_files == ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
-        assert len(view.all_files) == 3
+        assert view.model.current_files == ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
+        assert len(view.model.all_files) == 3
 
     def test_uncached_folder_uses_fast_path(self):
         """Uncached folder (is_loading=True) takes fast path when no filter."""
@@ -274,7 +277,7 @@ class TestAppendWithFilter:
     def test_filter_active_uses_debounce(self):
         """When filter hides files and is_loading=False, use debounce timer."""
         view = _make_view(all_files=["/img/a.jpg"], is_loading=False)
-        view._hidden_indices = {0}  # filter is active
+        view.model.hidden_indices = {0}  # filter is active
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
@@ -284,7 +287,7 @@ class TestAppendWithFilter:
     def test_filter_active_during_scan_uses_immediate_apply(self):
         """When filter hides files and is_loading=True, apply immediately."""
         view = _make_view(all_files=["/img/a.jpg"], is_loading=True)
-        view._hidden_indices = {0}  # filter is active
+        view.model.hidden_indices = {0}  # filter is active
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
@@ -309,7 +312,7 @@ class TestInitialThumbsUpdate:
         label_a = MagicMock()
         label_b = MagicMock()
         view.labels = {0: label_a, 1: label_b}
-        view.image_states = {0: ImageState(), 1: ImageState()}
+        view.model.image_states = {0: ImageState(), 1: ImageState()}
 
         # Mock QImage to return a non-null image
         mock_image = MagicMock()
@@ -326,18 +329,18 @@ class TestInitialThumbsUpdate:
         # Both labels should have been updated
         label_a.updateThumbnail.assert_called_once_with(mock_pixmap)
         label_b.updateThumbnail.assert_called_once_with(mock_pixmap)
-        assert view.image_states[0].loaded is True
-        assert view.image_states[1].loaded is True
+        assert view.model.image_states[0].loaded is True
+        assert view.model.image_states[1].loaded is True
         # Thumb paths stored in cache
-        assert view._thumb_path_cache[0] == "/cache/a_thumb.jpg"
-        assert view._thumb_path_cache[1] == "/cache/b_thumb.jpg"
+        assert view.model.thumb_path_cache[0] == "/cache/a_thumb.jpg"
+        assert view.model.thumb_path_cache[1] == "/cache/b_thumb.jpg"
 
     def test_skips_already_loaded_pixmaps(self):
         """Labels that already have a pixmap are not updated again."""
         view = _make_view(all_files=["/img/a.jpg"])
         label_a = MagicMock()
         view.labels = {0: label_a}
-        view._pixmap_cache[0] = MagicMock()  # already loaded
+        view.model.pixmap_cache[0] = MagicMock()  # already loaded
 
         with patch("gui.thumbnail_view.QImage") as MockQImage:
             ThumbnailViewWidget._on_initial_thumbs_received(view, {
@@ -356,7 +359,7 @@ class TestInitialThumbsUpdate:
             "/img/unknown.jpg": "/cache/unknown_thumb.jpg",
         })
 
-        assert view._initial_thumb_paths["/img/unknown.jpg"] == "/cache/unknown_thumb.jpg"
+        assert view.model.initial_thumb_paths["/img/unknown.jpg"] == "/cache/unknown_thumb.jpg"
 
     def test_unmaterialized_labels_not_updated(self):
         """Files in all_files but not materialized just get thumb path cached."""
@@ -378,8 +381,8 @@ class TestInitialThumbsUpdate:
         # Label 0 is materialized → updated
         view.labels[0].updateThumbnail.assert_called_once()
         # Label 1 not materialized → thumb path cached for lazy load
-        assert view._thumb_path_cache[1] == "/cache/b_thumb.jpg"
-        assert 1 not in view._pixmap_cache
+        assert view.model.thumb_path_cache[1] == "/cache/b_thumb.jpg"
+        assert 1 not in view.model.pixmap_cache
 
 
 # ===================================================================
@@ -392,7 +395,7 @@ class TestThumbPathPickup:
         """_add_image_batch moves thumb paths from _initial_thumb_paths to _thumb_path_cache."""
         view = _make_view()
         # Simulate thumbs arriving before files
-        view._initial_thumb_paths = {
+        view.model.initial_thumb_paths = {
             "/img/a.jpg": "/cache/a_thumb.jpg",
             "/img/b.jpg": "/cache/b_thumb.jpg",
         }
@@ -400,8 +403,8 @@ class TestThumbPathPickup:
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/a.jpg", "/img/b.jpg"])
 
-        assert view._thumb_path_cache[0] == "/cache/a_thumb.jpg"
-        assert view._thumb_path_cache[1] == "/cache/b_thumb.jpg"
+        assert view.model.thumb_path_cache[0] == "/cache/a_thumb.jpg"
+        assert view.model.thumb_path_cache[1] == "/cache/b_thumb.jpg"
         # Should be removed from initial store
-        assert "/img/a.jpg" not in view._initial_thumb_paths
-        assert "/img/b.jpg" not in view._initial_thumb_paths
+        assert "/img/a.jpg" not in view.model.initial_thumb_paths
+        assert "/img/b.jpg" not in view.model.initial_thumb_paths
