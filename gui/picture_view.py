@@ -21,22 +21,37 @@ class PictureView(QWidget):
     imageChanged = Signal(str)  # Signal emitted when current image changes
     closeRequested = Signal()
     _rating_ready = Signal(str, int)  # (path, rating) — marshalled from bg thread
-    
+
     def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
-        
+
         self.config_manager = config_manager
         self._current_path = None # This will store the ORIGINAL path
         self._picture_base = PictureBase()
         self._picture_base.viewStateChanged.connect(self.update)
         self._rating_ready.connect(self._on_rating_ready)
         self._daemon_signals: DaemonSignals | None = None
-        
+
         self._is_panning = False
+        self._interacting = False
         self._last_mouse_pos = QPoint()
+
+        # Throttle inspector events to ~60 fps during continuous interaction.
+        self._pending_inspector_pos = None
+        self._inspector_timer = QTimer(self)
+        self._inspector_timer.setSingleShot(True)
+        self._inspector_timer.setInterval(16)  # ~60 fps
+        self._inspector_timer.timeout.connect(self._flushInspectorEvent)
+
+        # why: trackpad wheel events arrive in rapid bursts; treat the burst as
+        # a single interaction so SmoothPixmapTransform stays off until idle.
+        self._wheel_idle_timer = QTimer(self)
+        self._wheel_idle_timer.setSingleShot(True)
+        self._wheel_idle_timer.setInterval(150)
+        self._wheel_idle_timer.timeout.connect(self._onWheelIdle)
 
         self.service = None
 
@@ -47,16 +62,22 @@ class PictureView(QWidget):
         if event.key() == Qt.Key_Escape:
             self.escapePressed.emit()
 
-    def _updateInspector(self, event_pos: QPointF) -> None:
+    def _queueInspectorUpdate(self, event_pos: QPointF) -> None:
+        """Coalesce rapid mouse-move events; publish at most once per 16 ms."""
         if not self._current_path or not self._picture_base.has_image():
             return
-            
+        self._pending_inspector_pos = event_pos
+        if not self._inspector_timer.isActive():
+            self._inspector_timer.start()
+
+    def _flushInspectorEvent(self) -> None:
+        pos = self._pending_inspector_pos
+        if pos is None or not self._current_path or not self._picture_base.has_image():
+            return
+        self._pending_inspector_pos = None
         try:
-            # Convert to normalized coordinates using PictureBase
-            norm_pos = self._picture_base.screenToNormalized(event_pos)
-            
+            norm_pos = self._picture_base.screenToNormalized(pos)
             if 0 <= norm_pos.x() <= 1 and 0 <= norm_pos.y() <= 1:
-                # Publish inspector update event
                 event_data = InspectorEventData(
                     event_type=EventType.INSPECTOR_UPDATE,
                     source="picture_view",
@@ -65,9 +86,7 @@ class PictureView(QWidget):
                     normalized_position=norm_pos
                 )
                 event_system.publish(event_data)
-                logger.debug(f"Published inspector event from picture view: {self._current_path} at {norm_pos.x():.2f}, {norm_pos.y():.2f}")
-                    
-        except Exception as e:  # why: called from mouse events; geometry errors must not crash the widget
+        except Exception as e:  # why: called from timer; geometry errors must not crash the widget
             logger.error(f"Error updating inspector in picture view: {e}", exc_info=True)
 
     def loadImage(self, image_path: str, force_reload: bool = False) -> bool:
@@ -256,7 +275,10 @@ class PictureView(QWidget):
             return
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        # why: bilinear filtering is expensive at high zoom; skip during
+        # active pan/drag-zoom for responsive interaction, re-enable on release.
+        if not self._interacting:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
 
         transform = self._picture_base.calculateTransform()
         painter.setTransform(transform)
@@ -268,7 +290,7 @@ class PictureView(QWidget):
         self._picture_base.setViewportSize(QSizeF(event.size()))
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        self._updateInspector(QPointF(event.position()))
+        self._queueInspectorUpdate(QPointF(event.position()))
 
         if self._is_panning:
             delta = event.position().toPoint() - self._last_mouse_pos
@@ -292,25 +314,37 @@ class PictureView(QWidget):
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
-        self._updateInspector(QPointF(event.position()))
+        self._queueInspectorUpdate(QPointF(event.position()))
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        if self._interacting and not self._is_panning and not self._picture_base.isDragZooming():
+            self._interacting = False
+            self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._is_panning = True
+            self._interacting = True
             self._last_mouse_pos = event.position().toPoint()
             self.setCursor(Qt.ClosedHandCursor)
-            
+
         elif event.button() == Qt.RightButton:
+            self._interacting = True
             zoom_anchor = self._picture_base.screenToNormalized(QPointF(event.position()))
             self._picture_base.startDragZoom(zoom_anchor, QPointF(event.position()))
-            
+
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._is_panning = False
+            self._interacting = False
             self.setCursor(Qt.ArrowCursor)
-            
+            self.update()  # final repaint with smooth transform
+
         elif event.button() == Qt.RightButton:
+            self._interacting = False
             self._picture_base.endDragZoom()
+            self.update()  # final repaint with smooth transform
             
                 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
@@ -330,6 +364,9 @@ class PictureView(QWidget):
         if delta == 0:
             return
 
+        self._interacting = True
+        self._wheel_idle_timer.start()  # restart on each event
+
         # why: exponential scaling — trackpads send smaller deltas (~15-30)
         # so they produce proportionally finer adjustments vs mouse notches (120).
         from .picture_base import WHEEL_ZOOM_STEP
@@ -341,6 +378,10 @@ class PictureView(QWidget):
         self._picture_base.zoomAtAnchor(new_zoom, mouse_pos)
 
         self.zoomChanged.emit(self._picture_base.viewState().zoom)
+
+    def _onWheelIdle(self) -> None:
+        self._interacting = False
+        self.update()
 
     def has_image(self) -> bool:
         return self._picture_base.has_image()
@@ -355,6 +396,8 @@ class PictureView(QWidget):
         self._picture_base.zoomOut(factor)
 
     def closeEvent(self, event):
+        self._inspector_timer.stop()
+        self._wheel_idle_timer.stop()
         if self._daemon_signals:
             self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
         super().closeEvent(event)
