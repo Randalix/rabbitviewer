@@ -55,6 +55,7 @@ class SourceJob:
     task_factory: Callable[[Any, Priority], List['RenderTask']]
     create_tasks: bool = True
     task_priority: Optional[Priority] = None
+    suppress_progress: bool = False
     on_complete: Optional[Callable] = field(default=None, compare=False)
     on_batch_discovered: Optional[Callable] = field(default=None, compare=False)
     _cancel_event: threading.Event = field(default_factory=threading.Event, compare=False)

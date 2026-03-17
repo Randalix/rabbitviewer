@@ -16,6 +16,7 @@ class ViewportPrioritizer:
 
     _PREVIEW_TICK_BATCH = 20
     _STALE_THRESHOLD_S = 5.0
+    _FULLRES_DEBOUNCE_S = 0.4
 
     def __init__(self, model: ThumbnailModel, send_heatmap: Callable):
         self.model = model
@@ -24,6 +25,7 @@ class ViewportPrioritizer:
         self._last_thumb_pairs: Dict[str, int] = {}
         self._last_fullres_pairs: Dict[str, int] = {}
         self._stale_request_ts: Dict[str, float] = {}
+        self._last_fullres_send_time: float = 0.0
 
         self._pending_previews: List[Tuple[str, str]] = []
 
@@ -156,6 +158,14 @@ class ViewportPrioritizer:
         delta_fullres = [(p, pri) for p, pri in current_fullres.items() if prev_fullres.get(p) != pri]
         fullres_to_cancel = [p for p in prev_fullres if p not in current_fullres]
 
+        # --- Debounce fullres to avoid schedule/cancel churn during rapid hover ---
+        now = time.monotonic()
+        send_fullres = True
+        if (delta_fullres or fullres_to_cancel) and now - self._last_fullres_send_time < self._FULLRES_DEBOUNCE_S:
+            delta_fullres = []
+            fullres_to_cancel = []
+            send_fullres = False
+
         # --- Send to daemon ---
         if delta_upgrade or paths_to_downgrade or delta_fullres or fullres_to_cancel:
             logger.debug(
@@ -167,7 +177,9 @@ class ViewportPrioritizer:
             self._send_heatmap(delta_upgrade, paths_to_downgrade, delta_fullres, fullres_to_cancel)
 
         self._last_thumb_pairs = current_thumb
-        self._last_fullres_pairs = current_fullres
+        if send_fullres:
+            self._last_fullres_pairs = current_fullres
+            self._last_fullres_send_time = now
 
     # -- Preview queue management --------------------------------------------
 
@@ -199,5 +211,6 @@ class ViewportPrioritizer:
         self._last_thumb_pairs = {}
         self._last_fullres_pairs = {}
         self._stale_request_ts = {}
+        self._last_fullres_send_time = 0.0
         self._pending_previews.clear()
         return cancel_paths

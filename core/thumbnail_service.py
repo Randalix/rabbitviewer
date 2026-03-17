@@ -110,6 +110,7 @@ class ThumbnailService:
                     generator=_discovered_batch_generator(),
                     task_factory=self.tm.create_gui_tasks_for_file,
                     create_tasks=True,
+                    suppress_progress=True,
                 )
                 self.rm.submit_source_job(task_job)
 

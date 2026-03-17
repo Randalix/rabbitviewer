@@ -764,8 +764,10 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_RECENT_DIRECTORY, self._handle_open_recent)
 
     def _handle_inspector_event(self, event_data):
+        if event_data.image_path == self.current_hovered_image:
+            return
         self.current_hovered_image = event_data.image_path
-        logger.debug(f"Hovered image updated: {self.current_hovered_image}")
+        logger.debug("Hovered image updated: %s", self.current_hovered_image)
 
     def _setup_hotkeys(self):
         hotkeys_config = self.config_manager.get("hotkeys", {})

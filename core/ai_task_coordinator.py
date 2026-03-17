@@ -273,5 +273,6 @@ class AITaskCoordinator:
             generator=self._batched_generator(missing),
             task_factory=self._create_face_detect_tasks,
             create_tasks=True,
+            suppress_progress=True,
         )
         self.render_manager.submit_source_job(job)

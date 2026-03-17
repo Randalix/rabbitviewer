@@ -426,10 +426,11 @@ class RenderManager:
         job_parts = job.job_id.split('::', 1)
         job_path = job_parts[1] if len(job_parts) > 1 else job_parts[0]
 
-        # Suppress scan_progress for daemon indexing and post-scan task-creation
-        # jobs — the GUI blindly adds every file from scan_progress to its model,
+        # Suppress scan_progress for jobs that re-walk already-known files
+        # (daemon indexing, post-scan task creation, face detection, etc.) —
+        # the GUI blindly adds every file from scan_progress to its model,
         # which would pollute the view or duplicate already-known entries.
-        _suppress_progress = _is_daemon_job or job.job_id.startswith("post_scan::")
+        _suppress_progress = _is_daemon_job or job.suppress_progress
         if not _suppress_progress:
             from core.notifications import ScanProgressData, ImageEntryModel, Notification
             notification_data = ScanProgressData(
