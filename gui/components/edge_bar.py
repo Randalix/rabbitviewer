@@ -24,35 +24,47 @@ class _IndicatorEntry:
 
 
 def _build_top_shape(w: float, bh: float, side_h: float) -> QPainterPath:
-    """Build ∩ shape in top-orientation: y=0 is outer edge, open at bottom."""
+    """Build ∩ shape in top-orientation: y=0 is outer edge, open at bottom.
+
+    Full bh thickness across the top strip and down the sides.
+    Tips taper to zero at the open ends.  The inner contour flows
+    smoothly with no sharp corners.
+    """
     total_h = bh + side_h
-    cr = bh * 1.5
+    cr = bh * 1.5  # inner corner rounding spread
     flare = bh * 0.4
+    cx = w / 2.0
 
     p = QPainterPath()
-    # Outer rectangle (clockwise), open at bottom
     p.moveTo(0.0, total_h)
+
+    # Outer boundary — straight lines
     p.lineTo(0.0, 0.0)
     p.lineTo(w, 0.0)
     p.lineTo(w, total_h)
-    # Right taper — flares outward then curves in
-    p.cubicTo(w + flare, total_h - side_h * 0.7,
-              w - bh, total_h - side_h * 0.4,
+
+    # --- Inner contour: one smooth line ---
+    # Right side taper — bows outward for most of the length
+    p.cubicTo(w + flare, total_h - side_h * 0.85,
+              w + flare * 0.5, total_h - side_h * 0.5,
               w - bh, bh + cr)
-    # Right inner corner
+    # Right inner corner — flows into top strip
     p.cubicTo(w - bh, bh + cr * 0.3,
               w - bh - cr * 0.3, bh,
               w - bh - cr, bh)
-    # Strip inner edge — tapers to zero thickness at center
-    p.quadTo(w / 2.0, 0.0, bh + cr, bh)
+    # Top strip inner edge — tapers to zero at the outer ends (x=w, x=0)
+    # and peaks at full bh thickness in the center.
+    p.cubicTo(w * 0.65, 0.0, cx + bh, bh * 1.2, cx, bh * 1.2)
+    p.cubicTo(cx - bh, bh * 1.2, w * 0.35, 0.0, bh + cr, bh)
     # Left inner corner
     p.cubicTo(bh + cr * 0.3, bh,
               bh, bh + cr * 0.3,
               bh, bh + cr)
-    # Left taper
-    p.cubicTo(bh, total_h - side_h * 0.4,
-              -flare, total_h - side_h * 0.7,
+    # Left side taper — bows outward
+    p.cubicTo(-flare * 0.5, total_h - side_h * 0.5,
+              -flare, total_h - side_h * 0.85,
               0.0, total_h)
+
     p.closeSubpath()
     return p
 
@@ -70,6 +82,7 @@ class EdgeBar(QWidget):
         self._order: List[str] = []
         self._cached_shape: Optional[QPainterPath] = None
         self._cached_shape_key: tuple = ()
+        self._last_clip: Optional[QRectF] = None
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.hide()
@@ -94,14 +107,12 @@ class EdgeBar(QWidget):
         entry.h_ratio = h
         entry.v_ratio = v
         self._sync_visibility()
-        self.update()
 
     def remove_indicator(self, name: str) -> None:
         if name in self._indicators:
             del self._indicators[name]
             self._order.remove(name)
             self._sync_visibility()
-            self.update()
 
     def reposition(self) -> None:
         p = self.parentWidget()
@@ -113,15 +124,17 @@ class EdgeBar(QWidget):
             self.setGeometry(0, 0, w, total_h)
         else:
             self.setGeometry(0, ph - total_h, w, total_h)
+        self._cached_shape = None
         self.raise_()
+
+    def schedule_repaint(self) -> None:
+        """Batched repaint — call after all set_ratio calls are done."""
+        if self.isVisible():
+            self.update()
 
     # -- painting -------------------------------------------------------------
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._cached_shape = None
-
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, _event) -> None:
         w = float(self.width())
         if w <= 0:
             return
@@ -182,9 +195,10 @@ class EdgeBar(QWidget):
         if visible and not self.isVisible():
             self.setVisible(True)
             self.reposition()
+            self.setCursor(Qt.PointingHandCursor)
         elif not visible and self.isVisible():
             self.setVisible(False)
-        self.setCursor(Qt.PointingHandCursor if visible else Qt.ArrowCursor)
+            self.setCursor(Qt.ArrowCursor)
 
 
 class SelectionEdgeIndicator:
@@ -204,7 +218,6 @@ class SelectionEdgeIndicator:
         # Cached extremes — recomputed only on selection change
         self._topmost_y: Optional[float] = None
         self._bottommost_y: Optional[float] = None
-        self._cached_sel_id: int = -1  # id of the selection set when last computed
 
     def on_selection_changed(self) -> None:
         """Recompute cached Y extremes, then update ratios."""
@@ -256,8 +269,11 @@ class SelectionEdgeIndicator:
         top_v = max(0.0, min(1.0, (vp_top - top_y) / side_range)) if top_y < vp_top else 0.0
         bot_v = max(0.0, min(1.0, (bot_y - vp_bot) / side_range)) if bot_y > vp_bot else 0.0
 
+        # Batch: set both bars, then repaint once each
         self._top.set_ratio(self.NAME, top_h, top_v)
         self._bottom.set_ratio(self.NAME, bot_h, bot_v)
+        self._top.schedule_repaint()
+        self._bottom.schedule_repaint()
 
     def scroll_to_nearest(self, direction: str) -> None:
         sel = self._selection.current_selection
