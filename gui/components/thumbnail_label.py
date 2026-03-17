@@ -227,5 +227,3 @@ class ThumbnailLabel(ItemCard):
                 pixmaps.append(pix.scaled(cell, cell, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         self._folder_preview_pixmaps = pixmaps if pixmaps else None
 
-    def _style_border_radius(self) -> int:
-        return 4 if getattr(self, 'is_folder', False) else 0

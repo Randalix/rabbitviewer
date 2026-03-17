@@ -32,9 +32,6 @@ class ItemCard(QLabel):
     def _style_hover_bg(self) -> str | None:
         return None
 
-    def _style_border_radius(self) -> int:
-        return 0
-
     # -- Core styling -----------------------------------------------------
 
     def _build_card_stylesheet(self) -> str:
@@ -45,14 +42,12 @@ class ItemCard(QLabel):
         hc = self._card_config.get("hover_border_color", "#2d59b6")
         bg = self._style_bg()
         hover_bg = self._style_hover_bg()
-        br = self._style_border_radius()
 
-        radius = f" border-radius: {br}px;" if br else ""
         hover_extra = f" background: {hover_bg};" if hover_bg else ""
 
         hover_bc = bc if self.selected else hc
         return (
-            f"{sel} {{ background-color: {bg}; border: {bw}px solid {bc};{radius} }}"
+            f"{sel} {{ background-color: {bg}; border: {bw}px solid {bc}; }}"
             f" {sel}:hover {{ border: {bw}px solid {hover_bc};{hover_extra} }}"
         )
 
