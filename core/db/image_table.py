@@ -1,6 +1,7 @@
 """ImageTable: all image_metadata CRUD operations.
 
-Owns its own connection and lock for WAL concurrency.
+Uses thread-local read connections (WAL) so readers never block on the
+write lock.  Write methods serialize through ``_lock`` + ``self.conn``.
 """
 
 import hashlib
@@ -8,6 +9,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from threading import Lock
 from typing import Any, Dict, List, Optional
@@ -20,8 +22,18 @@ logger = logging.getLogger(__name__)
 
 class ImageTable:
     def __init__(self, db_path: str):
+        self._db_path = db_path
         self.conn = create_connection(db_path)
         self._lock = Lock()
+        self._local = threading.local()
+
+    def _read_conn(self) -> sqlite3.Connection:
+        """Return a thread-local read connection (WAL allows concurrent reads)."""
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = create_connection(self._db_path)
+            self._local.conn = conn
+        return conn
 
     # ------------------------------------------------------------------
     #  Utilities
@@ -94,22 +106,22 @@ class ImageTable:
             return {}
         results: Dict[str, Dict[str, Any]] = {p: {} for p in file_paths}
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                placeholders = ",".join("?" * len(file_paths))
-                cursor.execute(
-                    f"SELECT * FROM image_metadata WHERE file_path IN ({placeholders})",
-                    file_paths,
-                )
-                columns = [desc[0] for desc in cursor.description]
-                for row in cursor.fetchall():
-                    metadata = dict(zip(columns, row))
-                    if metadata.get("exif_data"):
-                        try:
-                            metadata["exif_data"] = json.loads(metadata["exif_data"])
-                        except json.JSONDecodeError:
-                            metadata["exif_data"] = {}
-                    results[metadata["file_path"]] = metadata
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            placeholders = ",".join("?" * len(file_paths))
+            cursor.execute(
+                f"SELECT * FROM image_metadata WHERE file_path IN ({placeholders})",
+                file_paths,
+            )
+            columns = [desc[0] for desc in cursor.description]
+            for row in cursor.fetchall():
+                metadata = dict(zip(columns, row))
+                if metadata.get("exif_data"):
+                    try:
+                        metadata["exif_data"] = json.loads(metadata["exif_data"])
+                    except json.JSONDecodeError:
+                        metadata["exif_data"] = {}
+                results[metadata["file_path"]] = metadata
         except sqlite3.Error as e:
             logger.debug(f"Error in get_metadata_batch: {e}")
         return results
@@ -121,23 +133,23 @@ class ImageTable:
         file has been modified since the last background scan.
         """
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute('SELECT * FROM image_metadata WHERE file_path = ?', (file_path,))
-                result = cursor.fetchone()
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM image_metadata WHERE file_path = ?', (file_path,))
+            result = cursor.fetchone()
 
-                if not result:
-                    return None
+            if not result:
+                return None
 
-                columns = [desc[0] for desc in cursor.description]
-                metadata = dict(zip(columns, result))
+            columns = [desc[0] for desc in cursor.description]
+            metadata = dict(zip(columns, result))
 
-                if metadata.get('exif_data'):
-                    try:
-                        metadata['exif_data'] = json.loads(metadata['exif_data'])
-                    except json.JSONDecodeError:
-                        metadata['exif_data'] = {}
-                return metadata
+            if metadata.get('exif_data'):
+                try:
+                    metadata['exif_data'] = json.loads(metadata['exif_data'])
+                except json.JSONDecodeError:
+                    metadata['exif_data'] = {}
+            return metadata
 
         except sqlite3.Error as e:
             logger.debug(f"Error getting metadata for {file_path}: {e}")
@@ -146,16 +158,16 @@ class ImageTable:
     def needs_full_metadata(self, file_path: str) -> bool:
         """Returns True if the row is missing rich EXIF fields (camera, dimensions, etc.)."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    'SELECT camera_make, width FROM image_metadata WHERE file_path = ?',
-                    (file_path,),
-                )
-                row = cursor.fetchone()
-                if row is None:
-                    return True
-                return row[0] is None and (row[1] is None or row[1] == 0)
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT camera_make, width FROM image_metadata WHERE file_path = ?',
+                (file_path,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return True
+            return row[0] is None and (row[1] is None or row[1] == 0)
         except sqlite3.Error:
             return True
 
@@ -398,15 +410,15 @@ class ImageTable:
     def get_thumbnail_paths(self, file_path: str) -> Dict[str, str]:
         """Gets the thumbnail and view image paths for a file."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
+            conn = self._read_conn()
+            cursor = conn.cursor()
 
-                cursor.execute('''
-                    SELECT thumbnail_path, view_image_path FROM image_metadata
-                    WHERE file_path = ?
-                ''', (file_path,))
+            cursor.execute('''
+                SELECT thumbnail_path, view_image_path FROM image_metadata
+                WHERE file_path = ?
+            ''', (file_path,))
 
-                result = cursor.fetchone()
+            result = cursor.fetchone()
 
             if result:
                 self._touch_accessed_at(file_path)
@@ -440,14 +452,14 @@ class ImageTable:
 
         try:
             placeholders = ",".join("?" for _ in file_paths)
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(f'''
-                    SELECT file_path, thumbnail_path, view_image_path, mtime, file_size
-                    FROM image_metadata
-                    WHERE file_path IN ({placeholders})
-                ''', file_paths)
-                rows = cursor.fetchall()
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                SELECT file_path, thumbnail_path, view_image_path, mtime, file_size
+                FROM image_metadata
+                WHERE file_path IN ({placeholders})
+            ''', file_paths)
+            rows = cursor.fetchall()
 
             for fp, thumb, view, stored_mtime, stored_size in rows:
                 stat = stat_cache.get(fp)
@@ -476,13 +488,13 @@ class ImageTable:
         Returns None if no cached thumbnail is available.
         """
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    SELECT thumbnail_path, view_image_path FROM image_metadata
-                    WHERE file_path = ?
-                ''', (file_path,))
-                result = cursor.fetchone()
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT thumbnail_path, view_image_path FROM image_metadata
+                WHERE file_path = ?
+            ''', (file_path,))
+            result = cursor.fetchone()
 
             if result and result[0] and os.path.exists(result[0]):  # disk-io: cache file check
                 self._touch_accessed_at(file_path)
@@ -507,14 +519,14 @@ class ImageTable:
         results: Dict[str, Dict] = {}
         try:
             placeholders = ",".join("?" for _ in file_paths)
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(f'''
-                    SELECT file_path, thumbnail_path, view_image_path
-                    FROM image_metadata
-                    WHERE file_path IN ({placeholders})
-                ''', file_paths)
-                rows = cursor.fetchall()
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                SELECT file_path, thumbnail_path, view_image_path
+                FROM image_metadata
+                WHERE file_path IN ({placeholders})
+            ''', file_paths)
+            rows = cursor.fetchall()
 
             for fp, thumb, view in rows:
                 valid = bool(thumb and os.path.exists(thumb))  # disk-io: cache file check
@@ -670,16 +682,14 @@ class ImageTable:
     def get_files_by_rating(self, rating: int) -> List[str]:
         """Gets all files with a specific rating."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    SELECT file_path FROM image_metadata
-                    WHERE rating = ?
-                    ORDER BY updated_at DESC
-                ''', (rating,))
-                results = cursor.fetchall()
-
-            return [row[0] for row in results]
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT file_path FROM image_metadata
+                WHERE rating = ?
+                ORDER BY updated_at DESC
+            ''', (rating,))
+            return [row[0] for row in cursor.fetchall()]
 
         except sqlite3.Error as e:
             logger.error(f"Error getting files by rating {rating}: {e}")
@@ -692,11 +702,11 @@ class ImageTable:
     def get_orientation(self, file_path: str) -> int:
         """Returns the stored EXIF orientation for a file, or 1 if unknown."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute('SELECT orientation FROM image_metadata WHERE file_path = ?', (file_path,))
-                row = cursor.fetchone()
-                return row[0] if row and row[0] else 1
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute('SELECT orientation FROM image_metadata WHERE file_path = ?', (file_path,))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else 1
         except sqlite3.Error as e:
             logger.error(f"Error getting orientation for {file_path}: {e}")
             return 1
@@ -706,22 +716,22 @@ class ImageTable:
         if not file_paths:
             return {}
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                result = {}
-                for i in range(0, len(file_paths), 500):
-                    batch = file_paths[i:i + 500]
-                    placeholders = ','.join('?' * len(batch))
-                    cursor.execute(
-                        f'SELECT file_path, orientation FROM image_metadata '
-                        f'WHERE file_path IN ({placeholders})', batch)
-                    for row in cursor.fetchall():
-                        result[row[0]] = row[1] if row[1] else 1
-                # Fill in missing paths with default
-                for fp in file_paths:
-                    if fp not in result:
-                        result[fp] = 1
-                return result
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            result = {}
+            for i in range(0, len(file_paths), 500):
+                batch = file_paths[i:i + 500]
+                placeholders = ','.join('?' * len(batch))
+                cursor.execute(
+                    f'SELECT file_path, orientation FROM image_metadata '
+                    f'WHERE file_path IN ({placeholders})', batch)
+                for row in cursor.fetchall():
+                    result[row[0]] = row[1] if row[1] else 1
+            # Fill in missing paths with default
+            for fp in file_paths:
+                if fp not in result:
+                    result[fp] = 1
+            return result
         except sqlite3.Error as e:
             logger.error("Error batch getting orientations: %s", e)
             return {fp: 1 for fp in file_paths}
@@ -751,21 +761,19 @@ class ImageTable:
                          model: Optional[str] = None) -> List[str]:
         """Searches for images by camera make and/or model."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                query = "SELECT file_path FROM image_metadata WHERE 1=1"
-                params = []
-                if make:
-                    query += " AND camera_make LIKE ?"
-                    params.append(f"%{make}%")
-                if model:
-                    query += " AND camera_model LIKE ?"
-                    params.append(f"%{model}%")
-                query += " ORDER BY date_taken DESC"
-                cursor.execute(query, params)
-                results = cursor.fetchall()
-
-            return [row[0] for row in results]
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            query = "SELECT file_path FROM image_metadata WHERE 1=1"
+            params = []
+            if make:
+                query += " AND camera_make LIKE ?"
+                params.append(f"%{make}%")
+            if model:
+                query += " AND camera_model LIKE ?"
+                params.append(f"%{model}%")
+            query += " ORDER BY date_taken DESC"
+            cursor.execute(query, params)
+            return [row[0] for row in cursor.fetchall()]
 
         except sqlite3.Error as e:
             logger.error(f"Error searching by camera: {e}")
@@ -775,41 +783,39 @@ class ImageTable:
                                 tag_names: Optional[List[str]] = None) -> List[str]:
         """Gets file paths that match the text, star, and tag filters."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
+            conn = self._read_conn()
+            cursor = conn.cursor()
 
-                query = "SELECT file_path FROM image_metadata WHERE 1=1"
-                params: list = []
+            query = "SELECT file_path FROM image_metadata WHERE 1=1"
+            params: list = []
 
-                # Add text filter
-                if text_filter:
-                    query += " AND file_path LIKE ?"
-                    params.append(f"%{text_filter}%")
+            # Add text filter
+            if text_filter:
+                query += " AND file_path LIKE ?"
+                params.append(f"%{text_filter}%")
 
-                # Add star filter
-                enabled_ratings = [i for i, state in enumerate(star_states) if state]
-                if len(enabled_ratings) < len(star_states) and enabled_ratings:
-                    placeholders = ", ".join("?" for _ in enabled_ratings)
-                    query += f" AND rating IN ({placeholders})"
-                    params.extend(enabled_ratings)
-                elif not enabled_ratings:
-                    # If no ratings are selected, match no files
-                    query += " AND 1=0"
+            # Add star filter
+            enabled_ratings = [i for i, state in enumerate(star_states) if state]
+            if len(enabled_ratings) < len(star_states) and enabled_ratings:
+                placeholders = ", ".join("?" for _ in enabled_ratings)
+                query += f" AND rating IN ({placeholders})"
+                params.extend(enabled_ratings)
+            elif not enabled_ratings:
+                # If no ratings are selected, match no files
+                query += " AND 1=0"
 
-                # Add tag filter
-                if tag_names:
-                    tag_placeholders = ", ".join("?" for _ in tag_names)
-                    query += f""" AND file_path IN (
-                        SELECT it.file_path FROM image_tags it
-                        JOIN tags t ON t.id = it.tag_id
-                        WHERE t.name IN ({tag_placeholders})
-                    )"""
-                    params.extend(tag_names)
+            # Add tag filter
+            if tag_names:
+                tag_placeholders = ", ".join("?" for _ in tag_names)
+                query += f""" AND file_path IN (
+                    SELECT it.file_path FROM image_tags it
+                    JOIN tags t ON t.id = it.tag_id
+                    WHERE t.name IN ({tag_placeholders})
+                )"""
+                params.extend(tag_names)
 
-                cursor.execute(query, params)
-                results = cursor.fetchall()
-
-                return [row[0] for row in results]
+            cursor.execute(query, params)
+            return [row[0] for row in cursor.fetchall()]
 
         except sqlite3.Error as e:
             logger.error(f"Error getting filtered files: {e}", exc_info=True)
@@ -822,10 +828,10 @@ class ImageTable:
     def get_all_file_paths(self) -> List[str]:
         """Gets a list of all file_path entries from the database."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute('SELECT file_path FROM image_metadata')
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute('SELECT file_path FROM image_metadata')
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error(f"Error getting all file paths from database: {e}")
             return []
@@ -837,21 +843,20 @@ class ImageTable:
         (including subdirectories).  When False, returns only direct children.
         """
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                search_path = os.path.join(directory_path, '')
-                if recursive:
-                    cursor.execute(
-                        "SELECT file_path FROM image_metadata WHERE file_path LIKE ?",
-                        (search_path + '%',),
-                    )
-                else:
-                    cursor.execute("""
-                        SELECT file_path FROM image_metadata
-                        WHERE file_path LIKE ? AND SUBSTR(file_path, LENGTH(?) + 1) NOT LIKE '%/%'
-                    """, (search_path + '%', search_path))
-                files = [row[0] for row in cursor.fetchall()]
-                return files
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            search_path = os.path.join(directory_path, '')
+            if recursive:
+                cursor.execute(
+                    "SELECT file_path FROM image_metadata WHERE file_path LIKE ?",
+                    (search_path + '%',),
+                )
+            else:
+                cursor.execute("""
+                    SELECT file_path FROM image_metadata
+                    WHERE file_path LIKE ? AND SUBSTR(file_path, LENGTH(?) + 1) NOT LIKE '%/%'
+                """, (search_path + '%', search_path))
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error(f"Failed to get directory files for {directory_path} from DB: {e}")
             return []
@@ -864,16 +869,16 @@ class ImageTable:
         image_metadata table -- no filesystem access.
         """
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                search_path = os.path.join(parent_path, '')
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            search_path = os.path.join(parent_path, '')
 
-                # Single query: compute per-subdirectory counts and previews.
-                # SUBSTR extracts the relative path after parent_path/.
-                # INSTR finds the first '/' -- everything before it is the
-                # immediate subdirectory name.  Direct-child files (no '/')
-                # map to NULL and are excluded.
-                cursor.execute("""
+            # Single query: compute per-subdirectory counts and previews.
+            # SUBSTR extracts the relative path after parent_path/.
+            # INSTR finds the first '/' -- everything before it is the
+            # immediate subdirectory name.  Direct-child files (no '/')
+            # map to NULL and are excluded.
+            cursor.execute("""
                     WITH files AS (
                         SELECT
                             file_path,
@@ -905,54 +910,54 @@ class ImageTable:
                 """, (search_path, search_path, search_path,
                       search_path, search_path, search_path,
                       search_path + '%'))
-                subdir_rows = cursor.fetchall()
+            subdir_rows = cursor.fetchall()
 
-                if not subdir_rows:
-                    return []
+            if not subdir_rows:
+                return []
 
-                # Fetch up to 4 preview thumbnails per subdirectory in one query
-                placeholders = ','.join('?' * len(subdir_rows))
-                subdir_names = [row[0] for row in subdir_rows]
-                preview_map: Dict[str, List[str]] = {name: [] for name in subdir_names}
+            # Fetch up to 4 preview thumbnails per subdirectory in one query
+            placeholders = ','.join('?' * len(subdir_rows))
+            subdir_names = [row[0] for row in subdir_rows]
+            preview_map: Dict[str, List[str]] = {name: [] for name in subdir_names}
 
-                cursor.execute(f"""
-                    SELECT subdir, thumbnail_path FROM (
-                        SELECT
-                            SUBSTR(file_path, LENGTH(?) + 1,
-                                   INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1) as subdir,
-                            thumbnail_path,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY SUBSTR(file_path, LENGTH(?) + 1,
-                                    INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1)
-                            ) as rn
-                        FROM image_metadata
-                        WHERE file_path LIKE ?
-                          AND thumbnail_path IS NOT NULL
-                          AND thumbnail_path != ''
-                          AND INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') > 0
-                          AND SUBSTR(file_path, LENGTH(?) + 1,
-                              INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1) IN ({placeholders})
-                    )
-                    WHERE rn <= 4
-                """, (search_path, search_path, search_path, search_path,
-                      search_path + '%', search_path, search_path, search_path,
-                      *subdir_names))
+            cursor.execute(f"""
+                SELECT subdir, thumbnail_path FROM (
+                    SELECT
+                        SUBSTR(file_path, LENGTH(?) + 1,
+                               INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1) as subdir,
+                        thumbnail_path,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY SUBSTR(file_path, LENGTH(?) + 1,
+                                INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1)
+                        ) as rn
+                    FROM image_metadata
+                    WHERE file_path LIKE ?
+                      AND thumbnail_path IS NOT NULL
+                      AND thumbnail_path != ''
+                      AND INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') > 0
+                      AND SUBSTR(file_path, LENGTH(?) + 1,
+                          INSTR(SUBSTR(file_path, LENGTH(?) + 1), '/') - 1) IN ({placeholders})
+                )
+                WHERE rn <= 4
+            """, (search_path, search_path, search_path, search_path,
+                  search_path + '%', search_path, search_path, search_path,
+                  *subdir_names))
 
-                for subdir_name, thumb_path in cursor.fetchall():
-                    if subdir_name in preview_map:
-                        preview_map[subdir_name].append(thumb_path)
+            for subdir_name, thumb_path in cursor.fetchall():
+                if subdir_name in preview_map:
+                    preview_map[subdir_name].append(thumb_path)
 
-                results = []
-                for subdir_name, recursive_count, direct_count in subdir_rows:
-                    results.append({
-                        'path': os.path.join(parent_path, subdir_name),
-                        'name': subdir_name,
-                        'image_count': direct_count,
-                        'recursive_count': recursive_count,
-                        'preview_paths': preview_map.get(subdir_name, []),
-                    })
+            results = []
+            for subdir_name, recursive_count, direct_count in subdir_rows:
+                results.append({
+                    'path': os.path.join(parent_path, subdir_name),
+                    'name': subdir_name,
+                    'image_count': direct_count,
+                    'recursive_count': recursive_count,
+                    'preview_paths': preview_map.get(subdir_name, []),
+                })
 
-                return results
+            return results
         except sqlite3.Error as e:
             logger.error(f"Failed to get subdirectory info for {parent_path}: {e}")
             return []
@@ -972,11 +977,11 @@ class ImageTable:
 
         current_time = time.time()
 
-        with self._lock:
-            cursor = self.conn.cursor()
-            placeholders = ','.join('?' * len(file_paths))
-            cursor.execute(f'SELECT file_path FROM image_metadata WHERE file_path IN ({placeholders})', file_paths)
-            existing_paths = {row[0] for row in cursor.fetchall()}
+        conn = self._read_conn()
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(file_paths))
+        cursor.execute(f'SELECT file_path FROM image_metadata WHERE file_path IN ({placeholders})', file_paths)
+        existing_paths = {row[0] for row in cursor.fetchall()}
 
         new_paths = [p for p in file_paths if p not in existing_paths]
         if not new_paths:
@@ -1041,11 +1046,11 @@ class ImageTable:
     def cleanup_missing_files(self) -> None:
         """Removes entries for files that no longer exist."""
         try:
-            # Fetch all paths while holding the lock, then release it before doing filesystem I/O.
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute('SELECT file_path FROM image_metadata')
-                all_paths = [row[0] for row in cursor.fetchall()]
+            # Fetch all paths via read connection, then do filesystem I/O outside any lock.
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute('SELECT file_path FROM image_metadata')
+            all_paths = [row[0] for row in cursor.fetchall()]
 
             # Filesystem existence checks happen outside the lock to avoid blocking DB operations.
             missing_paths = [p for p in all_paths if not os.path.exists(p)]  # disk-io: ghost cleanup
@@ -1136,13 +1141,13 @@ class ImageTable:
         try:
             clauses = " OR ".join(["file_path LIKE ?"] * len(watch_paths))
             params = [p.rstrip("/") + "/%" for p in watch_paths]
-            with self._lock:
-                cursor = self.conn.execute(
-                    f"SELECT file_path FROM image_metadata "
-                    f"WHERE thumbnail_path IS NULL AND ({clauses})",
-                    params,
-                )
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.execute(
+                f"SELECT file_path FROM image_metadata "
+                f"WHERE thumbnail_path IS NULL AND ({clauses})",
+                params,
+            )
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error("get_files_missing_thumbnails failed: %s", e)
             return []
@@ -1154,3 +1159,11 @@ class ImageTable:
     def close(self):
         with self._lock:
             self.conn.close()
+        # Best-effort close of the calling thread's read connection.
+        conn = getattr(self._local, 'conn', None)
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+            self._local.conn = None
