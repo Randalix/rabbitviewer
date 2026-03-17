@@ -1153,7 +1153,7 @@ class ThumbnailViewWidget(QFrame):
         self._scroll_idle_timer.start()  # reset idle countdown
 
     def _on_selection_changed_indicators(self, event_data) -> None:
-        self._sel_indicator.update()
+        self._sel_indicator.on_selection_changed()
 
     def _on_scroll_idle(self):
         """Called when no scroll events have fired for 200ms — stop the

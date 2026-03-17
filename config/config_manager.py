@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
         "statusbar_font": "Arial",
         "statusbar_font_size": 10,
         "monospace_font": "Menlo",
-        "edge_bar_height": 3
+        "edge_bar_height": 6
     },
     "hotkeys": {
         "escape_picture_view": {
