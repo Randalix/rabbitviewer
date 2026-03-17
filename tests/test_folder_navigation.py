@@ -48,15 +48,15 @@ class TestFolderNode:
 def _insert_file(db: MetadataDatabase, file_path: str, thumbnail_path: str = None):
     """Insert a minimal image_metadata record."""
     now = time.time()
-    with db._lock:
-        cursor = db.conn.cursor()
+    with db.images._lock:
+        cursor = db.images.conn.cursor()
         cursor.execute(
             """INSERT OR IGNORE INTO image_metadata
                (file_path, path_hash, thumbnail_path, mtime, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
             (file_path, file_path, thumbnail_path, now, now, now),
         )
-        db.conn.commit()
+        db.images.conn.commit()
 
 
 class TestGetSubdirectoryInfo:
@@ -67,7 +67,7 @@ class TestGetSubdirectoryInfo:
         _insert_file(db, "/photos/img1.jpg")
         _insert_file(db, "/photos/img2.jpg")
 
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert result == []
 
     def test_single_subdirectory(self, tmp_env):
@@ -75,7 +75,7 @@ class TestGetSubdirectoryInfo:
         _insert_file(db, "/photos/vacation/img1.jpg", "/cache/t1.jpg")
         _insert_file(db, "/photos/vacation/img2.jpg", "/cache/t2.jpg")
 
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert len(result) == 1
         assert result[0]["name"] == "vacation"
         assert result[0]["path"] == "/photos/vacation"
@@ -89,7 +89,7 @@ class TestGetSubdirectoryInfo:
         _insert_file(db, "/photos/alpha/img1.jpg")
         _insert_file(db, "/photos/alpha/img2.jpg")
 
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert len(result) == 2
         assert result[0]["name"] == "alpha"
         assert result[1]["name"] == "zebra"
@@ -104,7 +104,7 @@ class TestGetSubdirectoryInfo:
         _insert_file(db, "/photos/vacation/day1/img3.jpg")
         _insert_file(db, "/photos/vacation/day2/img4.jpg")
 
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert len(result) == 1
         vacation = result[0]
         assert vacation["name"] == "vacation"
@@ -116,7 +116,7 @@ class TestGetSubdirectoryInfo:
         for i in range(10):
             _insert_file(db, f"/photos/many/img{i}.jpg", f"/cache/t{i}.jpg")
 
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert len(result[0]["preview_paths"]) == 4
 
     def test_preview_paths_skip_empty(self, tmp_env):
@@ -125,12 +125,12 @@ class TestGetSubdirectoryInfo:
         _insert_file(db, "/photos/mix/img2.jpg", None)       # no thumbnail
         _insert_file(db, "/photos/mix/img3.jpg", "")         # empty string
 
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert result[0]["preview_paths"] == ["/cache/t1.jpg"]
 
     def test_empty_database(self, tmp_env):
         db = tmp_env["db"]
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert result == []
 
     def test_nested_navigation(self, tmp_env):
@@ -141,12 +141,12 @@ class TestGetSubdirectoryInfo:
         _insert_file(db, "/photos/vacation/beach.jpg")
 
         # From /photos: one subdirectory "vacation"
-        result = db.get_subdirectory_info("/photos")
+        result = db.images.get_subdirectory_info("/photos")
         assert len(result) == 1
         assert result[0]["name"] == "vacation"
 
         # From /photos/vacation: two subdirectories "day1" and "day2"
-        result = db.get_subdirectory_info("/photos/vacation")
+        result = db.images.get_subdirectory_info("/photos/vacation")
         assert len(result) == 2
         assert result[0]["name"] == "day1"
         assert result[1]["name"] == "day2"

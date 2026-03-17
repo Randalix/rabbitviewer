@@ -30,10 +30,10 @@ class BackgroundIndexer:
     def recover_orphans(self) -> None:
         """Submit recovery jobs for files discovered but not processed."""
         rm = self.thumbnail_manager.render_manager
-        scan_roots = self.metadata_db.ledger_get_all_scan_roots()
+        scan_roots = self.metadata_db.ledgers.ledger_get_all_scan_roots()
 
         for scan_root in scan_roots:
-            incomplete = self.metadata_db.ledger_get_incomplete(scan_root)
+            incomplete = self.metadata_db.ledgers.ledger_get_incomplete(scan_root)
             if not incomplete:
                 continue
 
@@ -63,12 +63,12 @@ class BackgroundIndexer:
     def resume_pending_work(self) -> None:
         """Submit jobs for work left incomplete by a prior GUI session."""
         rm = self.thumbnail_manager.render_manager
-        roots = self.metadata_db.file_work_get_all_roots()
+        roots = self.metadata_db.ledgers.file_work_get_all_roots()
         if not roots:
             return
 
         for scan_root in roots:
-            pending_types = set(self.metadata_db.file_work_get_pending_types(scan_root))
+            pending_types = set(self.metadata_db.ledgers.file_work_get_pending_types(scan_root))
             if not pending_types:
                 continue
 
@@ -78,7 +78,7 @@ class BackgroundIndexer:
                 core_files: set = set()
                 for wt in core_types:
                     core_files.update(
-                        self.metadata_db.file_work_get_pending(scan_root, wt)
+                        self.metadata_db.ledgers.file_work_get_pending(scan_root, wt)
                     )
                 if core_files:
                     job_id = f"daemon_work::core::{scan_root}"
@@ -100,21 +100,21 @@ class BackgroundIndexer:
             # AI work — delegate to existing submit methods (they do their
             # own skip-checks via DB queries).
             if 'clip' in pending_types:
-                files = self.metadata_db.file_work_get_pending(scan_root, 'clip')
+                files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'clip')
                 if files:
                     logger.info("BackgroundIndexer: resuming CLIP indexing for %d files in %s",
                                 len(files), scan_root)
                     self.thumbnail_manager.submit_clip_indexing_job(scan_root, files)
 
             if 'face_detect' in pending_types:
-                files = self.metadata_db.file_work_get_pending(scan_root, 'face_detect')
+                files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'face_detect')
                 if files:
                     logger.info("BackgroundIndexer: resuming face detection for %d files in %s",
                                 len(files), scan_root)
                     self.thumbnail_manager.submit_face_detection_job(scan_root, files)
 
             if 'auto_orient' in pending_types:
-                files = self.metadata_db.file_work_get_pending(scan_root, 'auto_orient')
+                files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'auto_orient')
                 if files:
                     logger.info("BackgroundIndexer: resuming auto-orient for %d files in %s",
                                 len(files), scan_root)
@@ -142,7 +142,7 @@ class BackgroundIndexer:
         thumbnail tasks never ran (e.g. due to the resume_pending_work
         deadlock fixed in 71cac8c).
         """
-        missing = self.metadata_db.get_files_missing_thumbnails(self.watch_paths)
+        missing = self.metadata_db.images.get_files_missing_thumbnails(self.watch_paths)
         if not missing:
             return
 
@@ -185,7 +185,7 @@ class BackgroundIndexer:
                 logger.warning(f"BackgroundIndexer: skipping non-existent watch_path: {path}")
                 continue
 
-            skip_dirs = self.metadata_db.ledger_get_walked_dirs(path)
+            skip_dirs = self.metadata_db.ledgers.ledger_get_walked_dirs(path)
             if skip_dirs:
                 logger.info(
                     f"BackgroundIndexer: skipping {len(skip_dirs)} "
@@ -193,9 +193,9 @@ class BackgroundIndexer:
                 )
 
             def _ledger_batch_cb(paths, _root=path):
-                self.metadata_db.ledger_batch_insert(paths, scan_root=_root)
+                self.metadata_db.ledgers.ledger_batch_insert(paths, scan_root=_root)
                 for wt in ('thumbnail', 'view_image', 'metadata'):
-                    self.metadata_db.file_work_batch_insert(paths, wt, scan_root=_root)
+                    self.metadata_db.ledgers.file_work_batch_insert(paths, wt, scan_root=_root)
 
             job = SourceJob(
                 job_id=f"daemon_idx::{path}",

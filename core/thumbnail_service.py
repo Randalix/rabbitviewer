@@ -43,7 +43,7 @@ class ThumbnailService:
         Returns a dict with 'files' (sorted list of paths) and
         'thumbnail_paths' (dict mapping file_path → thumbnail_path).
         """
-        db_files = self.db.get_directory_files(path, recursive=recursive)
+        db_files = self.db.images.get_directory_files(path, recursive=recursive)
         logger.info(
             f"DB returned {len(db_files)} cached files for '{path}' "
             f"(recursive={recursive}). Starting reconciliation walk."
@@ -52,7 +52,7 @@ class ThumbnailService:
         thumb_map: Dict[str, str] = {}
         if db_files:
             t0 = time.perf_counter()
-            validity = self.db.batch_get_cached_thumbnail_validity(db_files)
+            validity = self.db.images.batch_get_cached_thumbnail_validity(db_files)
             thumb_map = {
                 fp: info['thumbnail_path']
                 for fp, info in validity.items()
@@ -91,7 +91,7 @@ class ThumbnailService:
 
                 discovered_list = list(discovered)
                 for wt in ('thumbnail', 'view_image', 'metadata'):
-                    self.db.file_work_batch_insert(discovered_list, wt, scan_root=path)
+                    self.db.ledgers.file_work_batch_insert(discovered_list, wt, scan_root=path)
 
                 def _discovered_batch_generator():
                     batch = []
@@ -113,7 +113,7 @@ class ThumbnailService:
                 )
                 self.rm.submit_source_job(task_job)
 
-            self.db.ledger_prune_complete(path)
+            self.db.ledgers.ledger_prune_complete(path)
 
             # Chain AI background jobs after scan completes
             all_files = list(discovered) + [f for f in db_files if f not in discovered]
@@ -121,17 +121,17 @@ class ThumbnailService:
                 cfg = self.tm.config_manager
                 if cfg.get("ai.enabled", True):
                     if cfg.get("ai.clip_search.enabled", True):
-                        self.db.file_work_batch_insert(all_files, 'clip', scan_root=path)
+                        self.db.ledgers.file_work_batch_insert(all_files, 'clip', scan_root=path)
                     if cfg.get("ai.auto_orient.enabled", False):
-                        self.db.file_work_batch_insert(all_files, 'auto_orient', scan_root=path)
+                        self.db.ledgers.file_work_batch_insert(all_files, 'auto_orient', scan_root=path)
                     if cfg.get("ai.face_recognition.enabled", True):
-                        self.db.file_work_batch_insert(all_files, 'face_detect', scan_root=path)
+                        self.db.ledgers.file_work_batch_insert(all_files, 'face_detect', scan_root=path)
                 self.tm.submit_clip_indexing_job(path, all_files)
                 self.tm.submit_auto_orient_job(path, all_files)
                 self.tm.submit_face_detection_job(path, all_files)
 
         def _ledger_batch_cb(paths):
-            self.db.ledger_batch_insert(paths, scan_root=path)
+            self.db.ledgers.ledger_batch_insert(paths, scan_root=path)
 
         reconcile_job = SourceJob(
             job_id=f"gui_scan::{path}",
@@ -158,10 +158,10 @@ class ThumbnailService:
 
     def get_subdirectories(self, parent_path: str) -> List[FolderNode]:
         """Return FolderNodes for immediate subdirectories that contain images."""
-        rows = self.db.get_subdirectory_info(parent_path)
+        rows = self.db.images.get_subdirectory_info(parent_path)
         nodes = []
         for r in rows:
-            image_paths = sorted(self.db.get_directory_files(r['path'], recursive=True))
+            image_paths = sorted(self.db.images.get_directory_files(r['path'], recursive=True))
             nodes.append(FolderNode(
                 path=r['path'],
                 name=r['name'],
@@ -175,7 +175,7 @@ class ThumbnailService:
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None) -> List[str]:
-        return self.db.get_filtered_file_paths(
+        return self.db.images.get_filtered_file_paths(
             text_filter, star_states,
             tag_names=tag_names if tag_names else None,
         )
@@ -214,7 +214,7 @@ class ThumbnailService:
             view_image_ready = False
             view_image_path = None
 
-            cached_paths = self.db.get_thumbnail_paths(path)
+            cached_paths = self.db.images.get_thumbnail_paths(path)
             if cached_paths:
                 thumbnail_path = cached_paths.get('thumbnail_path')
                 view_image_path = cached_paths.get('view_image_path')
@@ -264,17 +264,17 @@ class ThumbnailService:
                 image_paths, Priority.GUI_REQUEST,
                 task_type=TaskType.SIMPLE,
             )
-        return self.db.get_metadata_batch(image_paths)
+        return self.db.images.get_metadata_batch(image_paths)
 
     # ------------------------------------------------------------------
     #  Rating
     # ------------------------------------------------------------------
 
     def set_rating(self, image_paths: List[str], rating: int) -> bool:
-        success, _count = self.db.batch_set_ratings(image_paths, rating)
+        success, _count = self.db.images.batch_set_ratings(image_paths, rating)
         if success:
             for path in image_paths:
-                self.db.pending_write_insert(path, 'rating', {'rating': rating})
+                self.db.ledgers.pending_write_insert(path, 'rating', {'rating': rating})
                 self.rm.submit_task(
                     f"write_rating::{path}",
                     Priority.NORMAL,
@@ -301,10 +301,10 @@ class ThumbnailService:
             return False
 
         for path in image_paths:
-            current = self.db.get_orientation(path)
+            current = self.db.images.get_orientation(path)
             new_orientation = table.get(current, table.get(1, 1))
-            self.db.set_orientation(path, new_orientation)
-            self.db.pending_write_insert(
+            self.db.images.set_orientation(path, new_orientation)
+            self.db.ledgers.pending_write_insert(
                 path, 'orientation', {'orientation': new_orientation})
             # Remove any existing write_orientation task (regardless of state)
             # so the new submission with the latest orientation is not ignored.
@@ -327,8 +327,8 @@ class ThumbnailService:
         if len(image_paths) != len(orientations):
             return False
         for path, orientation in zip(image_paths, orientations):
-            self.db.set_orientation(path, orientation)
-            self.db.pending_write_insert(
+            self.db.images.set_orientation(path, orientation)
+            self.db.ledgers.pending_write_insert(
                 path, 'orientation', {'orientation': orientation})
             task_id = f"write_orientation::{path}"
             with self.rm.graph_lock:
@@ -365,21 +365,21 @@ class ThumbnailService:
     # ------------------------------------------------------------------
 
     def set_tags(self, image_paths: List[str], tags: List[str]) -> bool:
-        success = self.db.batch_set_tags(image_paths, tags)
+        success = self.db.tags.batch_set_tags(image_paths, tags)
         if success:
             self._queue_tag_write_tasks(image_paths)
         return success
 
     def remove_tags(self, image_paths: List[str], tags: List[str]) -> bool:
-        success = self.db.batch_remove_tags(image_paths, tags)
+        success = self.db.tags.batch_remove_tags(image_paths, tags)
         if success:
             self._queue_tag_write_tasks(image_paths)
         return success
 
     def _queue_tag_write_tasks(self, image_paths: List[str]) -> None:
-        all_tags_map = self.db.batch_get_image_tags(image_paths)
+        all_tags_map = self.db.tags.batch_get_image_tags(image_paths)
         for path, path_tags in all_tags_map.items():
-            self.db.pending_write_insert(path, 'tags', {'tags': path_tags})
+            self.db.ledgers.pending_write_insert(path, 'tags', {'tags': path_tags})
             self.rm.submit_task(
                 f"write_tags::{path}",
                 Priority.NORMAL,
@@ -389,22 +389,22 @@ class ThumbnailService:
             )
 
     def get_tags(self, directory_path: str = "") -> Dict[str, List[Dict]]:
-        all_tags = self.db.get_all_tags()
-        dir_tags = self.db.get_directory_tags(directory_path) if directory_path else []
+        all_tags = self.db.tags.get_all_tags()
+        dir_tags = self.db.tags.get_directory_tags(directory_path) if directory_path else []
         return {
             'directory_tags': dir_tags,
             'global_tags': all_tags,
         }
 
     def get_image_tags(self, image_paths: List[str]) -> Dict[str, List[str]]:
-        return {path: self.db.get_image_tags(path) for path in image_paths}
+        return {path: self.db.tags.get_image_tags(path) for path in image_paths}
 
     # ------------------------------------------------------------------
     #  Move Records
     # ------------------------------------------------------------------
 
     def move_records(self, moves: List[Dict[str, str]]) -> int:
-        return self.db.move_records(moves)
+        return self.db.images.move_records(moves)
 
     # ------------------------------------------------------------------
     #  Run Tasks (compound operations from scripts)
@@ -461,11 +461,11 @@ class ThumbnailService:
             return []
 
         # Reuse cached matrix if no embeddings were added/removed since last build
-        gen = self.db.embedding_generation
+        gen = self.db.embeddings.generation
         if self._clip_cache is not None and self._clip_cache_gen == gen:
             file_paths, matrix = self._clip_cache
         else:
-            rows = self.db.get_all_embeddings()
+            rows = self.db.embeddings.get_all_embeddings()
             file_paths, matrix = clip_search.build_embedding_matrix(rows)
             if matrix is not None:
                 self._clip_cache = (file_paths, matrix)
@@ -492,7 +492,7 @@ class ThumbnailService:
 
     def clip_index_status(self):
         model = self.config_manager.get("ai.clip_search.model", "clip-vit-b-32")
-        indexed = self.db.count_embeddings(model)
+        indexed = self.db.embeddings.count_embeddings(model)
         return {"indexed": indexed, "model": model}
 
     # ------------------------------------------------------------------
@@ -500,52 +500,52 @@ class ThumbnailService:
     # ------------------------------------------------------------------
 
     def get_faces_for_file(self, file_path: str) -> list:
-        return self.db.get_faces_for_file(file_path)
+        return self.db.faces.get_faces_for_file(file_path)
 
     def get_all_persons(self, include_hidden: bool = False) -> list:
-        return self.db.get_all_persons(include_hidden)
+        return self.db.faces.get_all_persons(include_hidden)
 
     def get_persons_for_files(self, file_paths: list, include_hidden: bool = False) -> list:
-        return self.db.get_persons_for_files(file_paths, include_hidden)
+        return self.db.faces.get_persons_for_files(file_paths, include_hidden)
 
     def rename_person(self, person_id: str, name: str):
-        self.db.rename_person(person_id, name)
+        self.db.faces.rename_person(person_id, name)
 
     def merge_persons(self, target_id: str, source_ids: list):
-        self.db.merge_persons(target_id, source_ids)
+        self.db.faces.merge_persons(target_id, source_ids)
 
     def hide_person(self, person_id: str, hidden: bool):
-        self.db.hide_person(person_id, hidden)
+        self.db.faces.hide_person(person_id, hidden)
 
     def ungroup_person(self, person_id: str):
-        self.db.ungroup_person(person_id)
+        self.db.faces.ungroup_person(person_id)
 
     def set_feature_face(self, person_id: str, face_id: str):
-        self.db.set_feature_face(person_id, face_id)
+        self.db.faces.set_feature_face(person_id, face_id)
 
     def get_face_paths_for_person(self, person_id: str) -> list:
-        return self.db.get_face_paths_for_person(person_id)
+        return self.db.faces.get_face_paths_for_person(person_id)
 
     def get_faces_for_person(self, person_id: str) -> list:
-        return self.db.get_faces_for_person(person_id)
+        return self.db.faces.get_faces_for_person(person_id)
 
     def get_feature_faces_batch(self, person_feature_map: dict) -> dict:
-        return self.db.get_feature_faces_batch(person_feature_map)
+        return self.db.faces.get_feature_faces_batch(person_feature_map)
 
     def get_face_paths_for_persons(self, person_ids: list) -> list:
-        return self.db.get_face_paths_for_persons(person_ids)
+        return self.db.faces.get_face_paths_for_persons(person_ids)
 
     def assign_face_to_person(self, face_id: str, person_id: str):
-        self.db.assign_face_to_person(face_id, person_id)
+        self.db.faces.assign_face_to_person(face_id, person_id)
 
     def get_person_names(self) -> list:
-        return self.db.get_person_names()
+        return self.db.faces.get_person_names()
 
     def create_person(self, person_id: str, name: str = '', feature_face_id: str = None):
-        return self.db.create_person(person_id, name, feature_face_id)
+        return self.db.faces.create_person(person_id, name, feature_face_id)
 
     def get_person_by_name(self, name: str):
-        return self.db.get_person_by_name(name)
+        return self.db.faces.get_person_by_name(name)
 
     # ------------------------------------------------------------------
     #  Lifecycle

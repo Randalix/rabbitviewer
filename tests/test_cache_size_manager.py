@@ -32,16 +32,16 @@ def cache_env(tmp_path):
         view_file.write_bytes(b"\x00" * (view_kb * 1024))
 
         # Insert the record — set_thumbnail_paths needs the source to exist for INSERT.
-        db.set_thumbnail_paths(str(src), thumbnail_path=str(thumb_file),
+        db.images.set_thumbnail_paths(str(src), thumbnail_path=str(thumb_file),
                                view_image_path=str(view_file))
 
         # Manually set accessed_at for deterministic LRU ordering.
-        with db._lock:
-            db.conn.execute(
+        with db.images._lock:
+            db.images.conn.execute(
                 "UPDATE image_metadata SET accessed_at = ? WHERE file_path = ?",
                 (accessed_at, str(src)),
             )
-            db.conn.commit()
+            db.images.conn.commit()
 
         return str(src)
 
@@ -83,11 +83,11 @@ class TestEvictLruCache:
         assert freed > 0
 
         # The old record should have been evicted (paths are None).
-        paths = db.get_thumbnail_paths(src_old)
+        paths = db.images.get_thumbnail_paths(src_old)
         assert paths.get("thumbnail_path") is None
 
         # The new record should still exist.
-        paths = db.get_thumbnail_paths(src_new)
+        paths = db.images.get_thumbnail_paths(src_new)
         assert paths.get("thumbnail_path") is not None
 
     def test_evicts_multiple_records(self, cache_env):
@@ -169,11 +169,11 @@ class TestAccessedAtTracking:
         src = add("a.jpg", thumb_kb=10, view_kb=10, accessed_at=0.0)
 
         before = time.time()
-        db.get_thumbnail_paths(src)
+        db.images.get_thumbnail_paths(src)
         after = time.time()
 
-        with db._lock:
-            cursor = db.conn.cursor()
+        with db.images._lock:
+            cursor = db.images.conn.cursor()
             cursor.execute("SELECT accessed_at FROM image_metadata WHERE file_path = ?", (src,))
             accessed_at = cursor.fetchone()[0]
 
@@ -184,11 +184,11 @@ class TestAccessedAtTracking:
         src = add("a.jpg", thumb_kb=10, view_kb=10, accessed_at=0.0)
 
         before = time.time()
-        db.get_cached_thumbnail_paths(src)
+        db.images.get_cached_thumbnail_paths(src)
         after = time.time()
 
-        with db._lock:
-            cursor = db.conn.cursor()
+        with db.images._lock:
+            cursor = db.images.conn.cursor()
             cursor.execute("SELECT accessed_at FROM image_metadata WHERE file_path = ?", (src,))
             accessed_at = cursor.fetchone()[0]
 

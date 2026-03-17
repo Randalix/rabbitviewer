@@ -223,7 +223,7 @@ class WatchdogHandler(FileSystemEventHandler):
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_move::{old_path}::{new_path}",
                 Priority.HIGH,
-                self.thumbnail_manager.metadata_db.move_records,
+                self.thumbnail_manager.metadata_db.images.move_records,
                 [{"old_path": old_path, "new_path": new_path}],
             )
             self._notify_files_removed([old_path])

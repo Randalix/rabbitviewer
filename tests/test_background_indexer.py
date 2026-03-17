@@ -39,8 +39,8 @@ class _StubDirectoryScanner:
             yield files
 
 
-class _StubLedger:
-    """Minimal stub for MetadataDatabase ledger methods."""
+class _StubLedgerTable:
+    """Minimal stub for LedgerTable methods."""
 
     def ledger_get_all_scan_roots(self):
         return []
@@ -57,12 +57,6 @@ class _StubLedger:
     def ledger_prune_complete(self, scan_root):
         return 0
 
-    def pending_write_get_all(self):
-        return []
-
-    def get_files_missing_thumbnails(self, watch_paths):
-        return []
-
     def file_work_get_all_roots(self):
         return []
 
@@ -76,11 +70,29 @@ class _StubLedger:
         pass
 
 
+class _StubImageTable:
+    """Minimal stub for ImageTable methods."""
+
+    def get_files_missing_thumbnails(self, watch_paths):
+        return []
+
+
+class _StubDB:
+    """Minimal stub for MetadataDatabase with sub-table access."""
+
+    def __init__(self):
+        self.ledgers = _StubLedgerTable()
+        self.images = _StubImageTable()
+
+    def pending_write_get_all(self):
+        return []
+
+
 class _StubThumbnailManager:
 
     def __init__(self, render_manager):
         self.render_manager = render_manager
-        self.metadata_db = _StubLedger()
+        self.metadata_db = _StubDB()
         self.all_calls: list[str] = []
 
     def create_all_tasks_for_file(self, path, priority):

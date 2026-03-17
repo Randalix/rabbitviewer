@@ -59,7 +59,7 @@ class TestCacheMigration:
         tm = _make_tm(tmp_env)
         tm._check_cache_migration()
 
-        tmp_env["db"].clear_all_thumbnail_paths.assert_called_once()
+        tmp_env["db"].images.clear_all_thumbnail_paths.assert_called_once()
         assert not os.listdir(tmp_env["thumb_dir"])
         assert not os.listdir(tmp_env["image_dir"])
 
@@ -77,7 +77,7 @@ class TestCacheMigration:
         tm = _make_tm(tmp_env)
         tm._check_cache_migration()
 
-        tmp_env["db"].clear_all_thumbnail_paths.assert_not_called()
+        tmp_env["db"].images.clear_all_thumbnail_paths.assert_not_called()
         # Files should still be present
         assert os.listdir(tmp_env["thumb_dir"])
 
@@ -90,21 +90,21 @@ class TestCacheMigration:
         tm = _make_tm(tmp_env)
         tm._check_cache_migration()
 
-        tmp_env["db"].clear_all_thumbnail_paths.assert_called_once()
+        tmp_env["db"].images.clear_all_thumbnail_paths.assert_called_once()
         assert not os.listdir(tmp_env["thumb_dir"])
 
     def test_idempotent(self, tmp_env):
         """Running migration twice: second run is a no-op."""
         tm = _make_tm(tmp_env)
         tm._check_cache_migration()
-        tmp_env["db"].clear_all_thumbnail_paths.reset_mock()
+        tmp_env["db"].images.clear_all_thumbnail_paths.reset_mock()
 
         # Re-seed a file to verify it's not deleted
         with open(os.path.join(tmp_env["thumb_dir"], "new.jpg"), "wb") as f:
             f.write(b"\xff")
 
         tm._check_cache_migration()
-        tmp_env["db"].clear_all_thumbnail_paths.assert_not_called()
+        tmp_env["db"].images.clear_all_thumbnail_paths.assert_not_called()
         assert os.path.exists(os.path.join(tmp_env["thumb_dir"], "new.jpg"))
 
 
@@ -120,15 +120,15 @@ class TestClearAllThumbnailPaths:
         a.write_bytes(b"\xff\xd8")
         b.write_bytes(b"\xff\xd8")
 
-        db.set_thumbnail_paths(str(a), thumbnail_path="/cache/a_thumb.jpg")
-        db.set_thumbnail_paths(str(b), thumbnail_path="/cache/b_thumb.jpg",
+        db.images.set_thumbnail_paths(str(a), thumbnail_path="/cache/a_thumb.jpg")
+        db.images.set_thumbnail_paths(str(b), thumbnail_path="/cache/b_thumb.jpg",
                                view_image_path="/cache/b_view.jpg")
 
-        rows = db.clear_all_thumbnail_paths()
+        rows = db.images.clear_all_thumbnail_paths()
         assert rows == 2
 
-        paths_a = db.get_thumbnail_paths(str(a))
-        paths_b = db.get_thumbnail_paths(str(b))
+        paths_a = db.images.get_thumbnail_paths(str(a))
+        paths_b = db.images.get_thumbnail_paths(str(b))
         assert paths_a.get("thumbnail_path") is None
         assert paths_b.get("thumbnail_path") is None
         assert paths_b.get("view_image_path") is None
@@ -136,4 +136,4 @@ class TestClearAllThumbnailPaths:
     def test_no_rows_returns_zero(self, tmp_path):
         from core.metadata_database import MetadataDatabase
         db = MetadataDatabase(str(tmp_path / "test.db"))
-        assert db.clear_all_thumbnail_paths() == 0
+        assert db.images.clear_all_thumbnail_paths() == 0

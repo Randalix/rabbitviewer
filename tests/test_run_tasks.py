@@ -116,7 +116,7 @@ class TestOperationRegistry:
         img = tmp_path / "test.jpg"
         img.write_bytes(b"\xff\xd8fake")
         img_str = str(img)
-        db.set_thumbnail_paths(img_str, thumbnail_path="/cache/thumb.jpg")
+        db.images.set_thumbnail_paths(img_str, thumbnail_path="/cache/thumb.jpg")
 
         result = tm._op_remove_records([img_str])
         assert result["success"] is True
@@ -239,7 +239,7 @@ class TestRemoveRecordsOptimisation:
         cache_file.write_bytes(b"fake")
 
         img = str(img_path)
-        db.set_thumbnail_paths(img, thumbnail_path=str(cache_file))
+        db.images.set_thumbnail_paths(img, thumbnail_path=str(cache_file))
 
         result = db.remove_records([img])
         assert result is True
@@ -251,7 +251,7 @@ class TestRemoveRecordsOptimisation:
         img_path = tmp_env["tmp_path"] / "real2.jpg"
         img_path.write_bytes(b"\xff\xd8fake")
         img = str(img_path)
-        db.set_thumbnail_paths(img, thumbnail_path="/nonexistent/thumb.jpg")
+        db.images.set_thumbnail_paths(img, thumbnail_path="/nonexistent/thumb.jpg")
 
         result = db.remove_records([img])
         assert result is True
@@ -262,7 +262,7 @@ class TestRemoveRecordsOptimisation:
         img_path = tmp_env["tmp_path"] / "real3.jpg"
         img_path.write_bytes(b"\xff\xd8fake")
         img = str(img_path)
-        db.set_thumbnail_paths(img, thumbnail_path="/cache/thumb.jpg")
+        db.images.set_thumbnail_paths(img, thumbnail_path="/cache/thumb.jpg")
 
         assert db.remove_records([img]) is True
         assert db.remove_records([img]) is True

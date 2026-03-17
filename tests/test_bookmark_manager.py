@@ -247,7 +247,7 @@ class TestExecuteBookmarkTransfer:
         result = execute_bookmark_transfer(paths, dest_dir, move=False, db=db)
         assert result["copied"] == 5
         # All should be marked complete, none pending
-        pending = db.file_transfer_get_pending(dest_dir, "copy")
+        pending = db.ledgers.file_transfer_get_pending(dest_dir, "copy")
         assert pending == []
 
     def test_db_tracks_failures(self, dest_dir, db):
@@ -255,7 +255,7 @@ class TestExecuteBookmarkTransfer:
         result = execute_bookmark_transfer(paths, dest_dir, move=False, db=db)
         assert len(result["errors"]) == 2
         # Failed transfers are marked complete with "failed" status, not pending
-        pending = db.file_transfer_get_pending(dest_dir, "copy")
+        pending = db.ledgers.file_transfer_get_pending(dest_dir, "copy")
         assert pending == []
 
     def test_mixed_success_and_failure(self, src_file, dest_dir, db):

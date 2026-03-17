@@ -27,20 +27,20 @@ class TestGuardLogic:
         """Auto-orient should skip files with orientation != 1."""
         db = tmp_env["db"]
         fp = sample_images[0]
-        db.set_thumbnail_paths(fp, thumbnail_path="/tmp/thumb.jpg")
-        db.set_orientation(fp, 6)  # already set to 90 CW
-        assert db.get_orientation(fp) == 6
+        db.images.set_thumbnail_paths(fp, thumbnail_path="/tmp/thumb.jpg")
+        db.images.set_orientation(fp, 6)  # already set to 90 CW
+        assert db.images.get_orientation(fp) == 6
 
     def test_skip_if_pending_write(self, tmp_env):
         """Auto-orient should skip files with pending orientation writes."""
         db = tmp_env["db"]
         fp = "/test/pending.jpg"
-        db.pending_write_insert(fp, "orientation", {"orientation": 3})
-        assert db.pending_write_exists(fp, "orientation")
+        db.ledgers.pending_write_insert(fp, "orientation", {"orientation": 3})
+        assert db.ledgers.pending_write_exists(fp, "orientation")
 
     def test_no_pending_write_for_other_type(self, tmp_env):
         """pending_write_exists should be type-specific."""
         db = tmp_env["db"]
         fp = "/test/rated.jpg"
-        db.pending_write_insert(fp, "rating", {"rating": 5})
-        assert not db.pending_write_exists(fp, "orientation")
+        db.ledgers.pending_write_insert(fp, "rating", {"rating": 5})
+        assert not db.ledgers.pending_write_exists(fp, "orientation")

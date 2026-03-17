@@ -289,14 +289,14 @@ def _insert_with_rating(db, file_path, rating):
     import hashlib, time as _time
     path_hash = hashlib.md5(file_path.encode()).hexdigest()
     now = _time.time()
-    with db._lock:
-        db.conn.execute(
+    with db.images._lock:
+        db.images.conn.execute(
             "INSERT OR REPLACE INTO image_metadata "
             "(file_path, path_hash, rating, file_size, mtime, created_at, updated_at) "
             "VALUES (?, ?, ?, 0, 0, ?, ?)",
             (file_path, path_hash, rating, now, now),
         )
-        db.conn.commit()
+        db.images.conn.commit()
 
 
 # ===================================================================
@@ -510,7 +510,7 @@ class TestDatabaseFiltering:
         for path, rating in [("/img/a.jpg", 0), ("/img/b.jpg", 3), ("/img/c.jpg", 5)]:
             _insert_with_rating(db, path, rating)
 
-        result = db.get_filtered_file_paths("", [True] * 6)
+        result = db.images.get_filtered_file_paths("", [True] * 6)
         assert set(result) == {"/img/a.jpg", "/img/b.jpg", "/img/c.jpg"}
 
     def test_filter_by_rating(self, tmp_env):
@@ -520,14 +520,14 @@ class TestDatabaseFiltering:
         _insert_with_rating(db, "/img/best.jpg", 5)
 
         stars = [False, False, False, False, True, True]
-        result = db.get_filtered_file_paths("", stars)
+        result = db.images.get_filtered_file_paths("", stars)
         assert set(result) == {"/img/good.jpg", "/img/best.jpg"}
 
     def test_no_stars_returns_empty(self, tmp_env):
         db = tmp_env["db"]
         _insert_with_rating(db, "/img/a.jpg", 3)
 
-        result = db.get_filtered_file_paths("", [False] * 6)
+        result = db.images.get_filtered_file_paths("", [False] * 6)
         assert result == []
 
     def test_text_filter(self, tmp_env):
@@ -535,7 +535,7 @@ class TestDatabaseFiltering:
         _insert_with_rating(db, "/photos/beach.jpg", 0)
         _insert_with_rating(db, "/photos/mountain.jpg", 0)
 
-        result = db.get_filtered_file_paths("beach", [True] * 6)
+        result = db.images.get_filtered_file_paths("beach", [True] * 6)
         assert result == ["/photos/beach.jpg"]
 
     def test_combined_text_and_star_filter(self, tmp_env):
@@ -545,7 +545,7 @@ class TestDatabaseFiltering:
         _insert_with_rating(db, "/img/mountain.jpg", 4)
 
         stars = [False, False, False, False, True, False]
-        result = db.get_filtered_file_paths("beach", stars)
+        result = db.images.get_filtered_file_paths("beach", stars)
         assert result == ["/img/beach_good.jpg"]
 
 
