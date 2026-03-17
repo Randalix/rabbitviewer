@@ -377,6 +377,16 @@ Grid display of file placeholders (`ThumbnailLabel`). Responsibilities:
 - Partitions `_pending_previews` so heatmap-zone items load first (O(N) partition, not sort)
 - Filter + sort via daemon query
 
+### Folder Navigation — `core/folder_node.py`
+
+In non-recursive mode, subdirectories appear as folder cards at the top of the thumbnail grid. The data model is `FolderNode` (Qt-free dataclass in `core/folder_node.py`), populated from `MetadataDatabase.get_subdirectory_info()` — no filesystem hits.
+
+- **Grid integration**: Folder paths are prepended to `all_files` and tracked in `_folder_paths: Set[str]`. `_materialize_label` sets `is_folder=True` on `ThumbnailLabel`, which triggers alternate painting (2x2 preview mosaic, count badge, folder icon) and suppresses inspector events.
+- **Navigation**: Double-click/Enter on a folder emits `folderNavigated` (not `doubleClicked`). `navigate_to_folder()` pushes the current path onto `_navigation_stack` and loads the new directory. Backspace triggers `NAVIGATE_PARENT` event to pop the stack.
+- **Heatmap exclusion**: Folder paths are excluded from thumbnail priority requests — they don't need `RenderManager` work.
+- **Script guard**: `ScriptAPI.get_selected_images()` filters out folder paths; `get_selected_folders()` returns only folder paths.
+- **Filters**: Folder cards are always visible regardless of text/star/tag filters.
+
 ### PictureView — `gui/picture_view.py`
 
 Full-resolution image viewer with zoom/pan. Created lazily on first image open (`WA_DeleteOnClose`). Consumes events from `EventSystem`.

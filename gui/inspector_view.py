@@ -4,7 +4,7 @@ import logging
 import os
 
 from PySide6.QtWidgets import QWidget, QStackedLayout
-from PySide6.QtCore import Qt, QPointF, QSettings, Signal, Slot
+from PySide6.QtCore import QPointF, QSettings, Signal, Slot
 from core.event_system import event_system, EventType, InspectorEventData
 from network.daemon_signals import DaemonSignals
 from core.notifications import PreviewsReadyData
@@ -27,9 +27,10 @@ class InspectorView(QWidget):
     closed = Signal()
 
     def __init__(self, config_manager=None, inspector_index: int = 0, parent=None):
-        super().__init__(parent, Qt.Tool)
+        super().__init__(parent)
         self.config_manager = config_manager
         self._inspector_index = inspector_index
+        self._cleaned_up = False
 
         self._current_image_path: str | None = None
         self._desired_image_path: str | None = None
@@ -49,16 +50,8 @@ class InspectorView(QWidget):
 
         self._image_inspector.view_mode_changed.connect(self._update_window_title)
 
-        # --- window setup ---
-        self.setWindowTitle("Inspector")
+        # --- widget setup ---
         self.setMinimumSize(200, 200)
-
-        settings = QSettings("RabbitViewer", "Inspector")
-        geometry = settings.value(f"geometry_{self._inspector_index}")
-        if geometry:
-            self.restoreGeometry(geometry)
-        else:
-            self.resize(300, 300)
 
         # why: zoom_factor is a global preference (shared across inspector windows);
         # per-index QSettings keys (zoom_factor_0, zoom_factor_1, ...) are now orphaned.
@@ -68,12 +61,12 @@ class InspectorView(QWidget):
             zoom = 3.0
         self._image_inspector.set_zoom_factor(zoom)
 
+        settings = QSettings("RabbitViewer", "Inspector")
         try:
             view_mode_str = settings.value(f"view_mode_{self._inspector_index}", ViewMode.TRACKING.value)
             self._image_inspector.view_mode = ViewMode(view_mode_str)
         except ValueError:
             self._image_inspector.view_mode = ViewMode.TRACKING
-        self._update_window_title()
 
         event_system.subscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
 
@@ -147,7 +140,8 @@ class InspectorView(QWidget):
         self._desired_image_path = image_path
         self._desired_norm_pos = norm_pos
         self._current_image_path = image_path
-        self._image_inspector.handle_update(image_path, norm_pos)
+        cache_only = event_data.cache_only
+        self._image_inspector.handle_update(image_path, norm_pos, cache_only=cache_only)
 
     @Slot(object)
     def _on_previews_ready(self, data: PreviewsReadyData) -> None:
@@ -158,21 +152,10 @@ class InspectorView(QWidget):
         self._image_inspector.handle_previews_ready(
             target, data.view_image_path, data.view_image_source or "", norm_pos)
 
-    # ------------------------------------------------------------------ window title
+    # ------------------------------------------------------------------ title (unused when tiled, kept for tooltip/debug)
 
     def _update_window_title(self):
-        pin_suffix = " (Pinned)" if self._pinned else ""
-        if self._is_video_mode:
-            self.setWindowTitle(f"Inspector - Video Scrub{pin_suffix}")
-        else:
-            mode = self._image_inspector.view_mode
-            zoom = self._image_inspector.zoom_factor
-            if mode == ViewMode.FIT:
-                self.setWindowTitle(f"Inspector - Fit Mode{pin_suffix}")
-            elif mode == ViewMode.MANUAL:
-                self.setWindowTitle(f"Inspector - Locked ({zoom:.1f}x Zoom){pin_suffix}")
-            else:
-                self.setWindowTitle(f"Inspector - Tracking ({zoom:.1f}x Zoom){pin_suffix}")
+        pass
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -180,11 +163,14 @@ class InspectorView(QWidget):
         super().showEvent(event)
         self._image_inspector.reset_fetches()
 
-    def closeEvent(self, event):
+    def cleanup(self):
+        """Tear down resources. Called by MainWindow when removing from the panel."""
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
         self._image_inspector.cancel_fetches()
         self._video_inspector.destroy_player()
         settings = QSettings("RabbitViewer", "Inspector")
-        settings.setValue(f"geometry_{self._inspector_index}", self.saveGeometry())
         settings.setValue(f"view_mode_{self._inspector_index}", self._image_inspector.view_mode.value)
         settings.sync()
         if self.config_manager:
@@ -193,6 +179,8 @@ class InspectorView(QWidget):
         event_system.unsubscribe(EventType.INSPECTOR_UPDATE, self._handle_inspector_update)
         if self._daemon_signals:
             self._daemon_signals.previews_ready.disconnect(self._on_previews_ready)
+        self.closed.emit()
+
+    def closeEvent(self, event):
+        self.cleanup()
         super().closeEvent(event)
-        if event.isAccepted():
-            self.closed.emit()

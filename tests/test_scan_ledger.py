@@ -40,92 +40,92 @@ def db(tmp_path):
 
 class TestLedgerTable:
     def test_table_exists(self, db):
-        cursor = db.conn.execute(
+        cursor = db.ledgers.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scan_ledger'"
         )
         assert cursor.fetchone() is not None
 
     def test_batch_insert(self, db):
-        db.ledger_batch_insert(["/a.jpg", "/b.jpg"], scan_root="/photos")
-        rows = db.conn.execute("SELECT file_path, status FROM scan_ledger").fetchall()
+        db.ledgers.ledger_batch_insert(["/a.jpg", "/b.jpg"], scan_root="/photos")
+        rows = db.ledgers.conn.execute("SELECT file_path, status FROM scan_ledger").fetchall()
         assert len(rows) == 2
         assert all(status == "discovered" for _, status in rows)
 
     def test_batch_insert_idempotent(self, db):
-        db.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
-        db.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
-        rows = db.conn.execute("SELECT file_path FROM scan_ledger").fetchall()
+        db.ledgers.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
+        db.ledgers.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
+        rows = db.ledgers.conn.execute("SELECT file_path FROM scan_ledger").fetchall()
         assert len(rows) == 1
 
     def test_mark_complete(self, db):
-        db.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
-        db.ledger_mark_complete("/a.jpg")
-        status = db.conn.execute(
+        db.ledgers.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
+        db.ledgers.ledger_mark_complete("/a.jpg")
+        status = db.ledgers.conn.execute(
             "SELECT status FROM scan_ledger WHERE file_path = '/a.jpg'"
         ).fetchone()[0]
         assert status == "complete"
 
     def test_mark_complete_missing_path_no_error(self, db):
-        db.ledger_mark_complete("/nonexistent.jpg")  # should not raise
+        db.ledgers.ledger_mark_complete("/nonexistent.jpg")  # should not raise
 
     def test_get_incomplete(self, db):
-        db.ledger_batch_insert(["/a.jpg", "/b.jpg", "/c.jpg"], scan_root="/photos")
-        db.ledger_mark_complete("/b.jpg")
-        incomplete = db.ledger_get_incomplete("/photos")
+        db.ledgers.ledger_batch_insert(["/a.jpg", "/b.jpg", "/c.jpg"], scan_root="/photos")
+        db.ledgers.ledger_mark_complete("/b.jpg")
+        incomplete = db.ledgers.ledger_get_incomplete("/photos")
         assert sorted(incomplete) == ["/a.jpg", "/c.jpg"]
 
     def test_get_incomplete_different_roots(self, db):
-        db.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
-        db.ledger_batch_insert(["/x.jpg"], scan_root="/other")
-        assert sorted(db.ledger_get_incomplete("/photos")) == ["/a.jpg"]
-        assert sorted(db.ledger_get_incomplete("/other")) == ["/x.jpg"]
+        db.ledgers.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
+        db.ledgers.ledger_batch_insert(["/x.jpg"], scan_root="/other")
+        assert sorted(db.ledgers.ledger_get_incomplete("/photos")) == ["/a.jpg"]
+        assert sorted(db.ledgers.ledger_get_incomplete("/other")) == ["/x.jpg"]
 
     def test_get_walked_dirs(self, db):
-        db.ledger_batch_insert(
+        db.ledgers.ledger_batch_insert(
             ["/photos/2024/a.jpg", "/photos/2024/b.jpg", "/photos/2025/c.jpg"],
             scan_root="/photos",
         )
         # Only complete entries count as walked.
-        db.ledger_mark_complete("/photos/2024/a.jpg")
-        db.ledger_mark_complete("/photos/2024/b.jpg")
-        db.ledger_mark_complete("/photos/2025/c.jpg")
-        dirs = db.ledger_get_walked_dirs("/photos")
+        db.ledgers.ledger_mark_complete("/photos/2024/a.jpg")
+        db.ledgers.ledger_mark_complete("/photos/2024/b.jpg")
+        db.ledgers.ledger_mark_complete("/photos/2025/c.jpg")
+        dirs = db.ledgers.ledger_get_walked_dirs("/photos")
         assert dirs == {"/photos/2024", "/photos/2025"}
 
     def test_get_walked_dirs_excludes_discovered(self, db):
-        db.ledger_batch_insert(
+        db.ledgers.ledger_batch_insert(
             ["/photos/done/a.jpg", "/photos/partial/b.jpg"],
             scan_root="/photos",
         )
-        db.ledger_mark_complete("/photos/done/a.jpg")
+        db.ledgers.ledger_mark_complete("/photos/done/a.jpg")
         # /photos/partial/b.jpg still 'discovered' — dir should NOT be skipped
-        dirs = db.ledger_get_walked_dirs("/photos")
+        dirs = db.ledgers.ledger_get_walked_dirs("/photos")
         assert dirs == {"/photos/done"}
 
     def test_prune_complete(self, db):
-        db.ledger_batch_insert(["/a.jpg", "/b.jpg"], scan_root="/photos")
-        db.ledger_mark_complete("/a.jpg")
-        pruned = db.ledger_prune_complete("/photos")
+        db.ledgers.ledger_batch_insert(["/a.jpg", "/b.jpg"], scan_root="/photos")
+        db.ledgers.ledger_mark_complete("/a.jpg")
+        pruned = db.ledgers.ledger_prune_complete("/photos")
         assert pruned == 1
-        remaining = db.conn.execute("SELECT file_path FROM scan_ledger").fetchall()
+        remaining = db.ledgers.conn.execute("SELECT file_path FROM scan_ledger").fetchall()
         assert len(remaining) == 1
         assert remaining[0][0] == "/b.jpg"
 
     def test_get_all_scan_roots(self, db):
-        db.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
-        db.ledger_batch_insert(["/x.jpg"], scan_root="/nas/archive")
-        roots = sorted(db.ledger_get_all_scan_roots())
+        db.ledgers.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
+        db.ledgers.ledger_batch_insert(["/x.jpg"], scan_root="/nas/archive")
+        roots = sorted(db.ledgers.ledger_get_all_scan_roots())
         assert roots == ["/nas/archive", "/photos"]
 
     def test_empty_ledger(self, db):
-        assert db.ledger_get_incomplete("/photos") == []
-        assert db.ledger_get_walked_dirs("/photos") == set()
-        assert db.ledger_get_all_scan_roots() == []
-        assert db.ledger_prune_complete("/photos") == 0
+        assert db.ledgers.ledger_get_incomplete("/photos") == []
+        assert db.ledgers.ledger_get_walked_dirs("/photos") == set()
+        assert db.ledgers.ledger_get_all_scan_roots() == []
+        assert db.ledgers.ledger_prune_complete("/photos") == 0
 
     def test_batch_insert_empty_list(self, db):
-        db.ledger_batch_insert([], scan_root="/photos")  # should not raise
-        assert db.ledger_get_all_scan_roots() == []
+        db.ledgers.ledger_batch_insert([], scan_root="/photos")  # should not raise
+        assert db.ledgers.ledger_get_all_scan_roots() == []
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ class TestSkipDirs:
 
 class TestOrphanRecovery:
     def test_recover_orphans_submits_jobs(self, db, tmp_path):
-        db.ledger_batch_insert(["/nas/a.jpg", "/nas/b.jpg"], scan_root="/nas")
+        db.ledgers.ledger_batch_insert(["/nas/a.jpg", "/nas/b.jpg"], scan_root="/nas")
 
         class _MockRM:
             def __init__(self):

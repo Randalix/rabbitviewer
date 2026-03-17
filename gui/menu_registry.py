@@ -1,9 +1,10 @@
 import logging
+import os
 import subprocess
 import sys
 import time
 
-from core.event_system import event_system, EventType, EventData
+from core.event_system import event_system, EventType, EventData, DirectoryEventData
 from gui.modal_menu import MenuNode
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,33 @@ def _publish(event_type):
     def _fire():
         event_system.publish(EventData(
             event_type=event_type, source="menu", timestamp=time.time(),
+        ))
+    return _fire
+
+
+# -- Recent directories menu helpers ---------------------------------------
+
+def _build_recent_children(node):
+    from core.recent_directories import load
+    entries = load()
+    keys = "1234567890"
+    node.children = [
+        MenuNode(
+            label=os.path.basename(e.path) or e.path,
+            key=keys[i] if i < len(keys) else "",
+            action=_open_recent(e.path),
+        )
+        for i, e in enumerate(entries)
+    ]
+
+
+def _open_recent(path: str):
+    def _fire():
+        event_system.publish(DirectoryEventData(
+            event_type=EventType.OPEN_RECENT_DIRECTORY,
+            source="menu",
+            timestamp=time.time(),
+            path=path,
         ))
     return _fire
 
@@ -95,8 +123,14 @@ def build_menus() -> dict:
         MenuNode("Edit bookmarks", key="e", action=_edit_bookmarks),
     ])
 
+    # Recent directories menu — rebuilt from YAML each time it opens.
+    recent_menu = MenuNode(
+        "Recent", refresh=lambda node: _build_recent_children(node),
+    )
+
     return {
         "sort": sort_menu, "tags": tag_menu, "export": export_menu,
         "rotate": rotate_menu, "open_with": open_with_menu,
         "compare": compare_menu, "bookmark": bookmark_menu,
+        "recent": recent_menu,
     }

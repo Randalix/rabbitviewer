@@ -1,4 +1,6 @@
 import logging
+import os
+import shutil
 import threading
 import time
 
@@ -12,12 +14,19 @@ class CacheSizeManager:
     ``is_cache_full()``) and old entries are evicted via the DB's LRU query.
     GUI-driven requests bypass the full check and instead call
     ``record_cache_write()`` which triggers eviction reactively.
+
+    A filesystem-level safeguard also pauses writes when the disk holding
+    *cache_dir* exceeds ``max_disk_usage_pct`` (default 90 %).
     """
 
     # Evict down to 90 % of max to avoid thrashing at the boundary.
     _HEADROOM_RATIO = 0.90
 
-    def __init__(self, metadata_db, max_cache_size_mb: int):
+    # How often (seconds) to re-probe actual disk usage.
+    _DISK_CHECK_INTERVAL = 30.0
+
+    def __init__(self, metadata_db, max_cache_size_mb: int,
+                 cache_dir: str = "", max_disk_usage_pct: float = 90.0):
         self._db = metadata_db
         self._max_bytes = max_cache_size_mb * 1024 * 1024 if max_cache_size_mb > 0 else 0
         self._current_bytes = 0
@@ -25,6 +34,13 @@ class CacheSizeManager:
         self._evicting = False
         self._enabled = self._max_bytes > 0
         self._notified_full = False
+
+        # Disk-space safeguard
+        self._cache_dir = os.path.expanduser(cache_dir) if cache_dir else ""
+        self._max_disk_usage_pct = max_disk_usage_pct
+        self._disk_full = False
+        self._disk_check_time = 0.0
+        self._notified_disk_full = False
 
         if self._enabled:
             self.refresh()
@@ -45,7 +61,51 @@ class CacheSizeManager:
         with self._lock:
             return self._current_bytes
 
+    def is_disk_full(self) -> bool:
+        """Return True when the filesystem holding the cache exceeds the
+        configured usage threshold.  Result is cached for
+        ``_DISK_CHECK_INTERVAL`` seconds to avoid excessive syscalls."""
+        if not self._cache_dir:
+            return False
+        now = time.monotonic()
+        with self._lock:
+            if now - self._disk_check_time < self._DISK_CHECK_INTERVAL:
+                return self._disk_full
+        # Check outside the lock — statvfs is fast but no reason to hold it.
+        pct = 0.0
+        try:
+            usage = shutil.disk_usage(self._cache_dir)
+            pct = (usage.used / usage.total) * 100.0 if usage.total else 0.0
+            full = pct >= self._max_disk_usage_pct
+        except OSError:
+            full = False
+        with self._lock:
+            self._disk_full = full
+            self._disk_check_time = now
+            if not full:
+                self._notified_disk_full = False
+        if full:
+            self._notify_disk_full(pct)
+        return full
+
+    def _notify_disk_full(self, pct: float) -> None:
+        if self._notified_disk_full:
+            return
+        self._notified_disk_full = True
+        logger.warning("Disk usage %.1f%% exceeds %.0f%% threshold — pausing cache writes",
+                        pct, self._max_disk_usage_pct)
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE,
+            source="cache_size_manager",
+            timestamp=time.time(),
+            message=f"Disk {pct:.0f}% full — cache writes paused",
+            section=StatusSection.PROCESS,
+            timeout=10000,
+        ))
+
     def is_cache_full(self) -> bool:
+        if self.is_disk_full():
+            return True
         if not self._enabled:
             return False
         with self._lock:
@@ -99,3 +159,5 @@ class CacheSizeManager:
         total = self._db.get_total_cache_size()
         with self._lock:
             self._current_bytes = total
+            # Force a fresh disk check on next query.
+            self._disk_check_time = 0.0

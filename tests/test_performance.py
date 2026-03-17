@@ -131,7 +131,7 @@ def populated_db(db_env):
         Image.new("RGB", (4, 4), color=(i % 255, 0, 0)).save(p, "JPEG")
         paths.append(p)
 
-    db.batch_ensure_records_exist(paths)
+    db.images.batch_ensure_records_exist(paths)
     return db, paths
 
 
@@ -149,7 +149,7 @@ class TestDatabasePerformance:
         Image.new("RGB", (4, 4)).save(str(img), "JPEG")
         path = str(img)
 
-        stats = _bench(lambda: db.batch_ensure_records_exist([path]))
+        stats = _bench(lambda: db.images.batch_ensure_records_exist([path]))
         perf_tracker.record("db.single_record_insert", stats)
 
         print(f"\n  single insert: {stats['mean_ms']:.3f} ms mean over {stats['iterations']} runs")
@@ -166,7 +166,7 @@ class TestDatabasePerformance:
             Image.new("RGB", (4, 4), color=(i, 0, 0)).save(p, "JPEG")
             paths.append(p)
 
-        stats = _bench(lambda: db.batch_ensure_records_exist(paths), iterations=20)
+        stats = _bench(lambda: db.images.batch_ensure_records_exist(paths), iterations=20)
         perf_tracker.record("db.batch_insert_100", stats)
 
         print(f"\n  batch insert 100: {stats['mean_ms']:.3f} ms mean over {stats['iterations']} runs")
@@ -177,7 +177,7 @@ class TestDatabasePerformance:
         db, tmp_path = db_env
         missing = str(tmp_path / "nonexistent.jpg")
 
-        stats = _bench(lambda: db.get_metadata(missing))
+        stats = _bench(lambda: db.images.get_metadata(missing))
         perf_tracker.record("db.get_metadata_miss", stats)
 
         print(f"\n  get_metadata miss: {stats['mean_ms']:.3f} ms mean")
@@ -188,7 +188,7 @@ class TestDatabasePerformance:
         db, paths = populated_db
         target = paths[0]
 
-        stats = _bench(lambda: db.get_metadata(target))
+        stats = _bench(lambda: db.images.get_metadata(target))
         perf_tracker.record("db.get_metadata_hit", stats)
 
         print(f"\n  get_metadata hit: {stats['mean_ms']:.3f} ms mean")
@@ -199,7 +199,7 @@ class TestDatabasePerformance:
         db, paths = populated_db
         target = paths[10]
 
-        stats = _bench(lambda: db.is_thumbnail_valid(target))
+        stats = _bench(lambda: db.images.is_thumbnail_valid(target))
         perf_tracker.record("db.is_thumbnail_valid_no_thumb", stats)
 
         print(f"\n  is_thumbnail_valid (no thumb): {stats['mean_ms']:.3f} ms mean")
@@ -212,12 +212,12 @@ class TestDatabasePerformance:
         all_stars = [True] * 6
 
         stats = _bench(
-            lambda: db.get_filtered_file_paths(text_filter="", star_states=all_stars),
+            lambda: db.images.get_filtered_file_paths(text_filter="", star_states=all_stars),
             iterations=50,
         )
         perf_tracker.record("db.get_filtered_file_paths_none", stats)
 
-        result = db.get_filtered_file_paths(text_filter="", star_states=all_stars)
+        result = db.images.get_filtered_file_paths(text_filter="", star_states=all_stars)
         print(f"\n  get_filtered (no filter, {len(result)} rows): {stats['mean_ms']:.3f} ms mean")
         assert stats["mean_ms"] < 50
 
@@ -227,7 +227,7 @@ class TestDatabasePerformance:
         all_stars = [True] * 6
 
         stats = _bench(
-            lambda: db.get_filtered_file_paths(text_filter="image_01", star_states=all_stars),
+            lambda: db.images.get_filtered_file_paths(text_filter="image_01", star_states=all_stars),
             iterations=50,
         )
         perf_tracker.record("db.get_filtered_file_paths_text", stats)
@@ -243,7 +243,7 @@ class TestDatabasePerformance:
         call = [0]
 
         def toggle():
-            db.set_rating(target, call[0] % 5 + 1)
+            db.images.set_rating(target, call[0] % 5 + 1)
             call[0] += 1
 
         stats = _bench(toggle)
@@ -257,7 +257,7 @@ class TestDatabasePerformance:
         db, paths = populated_db
         batch = paths[:50]
 
-        stats = _bench(lambda: db.batch_set_ratings(batch, 3), iterations=20)
+        stats = _bench(lambda: db.images.batch_set_ratings(batch, 3), iterations=20)
         perf_tracker.record("db.batch_set_ratings_50", stats)
 
         print(f"\n  batch_set_ratings 50: {stats['mean_ms']:.3f} ms mean")

@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 class ViewportPrioritizer:
-    """Qt-free heatmap delta computation and preview queue management."""
 
     _PREVIEW_TICK_BATCH = 20
     _STALE_THRESHOLD_S = 5.0

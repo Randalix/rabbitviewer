@@ -101,7 +101,7 @@ class ImageInspector(QWidget):
 
     # ------------------------------------------------------------------ image loading
 
-    def handle_update(self, image_path: str, norm_pos: QPointF):
+    def handle_update(self, image_path: str, norm_pos: QPointF, cache_only: bool = False):
         self._desired_image_path = image_path
         self._desired_norm_pos = norm_pos
 
@@ -128,7 +128,7 @@ class ImageInspector(QWidget):
         self._fetch_in_flight = image_path
         threading.Thread(
             target=self._fetch_preview_status,
-            args=(image_path, norm_pos),
+            args=(image_path, norm_pos, cache_only),
             daemon=True,
             name="inspector-fetch",
         ).start()
@@ -143,7 +143,7 @@ class ImageInspector(QWidget):
         else:
             self._update_view(path, view_image_path, norm_pos)
 
-    def _fetch_preview_status(self, image_path: str, norm_pos: QPointF):
+    def _fetch_preview_status(self, image_path: str, norm_pos: QPointF, cache_only: bool = False):
         try:
             response = self.service.get_previews_status([image_path])
             view_image_path = ""
@@ -151,8 +151,11 @@ class ImageInspector(QWidget):
                 status = response.get(image_path, {})
                 if status.get('view_image_ready') and status.get('view_image_path'):
                     view_image_path = status['view_image_path']
+                # Fallback to thumbnail when fullres is unavailable
+                elif cache_only and status.get('thumbnail_ready') and status.get('thumbnail_path'):
+                    view_image_path = status['thumbnail_path']
 
-            if not view_image_path:
+            if not view_image_path and not cache_only:
                 result = self.service.request_view_image(image_path)
                 if result:
                     if result.get('view_image_source') == "memory":

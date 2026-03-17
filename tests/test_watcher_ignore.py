@@ -149,9 +149,9 @@ class TestExiftoolAtomicReplace:
         db = tmp_env["db"]
         path = sample_images[0]
 
-        db.batch_ensure_records_exist([path])
-        db.batch_set_tags([path], ["animal"])
-        assert db.get_image_tags(path) == ["animal"]
+        db.images.batch_ensure_records_exist([path])
+        db.tags.batch_set_tags([path], ["animal"])
+        assert db.tags.get_image_tags(path) == ["animal"]
 
         handler = _make_handler_with_db(db)
         handler.ignore_next_modification(path)
@@ -162,16 +162,16 @@ class TestExiftoolAtomicReplace:
         handler.dispatch(_make_event("modified", path))
 
         # Tags must still be in the DB.
-        assert db.get_image_tags(path) == ["animal"]
+        assert db.tags.get_image_tags(path) == ["animal"]
 
     def test_rating_survives_atomic_replace(self, tmp_env, sample_images):
         """Ratings live in image_metadata; the row must not be deleted."""
         db = tmp_env["db"]
         path = sample_images[0]
 
-        db.batch_ensure_records_exist([path])
-        db.set_rating(path, 4)
-        assert db.get_rating(path) == 4
+        db.images.batch_ensure_records_exist([path])
+        db.images.set_rating(path, 4)
+        assert db.images.get_rating(path) == 4
 
         handler = _make_handler_with_db(db)
         handler.ignore_next_modification(path)
@@ -179,7 +179,7 @@ class TestExiftoolAtomicReplace:
         handler.dispatch(_make_event("deleted", path))
         handler.dispatch(_make_event("created", path))
 
-        assert db.get_rating(path) == 4
+        assert db.images.get_rating(path) == 4
 
     def test_tagged_image_appears_in_filter_after_write(self, tmp_env, sample_images):
         """After tagging + exiftool write-back, the filter must still find the image."""
@@ -187,10 +187,10 @@ class TestExiftoolAtomicReplace:
         paths = sample_images[:5]
 
         # Seed all images in the DB.
-        db.batch_ensure_records_exist(paths)
+        db.images.batch_ensure_records_exist(paths)
 
         # Tag only the first image.
-        db.batch_set_tags([paths[0]], ["animal"])
+        db.tags.batch_set_tags([paths[0]], ["animal"])
 
         # Simulate exiftool atomic replace for the tagged image.
         handler = _make_handler_with_db(db)
@@ -200,7 +200,7 @@ class TestExiftoolAtomicReplace:
 
         # Filter by "animal" tag — must return the tagged image.
         star_filter = [True, True, True, True, True, True]
-        filtered = db.get_filtered_file_paths("", star_filter, tag_names=["animal"])
+        filtered = db.images.get_filtered_file_paths("", star_filter, tag_names=["animal"])
         assert paths[0] in filtered
 
     def test_write_tags_propagates_ignore_to_watcher(self, tmp_env, sample_images):
@@ -215,8 +215,8 @@ class TestExiftoolAtomicReplace:
         path = sample_images[0]
         xmp = sidecar_path_for(path)
 
-        db.batch_ensure_records_exist([path])
-        db.batch_set_tags([path], ["animal"])
+        db.images.batch_ensure_records_exist([path])
+        db.tags.batch_set_tags([path], ["animal"])
 
         config = tmp_env["config"]
         tm = ThumbnailManager(config, db, num_workers=1)
@@ -241,7 +241,7 @@ class TestExiftoolAtomicReplace:
         handler.dispatch(_make_event("deleted", xmp))
         handler.dispatch(_make_event("created", xmp))
 
-        assert db.get_image_tags(path) == ["animal"]
+        assert db.tags.get_image_tags(path) == ["animal"]
         tm.shutdown()
 
     def test_write_rating_propagates_ignore_to_watcher(self, tmp_env, sample_images):
@@ -252,8 +252,8 @@ class TestExiftoolAtomicReplace:
         path = sample_images[0]
         xmp = sidecar_path_for(path)
 
-        db.batch_ensure_records_exist([path])
-        db.set_rating(path, 5)
+        db.images.batch_ensure_records_exist([path])
+        db.images.set_rating(path, 5)
 
         config = tmp_env["config"]
         tm = ThumbnailManager(config, db, num_workers=1)
@@ -275,7 +275,7 @@ class TestExiftoolAtomicReplace:
         handler.dispatch(_make_event("deleted", xmp))
         handler.dispatch(_make_event("created", xmp))
 
-        assert db.get_rating(path) == 5
+        assert db.images.get_rating(path) == 5
         tm.shutdown()
 
     def test_without_ignore_tags_are_lost(self, tmp_env, sample_images):
@@ -286,9 +286,9 @@ class TestExiftoolAtomicReplace:
         db = tmp_env["db"]
         path = sample_images[0]
 
-        db.batch_ensure_records_exist([path])
-        db.batch_set_tags([path], ["animal"])
-        assert db.get_image_tags(path) == ["animal"]
+        db.images.batch_ensure_records_exist([path])
+        db.tags.batch_set_tags([path], ["animal"])
+        assert db.tags.get_image_tags(path) == ["animal"]
 
         handler = _make_handler_with_db(db)
         # Deliberately do NOT call ignore_next_modification.
@@ -300,8 +300,8 @@ class TestExiftoolAtomicReplace:
 
         # File still exists on disk → deferred delete handler treats it as a
         # replacement, not a real deletion.  Tags are preserved.
-        assert db.get_image_tags(path) == ["animal"]
+        assert db.tags.get_image_tags(path) == ["animal"]
 
         star_filter = [True, True, True, True, True, True]
-        filtered = db.get_filtered_file_paths("", star_filter, tag_names=["animal"])
+        filtered = db.images.get_filtered_file_paths("", star_filter, tag_names=["animal"])
         assert path in filtered

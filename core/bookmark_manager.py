@@ -91,7 +91,7 @@ def execute_bookmark_transfer(
     results = {"copied": 0, "moved": 0, "skipped": 0, "errors": []}
 
     if db:
-        db.file_transfer_batch_insert(file_paths, dest_dir, op)
+        db.ledgers.file_transfer_batch_insert(file_paths, dest_dir, op)
 
     for src in file_paths:
         status = transfer_file(src, dest_dir, move=move)
@@ -99,11 +99,11 @@ def execute_bookmark_transfer(
         if status in ("copied", "moved", "skipped"):
             results[status] += 1
             if db:
-                db.file_transfer_mark_complete(src, dest_dir, op, status)
+                db.ledgers.file_transfer_mark_complete(src, dest_dir, op, status)
         else:
             results["errors"].append(status)
             if db:
-                db.file_transfer_mark_complete(src, dest_dir, op, "failed")
+                db.ledgers.file_transfer_mark_complete(src, dest_dir, op, "failed")
 
     total = len(file_paths)
     done = results["copied"] + results["moved"]

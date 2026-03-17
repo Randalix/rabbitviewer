@@ -36,8 +36,8 @@ def run_script(api: ScriptAPI, selected_images: list[str] = None):
 
     # Batch-fetch thumbnail paths and orientations to avoid N×lock acquisitions
     t0 = time.perf_counter()
-    thumb_validity = db.batch_get_cached_thumbnail_validity(selected_images)
-    current_orientations = db.batch_get_orientations(selected_images)
+    thumb_validity = db.images.batch_get_cached_thumbnail_validity(selected_images)
+    current_orientations = db.images.batch_get_orientations(selected_images)
     logger.info("Auto-rotate: DB batch lookups took %.3fs", time.perf_counter() - t0)
 
     corrected = []

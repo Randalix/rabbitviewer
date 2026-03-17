@@ -4,6 +4,7 @@ import os
 import argparse
 import signal
 import subprocess
+import threading
 import time
 
 # why: __name__ is "__main__" at runtime; "rabbitviewer" is a stable name
@@ -55,7 +56,10 @@ def _init_core(config_manager):
     thumbnail_manager = ThumbnailManager(config_manager, metadata_db)
 
     max_cache_mb = config_manager.get("max_cache_size_mb", 0)
-    cache_size_manager = CacheSizeManager(metadata_db, max_cache_mb)
+    max_disk_pct = config_manager.get("max_disk_usage_pct", 90.0)
+    cache_size_manager = CacheSizeManager(metadata_db, max_cache_mb,
+                                          cache_dir=cache_dir,
+                                          max_disk_usage_pct=max_disk_pct)
     thumbnail_manager.cache_size_manager = cache_size_manager
     thumbnail_manager.render_manager.cache_size_manager = cache_size_manager
 
@@ -318,8 +322,6 @@ def _run_gui(args, config_manager):
     if recovered:
         logger.info(f"Recovered {recovered} pending file writes from prior session")
 
-    watcher.start()
-
     # --- Qt Application ---
     if sys.platform == 'darwin':
         _set_macos_app_name("Rabbit Viewer")
@@ -383,6 +385,10 @@ def _run_gui(args, config_manager):
     window.show()
     app.processEvents()
     logger.info("[startup] window shown, services ready")
+
+    # Start watchdog in a background thread so NAS directory probing
+    # (~9-16s on networked volumes) doesn't freeze the GUI.
+    threading.Thread(target=watcher.start, daemon=True).start()
 
     if target_dir:
         def _load():

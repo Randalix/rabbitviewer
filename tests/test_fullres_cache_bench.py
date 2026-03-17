@@ -307,7 +307,7 @@ class TestProcessViewImagePerformance:
         assert tm._mem_cache_get(src) is not None, "Image not found in mem cache"
 
         # Verify no disk cache file was written
-        cached_paths = db.get_thumbnail_paths(src)
+        cached_paths = db.images.get_thumbnail_paths(src)
         assert not cached_paths.get("view_image_path"), \
             "Fast extraction should not write to disk cache"
 
@@ -315,9 +315,9 @@ class TestProcessViewImagePerformance:
         """Natively viewable JPEG with orientation=1 returns direct hint."""
         tm, db, src, _ = tm_env
         # Ensure metadata exists with orientation=1
-        db.batch_ensure_records_exist([src])
-        db.conn.execute("UPDATE image_metadata SET orientation = 1 WHERE file_path = ?", (src,))
-        db.conn.commit()
+        db.images.batch_ensure_records_exist([src])
+        db.images.conn.execute("UPDATE image_metadata SET orientation = 1 WHERE file_path = ?", (src,))
+        db.images.conn.commit()
 
         result = tm.request_view_image(src)
         assert isinstance(result, str) and result.startswith("direct:"), \
@@ -329,9 +329,9 @@ class TestProcessViewImagePerformance:
         tm, db, src, cache_dir = tm_env
 
         # Setup: ensure metadata with orientation=1
-        db.batch_ensure_records_exist([src])
-        db.conn.execute("UPDATE image_metadata SET orientation = 1 WHERE file_path = ?", (src,))
-        db.conn.commit()
+        db.images.batch_ensure_records_exist([src])
+        db.images.conn.execute("UPDATE image_metadata SET orientation = 1 WHERE file_path = ?", (src,))
+        db.images.conn.commit()
 
         # Benchmark direct source hint
         stats_direct = _bench(lambda: tm.request_view_image(src), iterations=200)
@@ -339,8 +339,8 @@ class TestProcessViewImagePerformance:
         # Setup: put image in mem cache and clear direct conditions
         jpeg_bytes = open(src, "rb").read()
         tm._mem_cache_put(src, jpeg_bytes)
-        db.conn.execute("UPDATE image_metadata SET orientation = 6 WHERE file_path = ?", (src,))
-        db.conn.commit()  # Disable direct path
+        db.images.conn.execute("UPDATE image_metadata SET orientation = 6 WHERE file_path = ?", (src,))
+        db.images.conn.commit()  # Disable direct path
 
         # Benchmark mem cache hit
         stats_mem = _bench(lambda: tm.request_view_image(src), iterations=200)
@@ -350,7 +350,7 @@ class TestProcessViewImagePerformance:
         disk_path = str(cache_dir / "images" / "bench_view.jpg")
         with open(disk_path, "wb") as f:
             f.write(jpeg_bytes)
-        db.set_thumbnail_paths(src, view_image_path=disk_path)
+        db.images.set_thumbnail_paths(src, view_image_path=disk_path)
 
         # Benchmark disk cache hit
         stats_disk = _bench(lambda: tm.request_view_image(src), iterations=200)
@@ -563,7 +563,7 @@ class TestScalingWithImageSize:
                 for _ in range(iters):
                     # Clear caches so each iteration is a fresh generation.
                     tm.invalidate_mem_cache(src)
-                    db.set_thumbnail_paths(src, view_image_path=None)
+                    db.images.set_thumbnail_paths(src, view_image_path=None)
 
                     t0 = time.perf_counter()
                     result = tm._process_view_image_task(src, md5)

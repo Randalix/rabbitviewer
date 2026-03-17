@@ -42,54 +42,54 @@ class TestBatchSetRatings:
     def test_existing_records(self, tmp_env, sample_images):
         db = tmp_env["db"]
         # Pre-populate with rating 0
-        db.batch_set_ratings(sample_images[:5], 0)
+        db.images.batch_set_ratings(sample_images[:5], 0)
         # Now set rating 3
-        ok, count = db.batch_set_ratings(sample_images[:5], 3)
+        ok, count = db.images.batch_set_ratings(sample_images[:5], 3)
         assert ok is True
         assert count == 5
         for p in sample_images[:5]:
-            assert db.get_rating(p) == 3
+            assert db.images.get_rating(p) == 3
 
     def test_new_records(self, tmp_env, sample_images):
         db = tmp_env["db"]
-        ok, count = db.batch_set_ratings(sample_images[:3], 4)
+        ok, count = db.images.batch_set_ratings(sample_images[:3], 4)
         assert ok is True
         assert count == 3
         for p in sample_images[:3]:
-            assert db.get_rating(p) == 4
+            assert db.images.get_rating(p) == 4
 
     def test_mixed(self, tmp_env, sample_images):
         db = tmp_env["db"]
-        db.batch_set_ratings(sample_images[:2], 1)
-        ok, count = db.batch_set_ratings(sample_images[:5], 2)
+        db.images.batch_set_ratings(sample_images[:2], 1)
+        ok, count = db.images.batch_set_ratings(sample_images[:5], 2)
         assert ok is True
         assert count == 5
         for p in sample_images[:5]:
-            assert db.get_rating(p) == 2
+            assert db.images.get_rating(p) == 2
 
     def test_returns_tuple(self, tmp_env, sample_images):
         db = tmp_env["db"]
-        result = db.batch_set_ratings(sample_images[:1], 1)
+        result = db.images.batch_set_ratings(sample_images[:1], 1)
         assert isinstance(result, tuple)
         assert len(result) == 2
 
     def test_empty_list(self, tmp_env):
         db = tmp_env["db"]
-        result = db.batch_set_ratings([], 3)
+        result = db.images.batch_set_ratings([], 3)
         assert result == (True, 0)
 
     def test_missing_files(self, tmp_env, sample_images):
         db = tmp_env["db"]
         missing = ["/nonexistent/image_9999.jpg"]
         paths = sample_images[:2] + missing
-        ok, count = db.batch_set_ratings(paths, 5)
+        ok, count = db.images.batch_set_ratings(paths, 5)
         assert ok is False
         assert count == 2
 
     def test_all_missing(self, tmp_env):
         db = tmp_env["db"]
         paths = ["/nonexistent/a.jpg", "/nonexistent/b.jpg"]
-        ok, count = db.batch_set_ratings(paths, 1)
+        ok, count = db.images.batch_set_ratings(paths, 1)
         assert ok is False
         assert count == 0
 

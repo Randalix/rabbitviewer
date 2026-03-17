@@ -28,6 +28,7 @@ from core.event_system import ThumbnailOverlayEventData
 from gui.overlay_manager import OverlayManager, OverlayDescriptor, BULK_THRESHOLD
 from gui.overlay_renderers import render_stars, render_badge
 from core.file_grouping import FileGroup
+from core.folder_node import FolderNode
 from gui.thumbnail_model import ThumbnailModel
 from gui.viewport_prioritizer import ViewportPrioritizer
 
@@ -43,6 +44,11 @@ class ThumbnailLabel(ItemCard):
 
         self._original_idx: int = -1
         self._overlay_manager: OverlayManager | None = None
+
+        # Folder card state
+        self.is_folder: bool = False
+        self._folder_node: FolderNode | None = None
+        self._folder_preview_pixmaps: list | None = None  # cached scaled QPixmaps
 
         # Throttle inspector events to ~60 fps so rapid mouse movement does not
         # flood the event system and block the GUI thread with socket calls.
@@ -73,7 +79,10 @@ class ThumbnailLabel(ItemCard):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        self._queueInspectorEvent(event.position())
+        if getattr(self, 'is_folder', False):
+            self._queueFolderInspectorEvent(event.position())
+        else:
+            self._queueInspectorEvent(event.position())
         super().mouseMoveEvent(event)
 
     def _queueInspectorEvent(self, pos: QPointF):
@@ -93,20 +102,56 @@ class ThumbnailLabel(ItemCard):
             logger.error("Error queuing inspector event from thumbnail: %s", e, exc_info=True)
 
     def _flushInspectorEvent(self):
+        # Folder cards use a separate image path from the folder's contents
+        folder_image = getattr(self, '_pending_folder_image', None)
+        if folder_image:
+            self._pending_folder_image = None
+            self._pending_norm_pos = None
+            event_system.publish(InspectorEventData(
+                event_type=EventType.INSPECTOR_UPDATE,
+                source="thumbnail_view",
+                timestamp=time.time(),
+                image_path=folder_image,
+                normalized_position=QPointF(0.5, 0.5),
+                cache_only=True,
+            ))
+            return
         pos = self._pending_norm_pos
         if pos is None:
             return
         self._pending_norm_pos = None
-        event_data = InspectorEventData(
+        event_system.publish(InspectorEventData(
             event_type=EventType.INSPECTOR_UPDATE,
             source="thumbnail_view",
             timestamp=time.time(),
             image_path=self.original_path,
             normalized_position=pos,
-        )
-        event_system.publish(event_data)
+        ))
+
+    def _queueFolderInspectorEvent(self, pos: QPointF):
+        """Map X position to a folder image and publish an inspector event."""
+        node = getattr(self, '_folder_node', None)
+        if not node or not node.image_paths:
+            return
+        try:
+            widget_rect = self.rect()
+            if widget_rect.width() <= 0:
+                return
+            norm_x = max(0.0, min(1.0, pos.x() / widget_rect.width()))
+            idx = min(int(norm_x * len(node.image_paths)), len(node.image_paths) - 1)
+            image_path = node.image_paths[idx]
+            # Publish with centered position so the inspector shows the full image
+            self._pending_norm_pos = QPointF(0.5, 0.5)
+            self._pending_folder_image = image_path
+            if not self._inspector_timer.isActive():
+                self._inspector_timer.start()
+        except (AttributeError, TypeError) as e:
+            logger.error("Error queuing folder inspector event: %s", e, exc_info=True)
 
     def paintEvent(self, event):
+        if getattr(self, 'is_folder', False):
+            self._paint_folder_card(event)
+            return
         super().paintEvent(event)
         if self._overlay_manager and self._overlay_manager.has_overlays(self._original_idx):
             try:
@@ -116,6 +161,96 @@ class ThumbnailLabel(ItemCard):
             except Exception:
                 # why: renderer crash must not leave QPainter open or break label rendering
                 logger.exception("[overlay] paintEvent error for idx %d", self._original_idx)
+
+    # Class-level constants for folder card rendering (avoid per-paint allocation)
+    _FOLDER_ICON_FONT = None
+    _FOLDER_BADGE_FONT = None
+    _FOLDER_BADGE_FM = None
+    _FOLDER_ICON_PEN = None
+    _FOLDER_BADGE_BG = None
+    _FOLDER_BADGE_FG = None
+
+    @classmethod
+    def _ensure_folder_fonts(cls):
+        if cls._FOLDER_ICON_FONT is None:
+            from PySide6.QtGui import QFont, QPen, QBrush, QFontMetrics
+            cls._FOLDER_ICON_FONT = QFont("sans-serif", 14)
+            cls._FOLDER_BADGE_FONT = QFont("sans-serif", 9, QFont.Bold)
+            cls._FOLDER_BADGE_FM = QFontMetrics(cls._FOLDER_BADGE_FONT)
+            cls._FOLDER_ICON_PEN = QPen(QColor(200, 200, 200, 200))
+            cls._FOLDER_BADGE_BG = QBrush(QColor(0, 0, 0, 160))
+            cls._FOLDER_BADGE_FG = QPen(QColor(255, 255, 255))
+
+    def _paint_folder_card(self, event):
+        """Render a folder card: 2x2 preview mosaic, folder icon, count badge."""
+        from PySide6.QtCore import QRectF
+
+        self._ensure_folder_fonts()
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect()
+        node = self._folder_node
+
+        # Draw 2x2 preview mosaic from cached pixmaps
+        if self._folder_preview_pixmaps:
+            inset = 6
+            gap = 2
+            available = rect.width() - 2 * inset
+            cell = (available - gap) // 2
+            for i, scaled in enumerate(self._folder_preview_pixmaps):
+                row, col = divmod(i, 2)
+                cx = inset + col * (cell + gap)
+                cy = inset + row * (cell + gap)
+                dx = cx + (cell - scaled.width()) // 2
+                dy = cy + (cell - scaled.height()) // 2
+                painter.drawPixmap(dx, dy, scaled)
+
+        # Folder icon (bottom-left corner)
+        painter.setFont(self._FOLDER_ICON_FONT)
+        painter.setPen(self._FOLDER_ICON_PEN)
+        painter.drawText(6, rect.height() - 6, "\U0001F4C1")
+
+        # Count badge (top-right corner)
+        if node:
+            count = node.recursive_count or node.image_count
+            if count > 0:
+                badge_text = str(count)
+                painter.setFont(self._FOLDER_BADGE_FONT)
+                fm = self._FOLDER_BADGE_FM
+                tw = fm.horizontalAdvance(badge_text) + 8
+                th = fm.height() + 4
+                badge_rect = QRectF(rect.width() - tw - 4, 4, tw, th)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(self._FOLDER_BADGE_BG)
+                painter.drawRoundedRect(badge_rect, 4, 4)
+                painter.setPen(self._FOLDER_BADGE_FG)
+                painter.drawText(badge_rect, Qt.AlignCenter, badge_text)
+
+        painter.end()
+
+    def _cache_folder_previews(self):
+        """Load and cache scaled preview pixmaps for this folder card."""
+        node = self._folder_node
+        if not node or not node.preview_paths:
+            self._folder_preview_pixmaps = None
+            return
+        rect = self.rect() if self.rect().width() > 0 else None
+        if not rect:
+            self._folder_preview_pixmaps = None
+            return
+        inset = 6
+        gap = 2
+        cell = (rect.width() - 2 * inset - gap) // 2
+        pixmaps = []
+        for thumb_path in node.preview_paths[:4]:
+            pix = QPixmap(thumb_path)
+            if not pix.isNull():
+                pixmaps.append(pix.scaled(cell, cell, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self._folder_preview_pixmaps = pixmaps if pixmaps else None
+
+    def _style_border_radius(self) -> int:
+        return 4 if getattr(self, 'is_folder', False) else 0
 
 class ThumbnailViewWidget(QFrame):
     doubleClicked = Signal(str)
@@ -128,7 +263,9 @@ class ThumbnailViewWidget(QFrame):
     # immediate layout update, regardless of what fast-scan batches arrived first.
     _initial_files_signal = Signal(list)
     _initial_thumbs_signal = Signal(dict)
+    _initial_folders_signal = Signal(list)   # list of FolderNode
     _filtered_paths_ready = Signal(object)  # set of visible paths from daemon
+    folderNavigated = Signal(str)            # emitted when user navigates into a folder
 
     def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
@@ -229,6 +366,7 @@ class ThumbnailViewWidget(QFrame):
         self._daemon_signals: Optional[DaemonSignals] = None
         self._initial_files_signal.connect(self._on_initial_files_received)
         self._initial_thumbs_signal.connect(self._on_initial_thumbs_received)
+        self._initial_folders_signal.connect(self._on_initial_folders_received)
         self._filtered_paths_ready.connect(self._on_filtered_paths_ready)
 
         self._hovered_label: Optional[ThumbnailLabel] = None
@@ -309,6 +447,14 @@ class ThumbnailViewWidget(QFrame):
             event_system.publish(ThumbnailHoveredEventData(
                 event_type=EventType.THUMBNAIL_HOVERED, source="thumbnail_view",
                 timestamp=time.time(), path=label.original_path))
+            if getattr(label, 'is_folder', False) and label._folder_node:
+                node = label._folder_node
+                count = node.recursive_count or node.image_count
+                event_system.publish(StatusMessageEventData(
+                    event_type=EventType.STATUS_MESSAGE, source="thumbnail_view",
+                    timestamp=time.time(),
+                    message=f"{node.name} ({count} images)",
+                    timeout=0))
             self._priority_update_timer.start()
 
     def _clear_hovered_label(self, label: ThumbnailLabel):
@@ -319,6 +465,11 @@ class ThumbnailViewWidget(QFrame):
                 event_type=EventType.THUMBNAIL_LEFT, source="thumbnail_view",
                 timestamp=time.time()))
             self._priority_update_timer.start()
+
+    @property
+    def folder_paths(self) -> Set[str]:
+        """Paths currently displayed as folder cards in the grid."""
+        return self.model.folder_nodes.keys()
 
     def get_hovered_image_path(self) -> Optional[str]:
         if self._hovered_label:
@@ -373,6 +524,8 @@ class ThumbnailViewWidget(QFrame):
             label.file_path = file_path
             label.original_path = file_path
             label.loaded = False
+            label.is_folder = False
+            label._folder_node = None
             label.show()
         else:
             label = ThumbnailLabel(file_path, self.display_size, self.gui_config)
@@ -402,7 +555,7 @@ class ThumbnailViewWidget(QFrame):
                     hovered_path = self.get_hovered_image_path()
                     if hovered_path:
                         self._restore_pre_click_selection()
-                        self.doubleClicked.emit(hovered_path)
+                        self._emit_double_click(hovered_path)
                     return True  # Event handled
             return False
         elif obj == self:
@@ -412,7 +565,7 @@ class ThumbnailViewWidget(QFrame):
                     hovered_path = self.get_hovered_image_path()
                     if hovered_path:
                         self._restore_pre_click_selection()
-                        self.doubleClicked.emit(hovered_path)
+                        self._emit_double_click(hovered_path)
                     return True  # Event handled
             return False
         elif isinstance(obj, ThumbnailLabel):
@@ -529,15 +682,19 @@ class ThumbnailViewWidget(QFrame):
                 "[trace] daemon response: files=%d, thumbs=%d for %s",
                 len(files), thumb_count, directory_path,
             )
-            # Emit via the dedicated signal so the DB-response batch always shows
-            # placeholders immediately, even if fast-scan notifications arrived first
-            # and consumed the is_first_batch shortcut in _add_image_batch.
+
+            # Emit files and thumbnails first so the grid populates immediately
             self._initial_files_signal.emit(sorted(files))
-            # Feed cached thumbnail paths directly into the preview pipeline
-            # so the GUI loads QImages from local cache without a daemon round-trip.
             if thumbnail_paths:
                 logger.info("[startup] %d cached thumbnail paths from initial response", len(thumbnail_paths))
                 self._initial_thumbs_signal.emit(thumbnail_paths)
+
+            # Discover subdirectories after files are emitted (slower DB queries)
+            if not recursive:
+                folder_nodes = self.service.get_subdirectories(directory_path)
+                if folder_nodes:
+                    logger.info("[folders] found %d subdirectories in %s", len(folder_nodes), directory_path)
+                    self._initial_folders_signal.emit(folder_nodes)
         else:
             logger.error("Failed to request file list for %s from daemon. Response: %s", directory_path, response)
 
@@ -559,6 +716,20 @@ class ThumbnailViewWidget(QFrame):
         self._add_image_batch(files)
         if self.model.all_files:
             self.reapply_filters()
+
+    @Slot(list)
+    def _on_initial_folders_received(self, folder_nodes: list):
+        """Insert folder entries at the start of the grid (before images)."""
+        if not folder_nodes:
+            return
+        folder_paths = []
+        for node in folder_nodes:
+            self.model.folder_nodes[node.path] = node
+            folder_paths.append(node.path)
+        # Prepend folders so they appear at the top of the grid.
+        # _add_image_batch deduplicates via _all_files_set.
+        self._add_image_batch(folder_paths)
+        logger.info("[folders] inserted %d folder cards into grid", len(folder_paths))
 
     @Slot(dict)
     def _on_initial_thumbs_received(self, thumb_map: dict):
@@ -664,9 +835,18 @@ class ThumbnailViewWidget(QFrame):
         else:
             logger.debug("[thumb] previews_ready has no thumbnail_path for %s", os.path.basename(image_path))
 
+    def _path_belongs_to_current_directory(self, path: str) -> bool:
+        """Return True if *path* is (or is under) the currently browsed directory."""
+        cur = self.current_directory_path
+        if not cur:
+            return False
+        rp = os.path.realpath(path)
+        rc = os.path.realpath(cur)
+        return rp == rc or rp.startswith(rc + os.sep)
+
     @Slot(object)
     def _on_scan_progress(self, data: ScanProgressData) -> None:
-        if self.model.current_directory_path is not None and data.path != self.model.current_directory_path:
+        if not self._path_belongs_to_current_directory(data.path):
             return
         logger.debug("[trace] scan_progress: all_files=%d, is_loading=%s", len(self.model.all_files), self._is_loading)
         try:
@@ -679,7 +859,7 @@ class ThumbnailViewWidget(QFrame):
             self._add_image_batch(sorted(f.path for f in data.files))
             # Mark that the first layout after this batch should seed the
             # heatmap immediately.  We cannot call _prioritize_visible_thumbnails
-            # here because _visible_to_original_mapping is not yet populated —
+            # here because model.visible_to_original is not yet populated —
             # label creation and layout update happen asynchronously via timers.
             if first_batch:
                 self._needs_heatmap_seed = True
@@ -697,9 +877,10 @@ class ThumbnailViewWidget(QFrame):
 
     @Slot(object)
     def _on_scan_complete(self, data: ScanCompleteData) -> None:
-        if self.model.current_directory_path is not None and data.path != self.model.current_directory_path:
-            return
         logger.debug("[trace] scan_complete: all_files=%d, is_loading=%s", len(self.model.all_files), self._is_loading)
+        if not self._path_belongs_to_current_directory(data.path):
+            logger.debug("Ignoring scan_complete for '%s' (current directory: '%s')", data.path, self.model.current_directory_path)
+            return
         if self._startup_t0 is not None:
             elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
             logger.info("[startup] scan_complete: %.0f ms after load_directory", elapsed_ms)
@@ -1122,10 +1303,29 @@ class ThumbnailViewWidget(QFrame):
             hovered_path = self.get_hovered_image_path()
             if hovered_path:
                 self._restore_pre_click_selection()
-                self.doubleClicked.emit(hovered_path)
+                self._emit_double_click(hovered_path)
                 logger.debug("Double-clicked on thumbnail, emitting signal for path: %s", hovered_path)
             else:
                 logger.debug("Double-click, but no image path hovered.")
+
+    def _emit_double_click(self, path: str):
+        """Route double-click to folder navigation or image open."""
+        if path in self.model.folder_nodes:
+            self.folderNavigated.emit(path)
+        else:
+            self.doubleClicked.emit(path)
+
+    def navigate_to_folder(self, folder_path: str):
+        """Navigate into a subdirectory, pushing current path onto the stack."""
+        if self.current_directory_path:
+            self.model.navigation_stack.append(self.current_directory_path)
+        self.load_directory(folder_path, recursive=False)
+
+    def navigate_to_parent(self):
+        """Navigate back to the previous directory from the stack."""
+        if self.model.navigation_stack:
+            parent = self.model.navigation_stack.pop()
+            self.load_directory(parent, recursive=False)
 
     def setHighlightedThumbnail(self, image_path: str):
         """Briefly highlight a thumbnail on return from picture view without changing selection."""
@@ -1396,22 +1596,40 @@ class ThumbnailViewWidget(QFrame):
         label._original_idx = original_idx
         label._overlay_manager = self.overlay_manager
 
-        # Apply cached pixmap (lazy-load from thumb path if needed)
-        pixmap = self.model.pixmap_cache.get(original_idx)
-        if pixmap is None:
-            thumb_path = self.model.thumb_path_cache.get(original_idx)
-            if thumb_path:
-                image = QImage(thumb_path)
-                if not image.isNull():
-                    image = self._apply_db_orientation(image, file_path)
-                    pixmap = apply_profile_pixmap(image)
-                    self.model.pixmap_cache[original_idx] = pixmap
-        if pixmap:
-            label.updateThumbnail(pixmap)
+        # Configure folder cards
+        if file_path in self.model.folder_nodes:
+            was_folder = getattr(label, 'is_folder', False)
+            label.is_folder = True
+            label._folder_node = self.model.folder_nodes.get(file_path)
+            label._cache_folder_previews()
             label.loaded = True
             state = self.model.image_states.get(original_idx)
             if state:
                 state.loaded = True
+            if not was_folder:
+                label.setStyleSheet(label._build_card_stylesheet())
+        else:
+            if getattr(label, 'is_folder', False):
+                label.setStyleSheet(label._build_card_stylesheet())
+            label.is_folder = False
+            label._folder_node = None
+            label._folder_preview_pixmaps = None
+            # Apply cached pixmap (lazy-load from thumb path if needed)
+            pixmap = self.model.pixmap_cache.get(original_idx)
+            if pixmap is None:
+                thumb_path = self.model.thumb_path_cache.get(original_idx)
+                if thumb_path:
+                    image = QImage(thumb_path)
+                    if not image.isNull():
+                        image = self._apply_db_orientation(image, file_path)
+                        pixmap = apply_profile_pixmap(image)
+                        self.model.pixmap_cache[original_idx] = pixmap
+            if pixmap:
+                label.updateThumbnail(pixmap)
+                label.loaded = True
+                state = self.model.image_states.get(original_idx)
+                if state:
+                    state.loaded = True
 
         # Apply selection state — during an active drag, use the preview set
         # so recycled labels re-appear with the correct highlight.

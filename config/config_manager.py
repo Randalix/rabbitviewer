@@ -95,6 +95,14 @@ DEFAULT_CONFIG = {
             "sequence": "M",
             "description": "Open metadata info panel"
         },
+        "navigate_parent": {
+            "sequence": "Alt+Up",
+            "description": "Navigate to parent folder"
+        },
+        "open_breadcrumb": {
+            "sequence": "Ctrl+L",
+            "description": "Open breadcrumb path bar"
+        },
         "menu:tags": {
             "sequence": "T",
             "description": "Open tags menu"
@@ -114,6 +122,10 @@ DEFAULT_CONFIG = {
         "menu:bookmark": {
             "sequence": "B",
             "description": "Copy/move files to bookmarked directories"
+        },
+        "menu:recent": {
+            "sequence": "F",
+            "description": "Open recent directories"
         },
         "script:delete_selected": {
             "sequence": "Shift+R",

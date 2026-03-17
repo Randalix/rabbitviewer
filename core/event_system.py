@@ -31,6 +31,7 @@ class EventType(Enum):
     # Navigation events
     NAVIGATE_NEXT = "navigate_next"
     NAVIGATE_PREVIOUS = "navigate_previous"
+    NAVIGATE_PARENT = "navigate_parent"
     
     # View events
     VIEW_CHANGE = "view_change"
@@ -41,6 +42,7 @@ class EventType(Enum):
     INSPECTOR_UPDATE = "inspector_update"
     
     # UI command events
+    OPEN_BREADCRUMB = "open_breadcrumb"
     OPEN_FILTER = "open_filter"
     OPEN_TAG_EDITOR = "open_tag_editor"
     OPEN_TAG_FILTER = "open_tag_filter"
@@ -72,6 +74,10 @@ class EventType(Enum):
     # Script / menu events
     RUN_SCRIPT = "run_script"
     OPEN_MODAL_MENU = "open_modal_menu"
+
+    # Directory events
+    NAVIGATE_TO_FOLDER = "navigate_to_folder"
+    OPEN_RECENT_DIRECTORY = "open_recent_directory"
 
     # Status messages
     STATUS_MESSAGE = "status_message"
@@ -118,6 +124,7 @@ class ViewEventData(EventData):
 class InspectorEventData(EventData):
     image_path: str
     normalized_position: QPointF
+    cache_only: bool = False  # when True, show cached thumbnail/fullres only (no new requests)
 
 
 class StatusSection(Enum):
@@ -176,6 +183,10 @@ class ThumbnailOverlayEventData(EventData):
     params: dict = field(default_factory=dict)
     position: str = "center"
     duration: Optional[int] = None  # ms; None = permanent
+
+@dataclass
+class DirectoryEventData(EventData):
+    path: str = ""
 
 # High-frequency events that are not appended to history to avoid evicting
 # genuinely useful events and to reduce lock hold time.
