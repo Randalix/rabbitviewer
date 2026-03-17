@@ -50,9 +50,10 @@ class ItemCard(QLabel):
         radius = f" border-radius: {br}px;" if br else ""
         hover_extra = f" background: {hover_bg};" if hover_bg else ""
 
+        hover_bc = bc if self.selected else hc
         return (
             f"{sel} {{ background-color: {bg}; border: {bw}px solid {bc};{radius} }}"
-            f" {sel}:hover {{ border: {bw}px solid {hc};{hover_extra} }}"
+            f" {sel}:hover {{ border: {bw}px solid {hover_bc};{hover_extra} }}"
         )
 
     def setSelected(self, selected: bool):
