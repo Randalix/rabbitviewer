@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, QPoint
 from PySide6.QtWidgets import QScrollArea, QWidget
 
 if TYPE_CHECKING:
-    from gui.thumbnail_view import ThumbnailLabel
+    from gui.components.thumbnail_label import ThumbnailLabel
 
 
 class VirtualGridManager(QObject):
