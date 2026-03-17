@@ -179,28 +179,27 @@ class FaceTable:
         """Assign a face to a person and update face_count."""
         try:
             with self._lock:
-                cursor = self.conn.cursor()
-                # Get old person_id to decrement count
-                cursor.execute('SELECT person_id FROM face_detections WHERE face_id = ?', (face_id,))
-                row = cursor.fetchone()
-                if not row:
-                    return
-                old_person_id = row[0]
+                with self.conn:
+                    cursor = self.conn.cursor()
+                    cursor.execute('SELECT person_id FROM face_detections WHERE face_id = ?', (face_id,))
+                    row = cursor.fetchone()
+                    if not row:
+                        return
+                    old_person_id = row[0]
 
-                cursor.execute('UPDATE face_detections SET person_id = ? WHERE face_id = ?',
-                               (person_id, face_id))
+                    cursor.execute('UPDATE face_detections SET person_id = ? WHERE face_id = ?',
+                                   (person_id, face_id))
 
-                if old_person_id and old_person_id != person_id:
+                    if old_person_id and old_person_id != person_id:
+                        cursor.execute('''
+                            UPDATE persons SET face_count = MAX(0, face_count - 1), updated_at = ?
+                            WHERE person_id = ?
+                        ''', (time.time(), old_person_id))
+
                     cursor.execute('''
-                        UPDATE persons SET face_count = MAX(0, face_count - 1), updated_at = ?
+                        UPDATE persons SET face_count = face_count + 1, updated_at = ?
                         WHERE person_id = ?
-                    ''', (time.time(), old_person_id))
-
-                cursor.execute('''
-                    UPDATE persons SET face_count = face_count + 1, updated_at = ?
-                    WHERE person_id = ?
-                ''', (time.time(), person_id))
-                self.conn.commit()
+                    ''', (time.time(), person_id))
                 self._generation += 1
         except sqlite3.Error as e:
             logger.error(f"Error assigning face to person: {e}")
@@ -277,18 +276,17 @@ class FaceTable:
         """Reassign all faces from source persons to target, delete sources."""
         try:
             with self._lock:
-                cursor = self.conn.cursor()
-                for src_id in source_ids:
-                    cursor.execute('UPDATE face_detections SET person_id = ? WHERE person_id = ?',
-                                   (target_id, src_id))
-                    cursor.execute('DELETE FROM persons WHERE person_id = ?', (src_id,))
-                # Recompute face_count for target
-                cursor.execute('''
-                    UPDATE persons SET face_count = (
-                        SELECT COUNT(*) FROM face_detections WHERE person_id = ?
-                    ), updated_at = ? WHERE person_id = ?
-                ''', (target_id, time.time(), target_id))
-                self.conn.commit()
+                with self.conn:
+                    cursor = self.conn.cursor()
+                    for src_id in source_ids:
+                        cursor.execute('UPDATE face_detections SET person_id = ? WHERE person_id = ?',
+                                       (target_id, src_id))
+                        cursor.execute('DELETE FROM persons WHERE person_id = ?', (src_id,))
+                    cursor.execute('''
+                        UPDATE persons SET face_count = (
+                            SELECT COUNT(*) FROM face_detections WHERE person_id = ?
+                        ), updated_at = ? WHERE person_id = ?
+                    ''', (target_id, time.time(), target_id))
                 self._generation += 1
         except sqlite3.Error as e:
             logger.error(f"Error merging persons: {e}")
@@ -297,27 +295,27 @@ class FaceTable:
         """Split a person into individual persons — one per face."""
         try:
             with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    'SELECT face_id FROM face_detections WHERE person_id = ?',
-                    (person_id,))
-                face_ids = [r[0] for r in cursor.fetchall()]
-                if len(face_ids) < 2:
-                    return
-                now = time.time()
-                for fid in face_ids:
-                    new_pid = str(uuid.uuid4())
-                    cursor.execute('''
-                        INSERT INTO persons
-                        (person_id, name, face_count, feature_face_id, created_at, updated_at)
-                        VALUES (?, '', 1, ?, ?, ?)
-                    ''', (new_pid, fid, now, now))
+                with self.conn:
+                    cursor = self.conn.cursor()
                     cursor.execute(
-                        'UPDATE face_detections SET person_id = ? WHERE face_id = ?',
-                        (new_pid, fid))
-                cursor.execute('DELETE FROM persons WHERE person_id = ?',
-                               (person_id,))
-                self.conn.commit()
+                        'SELECT face_id FROM face_detections WHERE person_id = ?',
+                        (person_id,))
+                    face_ids = [r[0] for r in cursor.fetchall()]
+                    if len(face_ids) < 2:
+                        return
+                    now = time.time()
+                    for fid in face_ids:
+                        new_pid = str(uuid.uuid4())
+                        cursor.execute('''
+                            INSERT INTO persons
+                            (person_id, name, face_count, feature_face_id, created_at, updated_at)
+                            VALUES (?, '', 1, ?, ?, ?)
+                        ''', (new_pid, fid, now, now))
+                        cursor.execute(
+                            'UPDATE face_detections SET person_id = ? WHERE face_id = ?',
+                            (new_pid, fid))
+                    cursor.execute('DELETE FROM persons WHERE person_id = ?',
+                                   (person_id,))
                 self._generation += 1
         except sqlite3.Error as e:
             logger.error(f"Error ungrouping person: {e}")

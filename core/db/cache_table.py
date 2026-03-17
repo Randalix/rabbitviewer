@@ -1,11 +1,10 @@
-"""Cache management queries: LRU tracking and eviction candidates.
+"""Cache management queries: LRU eviction candidates.
 
 DB queries only — no filesystem I/O.
 """
 
 import logging
 import sqlite3
-import time
 from threading import Lock
 from typing import List, Tuple
 
@@ -18,18 +17,6 @@ class CacheTable:
     def __init__(self, db_path: str):
         self.conn = create_connection(db_path)
         self._lock = Lock()
-
-    def touch_accessed_at(self, file_path: str) -> None:
-        """Update LRU timestamp. Best-effort — failures degrade gracefully."""
-        try:
-            with self._lock:
-                self.conn.execute(
-                    "UPDATE image_metadata SET accessed_at = ? WHERE file_path = ?",
-                    (time.time(), file_path),
-                )
-                self.conn.commit()
-        except sqlite3.Error:
-            pass
 
     def get_cache_paths(self) -> List[Tuple[str, str]]:
         """Return (thumbnail_path, view_image_path) for all cached files."""

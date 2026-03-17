@@ -447,22 +447,23 @@ class ImageTable:
                     FROM image_metadata
                     WHERE file_path IN ({placeholders})
                 ''', file_paths)
-                for row in cursor.fetchall():
-                    fp, thumb, view, stored_mtime, stored_size = row
-                    stat = stat_cache.get(fp)
-                    valid = (
-                        stat is not None
-                        and stored_mtime is not None
-                        and stored_mtime >= stat.st_mtime
-                        and stored_size == stat.st_size
-                        and thumb
-                        and os.path.exists(thumb)  # disk-io: cache file check
-                    )
-                    results[fp] = {
-                        'thumbnail_path': thumb,
-                        'view_image_path': view,
-                        'valid': bool(valid),
-                    }
+                rows = cursor.fetchall()
+
+            for fp, thumb, view, stored_mtime, stored_size in rows:
+                stat = stat_cache.get(fp)
+                valid = (
+                    stat is not None
+                    and stored_mtime is not None
+                    and stored_mtime >= stat.st_mtime
+                    and stored_size == stat.st_size
+                    and thumb
+                    and os.path.exists(thumb)  # disk-io: cache file check
+                )
+                results[fp] = {
+                    'thumbnail_path': thumb,
+                    'view_image_path': view,
+                    'valid': bool(valid),
+                }
         except sqlite3.Error as e:
             logger.error(f"Error in batch_get_thumbnail_validity: {e}")
 
@@ -513,14 +514,15 @@ class ImageTable:
                     FROM image_metadata
                     WHERE file_path IN ({placeholders})
                 ''', file_paths)
-                for row in cursor.fetchall():
-                    fp, thumb, view = row
-                    valid = bool(thumb and os.path.exists(thumb))  # disk-io: cache file check
-                    results[fp] = {
-                        'thumbnail_path': thumb,
-                        'view_image_path': view,
-                        'valid': valid,
-                    }
+                rows = cursor.fetchall()
+
+            for fp, thumb, view in rows:
+                valid = bool(thumb and os.path.exists(thumb))  # disk-io: cache file check
+                results[fp] = {
+                    'thumbnail_path': thumb,
+                    'view_image_path': view,
+                    'valid': valid,
+                }
         except sqlite3.Error as e:
             logger.error(f"Error in batch_get_cached_thumbnail_validity: {e}")
 
@@ -536,24 +538,19 @@ class ImageTable:
 
             with self._lock:
                 cursor = self.conn.cursor()
-
-                # Select only the columns needed for validation to reduce data transfer.
                 cursor.execute('''
                     SELECT thumbnail_path, mtime, file_size FROM image_metadata
                     WHERE file_path = ?
                 ''', (file_path,))
-
                 result = cursor.fetchone()
 
-                if result:
-                    thumbnail_path, stored_mtime, stored_file_size = result
-
-                    # Check modification time, file size, and existence of the thumbnail file.
-                    if (stored_mtime >= mtime and
-                        stored_file_size == file_size and
-                        thumbnail_path and
-                        os.path.exists(thumbnail_path)):  # disk-io: cache file check
-                        return True
+            if result:
+                thumbnail_path, stored_mtime, stored_file_size = result
+                if (stored_mtime >= mtime and
+                    stored_file_size == file_size and
+                    thumbnail_path and
+                    os.path.exists(thumbnail_path)):  # disk-io: cache file check
+                    return True
 
         except FileNotFoundError:
             # If os.stat fails, the file doesn't exist, so the thumbnail is not valid.
@@ -965,27 +962,29 @@ class ImageTable:
     # ------------------------------------------------------------------
 
     def batch_ensure_records_exist(self, file_paths: List[str]) -> None:
-        """Efficiently creates minimal DB records for a list of files if they don't already exist."""
+        """Creates minimal DB records for files that don't already exist.
+
+        Uses INSERT OR IGNORE so a concurrent insert between the existence
+        check and the bulk insert is harmless (no stale-state risk).
+        """
         if not file_paths:
             return
 
         current_time = time.time()
-        records_to_insert = []
 
         with self._lock:
-            with self.conn:  # Transaction
-                cursor = self.conn.cursor()
+            cursor = self.conn.cursor()
+            placeholders = ','.join('?' * len(file_paths))
+            cursor.execute(f'SELECT file_path FROM image_metadata WHERE file_path IN ({placeholders})', file_paths)
+            existing_paths = {row[0] for row in cursor.fetchall()}
 
-                placeholders = ','.join('?' * len(file_paths))
-                cursor.execute(f'SELECT file_path FROM image_metadata WHERE file_path IN ({placeholders})', file_paths)
-                existing_paths = {row[0] for row in cursor.fetchall()}
-                new_paths = [p for p in file_paths if p not in existing_paths]
-
+        new_paths = [p for p in file_paths if p not in existing_paths]
         if not new_paths:
             return
 
         # Stat outside the lock to avoid blocking DB on NAS round-trips
         logger.info(f"Batch inserting {len(new_paths)} new minimal records into database.")
+        records_to_insert = []
         for path in new_paths:
             try:
                 st = os.stat(path)  # disk-io: batch insert stat
@@ -996,13 +995,12 @@ class ImageTable:
                     current_time, current_time
                 ))
             except OSError:
-                continue
+                continue  # why: file may have been deleted between scan and stat
 
         if records_to_insert:
             with self._lock:
                 with self.conn:
-                    cursor = self.conn.cursor()
-                    cursor.executemany("""
+                    self.conn.executemany("""
                         INSERT OR IGNORE INTO image_metadata (file_path, path_hash, file_size, mtime, birthtime, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, records_to_insert)

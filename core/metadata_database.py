@@ -9,7 +9,7 @@ Cross-domain operations (remove_records, extract_and_store_*) live here.
 import logging
 import os
 from typing import List, Optional
-from threading import Lock
+from threading import Lock  # used by get_metadata_database singleton
 from core.db.connection import create_connection
 from core.db.schema import init_schema
 from core.metadata_extraction import extract_metadata_from_file, extract_fast_metadata_fields
@@ -29,15 +29,15 @@ class MetadataDatabase:
     def __init__(self, db_path: str):
         logger.info(f"Initializing MetadataDatabase with path: {db_path}")
         self.db_path = db_path
-        self._lock = Lock()
 
         db_dir = os.path.dirname(db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
 
-        # Schema setup connection (also used by cross-domain queries)
-        self.conn = create_connection(db_path)
-        init_schema(self.conn)
+        # Schema setup — use a temporary connection, then close it
+        schema_conn = create_connection(db_path)
+        init_schema(schema_conn)
+        schema_conn.close()
 
         # Per-domain table classes — each with its own connection for WAL concurrency
         self.images = ImageTable(db_path)
@@ -119,7 +119,7 @@ class MetadataDatabase:
                         except OSError as e:
                             logger.warning(f"Error removing cache file {path}: {e}")
             return True
-        except Exception as e:
+        except Exception as e:  # why: cross-domain op — catch all to ensure partial cleanup is reported
             logger.error(f"Error removing records for {len(file_paths)} files: {e}", exc_info=True)
             return False
 
@@ -182,10 +182,7 @@ class MetadataDatabase:
         self.embeddings.close()
         self.ledgers.close()
         self.cache.close()
-        with self._lock:
-            if self.conn:
-                self.conn.close()
-                logger.info(f"Metadata database connection closed: {self.db_path}")
+        logger.info(f"Metadata database connections closed: {self.db_path}")
 
 
 # Global database instance

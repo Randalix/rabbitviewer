@@ -60,7 +60,7 @@ def extract_metadata_from_file(file_path: str, use_plugin: bool = True,
                     try:
                         metadata['file_size'] = os.path.getsize(file_path)  # disk-io: file size fallback
                     except OSError:
-                        pass
+                        pass  # why: file may not exist; file_size defaults to 0
                 return metadata
         except Exception as e:  # why: plugins are user-supplied
             logger.error(
