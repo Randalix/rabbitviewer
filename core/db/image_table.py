@@ -9,31 +9,16 @@ import json
 import logging
 import os
 import sqlite3
-import threading
 import time
-from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from core.db.connection import create_connection
+from core.db.base_table import BaseTable
 from core.priority import ImageEntry
 
 logger = logging.getLogger(__name__)
 
 
-class ImageTable:
-    def __init__(self, db_path: str):
-        self._db_path = db_path
-        self.conn = create_connection(db_path)
-        self._lock = Lock()
-        self._local = threading.local()
-
-    def _read_conn(self) -> sqlite3.Connection:
-        """Return a thread-local read connection (WAL allows concurrent reads)."""
-        conn = getattr(self._local, 'conn', None)
-        if conn is None:
-            conn = create_connection(self._db_path)
-            self._local.conn = conn
-        return conn
+class ImageTable(BaseTable):
 
     # ------------------------------------------------------------------
     #  Utilities
@@ -1156,14 +1141,4 @@ class ImageTable:
     #  Lifecycle
     # ------------------------------------------------------------------
 
-    def close(self):
-        with self._lock:
-            self.conn.close()
-        # Best-effort close of the calling thread's read connection.
-        conn = getattr(self._local, 'conn', None)
-        if conn is not None:
-            try:
-                conn.close()
-            except sqlite3.Error:
-                pass
-            self._local.conn = None
+    # close() inherited from BaseTable

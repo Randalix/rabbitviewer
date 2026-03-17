@@ -3,18 +3,16 @@
 import logging
 import sqlite3
 import time
-from threading import Lock
 from typing import List, Optional
 
-from core.db.connection import create_connection
+from core.db.base_table import BaseTable
 
 logger = logging.getLogger(__name__)
 
 
-class EmbeddingTable:
+class EmbeddingTable(BaseTable):
     def __init__(self, db_path: str):
-        self.conn = create_connection(db_path)
-        self._lock = Lock()
+        super().__init__(db_path)
         self._generation = 0
 
     @property
@@ -45,13 +43,13 @@ class EmbeddingTable:
     def get_embedding(self, file_path: str) -> Optional[bytes]:
         """Return the raw embedding BLOB for a file, or None."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    'SELECT embedding FROM clip_embeddings WHERE file_path = ?',
-                    (file_path,))
-                row = cursor.fetchone()
-                return row[0] if row else None
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT embedding FROM clip_embeddings WHERE file_path = ?',
+                (file_path,))
+            row = cursor.fetchone()
+            return row[0] if row else None
         except sqlite3.Error as e:
             logger.error(f"Error getting embedding for {file_path}: {e}")
             return None
@@ -59,12 +57,12 @@ class EmbeddingTable:
     def get_all_embeddings(self, model_name: str = "clip-vit-b-32") -> List[tuple]:
         """Return all (file_path, embedding_blob) pairs for a model."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    'SELECT file_path, embedding FROM clip_embeddings WHERE model_name = ?',
-                    (model_name,))
-                return cursor.fetchall()
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT file_path, embedding FROM clip_embeddings WHERE model_name = ?',
+                (model_name,))
+            return cursor.fetchall()
         except sqlite3.Error as e:
             logger.error(f"Error getting all embeddings: {e}")
             return []
@@ -75,14 +73,14 @@ class EmbeddingTable:
         if not file_paths:
             return []
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                placeholders = ','.join('?' for _ in file_paths)
-                cursor.execute(f'''
-                    SELECT file_path FROM clip_embeddings
-                    WHERE file_path IN ({placeholders}) AND model_name = ?
-                ''', file_paths + [model_name])
-                existing = {row[0] for row in cursor.fetchall()}
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            placeholders = ','.join('?' for _ in file_paths)
+            cursor.execute(f'''
+                SELECT file_path FROM clip_embeddings
+                WHERE file_path IN ({placeholders}) AND model_name = ?
+            ''', file_paths + [model_name])
+            existing = {row[0] for row in cursor.fetchall()}
             return [fp for fp in file_paths if fp not in existing]
         except sqlite3.Error as e:
             logger.error(f"Error checking missing embeddings: {e}")
@@ -91,12 +89,12 @@ class EmbeddingTable:
     def count_embeddings(self, model_name: str = "clip-vit-b-32") -> int:
         """Return the number of stored embeddings for a model."""
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    'SELECT COUNT(*) FROM clip_embeddings WHERE model_name = ?',
-                    (model_name,))
-                return cursor.fetchone()[0]
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT COUNT(*) FROM clip_embeddings WHERE model_name = ?',
+                (model_name,))
+            return cursor.fetchone()[0]
         except sqlite3.Error as e:
             logger.error(f"Error counting embeddings: {e}")
             return 0
@@ -122,6 +120,4 @@ class EmbeddingTable:
             logger.error(f"embedding delete_for_files failed: {e}")
             return 0
 
-    def close(self):
-        with self._lock:
-            self.conn.close()
+    # close() inherited from BaseTable

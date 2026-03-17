@@ -8,18 +8,14 @@ import logging
 import os
 import sqlite3
 import time
-from threading import Lock
 from typing import List
 
-from core.db.connection import create_connection
+from core.db.base_table import BaseTable
 
 logger = logging.getLogger(__name__)
 
 
-class LedgerTable:
-    def __init__(self, db_path: str):
-        self.conn = create_connection(db_path)
-        self._lock = Lock()
+class LedgerTable(BaseTable):
 
     # ------------------------------------------------------------------
     #  Write-intent ledger (pending_writes)
@@ -27,12 +23,12 @@ class LedgerTable:
 
     def pending_write_exists(self, file_path: str, write_type: str) -> bool:
         try:
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    'SELECT 1 FROM pending_writes WHERE file_path = ? AND write_type = ?',
-                    (file_path, write_type))
-                return cursor.fetchone() is not None
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT 1 FROM pending_writes WHERE file_path = ? AND write_type = ?',
+                (file_path, write_type))
+            return cursor.fetchone() is not None
         except sqlite3.Error as e:
             logger.error(f"pending_write_exists failed: {e}")
             return False
@@ -65,20 +61,20 @@ class LedgerTable:
 
     def pending_write_get_all(self) -> List[dict]:
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    'SELECT file_path, write_type, payload FROM pending_writes'
-                )
-                results = []
-                for row in cursor.fetchall():
-                    try:
-                        payload = json.loads(row[2])
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.error("Skipping corrupt pending_write row %s: %s", row[0], e)
-                        continue
-                    results.append({'file_path': row[0], 'write_type': row[1],
-                                    'payload': payload})
-                return results
+            conn = self._read_conn()
+            cursor = conn.execute(
+                'SELECT file_path, write_type, payload FROM pending_writes'
+            )
+            results = []
+            for row in cursor.fetchall():
+                try:
+                    payload = json.loads(row[2])
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.error("Skipping corrupt pending_write row %s: %s", row[0], e)
+                    continue
+                results.append({'file_path': row[0], 'write_type': row[1],
+                                'payload': payload})
+            return results
         except sqlite3.Error as e:
             logger.error(f"pending_write_get_all failed: {e}")
             return []
@@ -133,13 +129,13 @@ class LedgerTable:
     def ledger_get_incomplete(self, scan_root: str) -> List[str]:
         """Return file paths that were discovered but not yet processed."""
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    "SELECT file_path FROM scan_ledger "
-                    "WHERE scan_root = ? AND status = 'discovered'",
-                    (scan_root,),
-                )
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT file_path FROM scan_ledger "
+                "WHERE scan_root = ? AND status = 'discovered'",
+                (scan_root,),
+            )
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error(f"ledger_get_incomplete failed: {e}")
             return []
@@ -147,13 +143,13 @@ class LedgerTable:
     def ledger_get_walked_dirs(self, scan_root: str) -> set:
         """Derive the set of fully-walked directories from the ledger."""
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    "SELECT DISTINCT file_path FROM scan_ledger "
-                    "WHERE scan_root = ? AND status = 'complete'",
-                    (scan_root,),
-                )
-                return {os.path.dirname(row[0]) for row in cursor.fetchall()}
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT DISTINCT file_path FROM scan_ledger "
+                "WHERE scan_root = ? AND status = 'complete'",
+                (scan_root,),
+            )
+            return {os.path.dirname(row[0]) for row in cursor.fetchall()}
         except sqlite3.Error as e:
             logger.error(f"ledger_get_walked_dirs failed: {e}")
             return set()
@@ -175,11 +171,11 @@ class LedgerTable:
     def ledger_get_all_scan_roots(self) -> List[str]:
         """Return all scan roots that have ledger entries."""
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    "SELECT DISTINCT scan_root FROM scan_ledger"
-                )
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT DISTINCT scan_root FROM scan_ledger"
+            )
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error(f"ledger_get_all_scan_roots failed: {e}")
             return []
@@ -247,13 +243,13 @@ class LedgerTable:
     def file_work_get_pending(self, scan_root: str, work_type: str) -> List[str]:
         """Return file paths with pending work of the given type."""
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    "SELECT file_path FROM file_work "
-                    "WHERE scan_root = ? AND work_type = ?",
-                    (scan_root, work_type),
-                )
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT file_path FROM file_work "
+                "WHERE scan_root = ? AND work_type = ?",
+                (scan_root, work_type),
+            )
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error("file_work_get_pending failed: %s", e)
             return []
@@ -261,11 +257,11 @@ class LedgerTable:
     def file_work_get_all_roots(self) -> List[str]:
         """Return distinct scan roots that have pending work."""
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    "SELECT DISTINCT scan_root FROM file_work"
-                )
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT DISTINCT scan_root FROM file_work"
+            )
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error("file_work_get_all_roots failed: %s", e)
             return []
@@ -273,13 +269,13 @@ class LedgerTable:
     def file_work_get_pending_types(self, scan_root: str) -> List[str]:
         """Return distinct work types with pending entries for a scan root."""
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    "SELECT DISTINCT work_type FROM file_work "
-                    "WHERE scan_root = ?",
-                    (scan_root,),
-                )
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT DISTINCT work_type FROM file_work "
+                "WHERE scan_root = ?",
+                (scan_root,),
+            )
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error("file_work_get_pending_types failed: %s", e)
             return []
@@ -334,13 +330,13 @@ class LedgerTable:
     def file_transfer_get_pending(self, dest_dir: str,
                                   operation: str) -> List[str]:
         try:
-            with self._lock:
-                cursor = self.conn.execute(
-                    "SELECT source_path FROM file_transfers "
-                    "WHERE dest_dir = ? AND operation = ? AND status = 'pending'",
-                    (dest_dir, operation),
-                )
-                return [row[0] for row in cursor.fetchall()]
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT source_path FROM file_transfers "
+                "WHERE dest_dir = ? AND operation = ? AND status = 'pending'",
+                (dest_dir, operation),
+            )
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error("file_transfer_get_pending failed: %s", e)
             return []
@@ -360,6 +356,4 @@ class LedgerTable:
             logger.error("file_transfer_cleanup_completed failed: %s", e)
             return 0
 
-    def close(self):
-        with self._lock:
-            self.conn.close()
+    # close() inherited from BaseTable
