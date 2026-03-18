@@ -202,11 +202,13 @@ def extract_metadata_from_file(file_path: str, use_plugin: bool = True,
     return metadata
 
 
-def extract_fast_metadata_fields(file_path: str) -> Optional[Dict[str, Any]]:
+def extract_fast_metadata_fields(file_path: str,
+                                  stat_result: Optional[os.stat_result] = None,
+                                  ) -> Optional[Dict[str, Any]]:
     """Plugin binary scan for orientation/rating/file_size only.
 
     Returns a dict with 'orientation', 'rating', 'file_size', 'mtime',
-    'birthtime', or None if no plugin is available.
+    'mtime_ns', 'birthtime', or None if no plugin is available.
     """
     _, ext = os.path.splitext(file_path)
     plugin = plugin_registry.get_plugin_for_format(ext)
@@ -221,7 +223,7 @@ def extract_fast_metadata_fields(file_path: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        st = os.stat(file_path)  # disk-io: fast metadata
+        st = stat_result or os.stat(file_path)  # disk-io: fast metadata
     except OSError:
         return None
 
@@ -230,5 +232,6 @@ def extract_fast_metadata_fields(file_path: str) -> Optional[Dict[str, Any]]:
         'rating': plugin_meta.get('rating', 0),
         'file_size': st.st_size,
         'mtime': st.st_mtime,
+        'mtime_ns': st.st_mtime_ns,
         'birthtime': getattr(st, 'st_birthtime', None),
     }

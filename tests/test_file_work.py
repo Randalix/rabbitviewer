@@ -44,6 +44,7 @@ class TestFileWorkRemove:
     def test_removes_single_entry(self, db):
         db.ledgers.file_work_batch_insert(["/a.jpg", "/b.jpg"], "thumbnail", "/photos")
         db.ledgers.file_work_remove("/a.jpg", "thumbnail")
+        db.ledgers._flush_work_removes()
         assert db.ledgers.file_work_get_pending("/photos", "thumbnail") == ["/b.jpg"]
 
     def test_remove_nonexistent_is_noop(self, db):

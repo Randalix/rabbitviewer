@@ -191,14 +191,17 @@ class ImageTable(BaseTable):
     def store_fast_metadata(self, file_path: str, fields_dict: Dict[str, Any]) -> None:
         """DB write for fast metadata fields.
 
-        *fields_dict* must contain keys: orientation, rating, file_size, mtime, birthtime.
+        *fields_dict* must contain keys: orientation, rating, file_size, mtime,
+        mtime_ns, birthtime.
         """
         orientation = fields_dict['orientation']
         rating = fields_dict['rating']
         file_size = fields_dict['file_size']
         mtime = fields_dict['mtime']
         birthtime = fields_dict['birthtime']
-        path_hash = self._get_metadata_hash(file_path)
+        # Compute hash from fields already available — no os.stat needed.
+        info = f"{file_path}-{file_size}-{fields_dict['mtime_ns']}"
+        path_hash = hashlib.md5(info.encode('utf-8')).hexdigest()
         current_time = time.time()
 
         try:
@@ -330,13 +333,14 @@ class ImageTable(BaseTable):
     # ------------------------------------------------------------------
 
     def set_thumbnail_paths(self, file_path: str, thumbnail_path: Optional[str] = None,
-                            view_image_path: Optional[str] = None) -> bool:
+                            view_image_path: Optional[str] = None,
+                            stat_result: Optional[os.stat_result] = None) -> bool:
         """Sets the thumbnail and view image paths for a file."""
         try:
             current_time = time.time()
             # Stat outside the lock to avoid blocking other DB operations on NAS.
             try:
-                st = os.stat(file_path)  # disk-io: freshness check
+                st = stat_result or os.stat(file_path)  # disk-io: freshness check
             except OSError:
                 st = None
 
@@ -553,37 +557,48 @@ class ImageTable(BaseTable):
 
         return results
 
-    def is_thumbnail_valid(self, file_path: str) -> bool:
+    def is_thumbnail_valid(self, file_path: str,
+                           stat_result: Optional[os.stat_result] = None) -> bool:
         """Checks if a valid thumbnail exists for the file."""
+        valid, _ = self.check_thumbnail_validity(file_path, stat_result=stat_result)
+        return valid
+
+    def check_thumbnail_validity(self, file_path: str,
+                                  stat_result: Optional[os.stat_result] = None,
+                                  ) -> tuple:
+        """Combined validity check + path retrieval in a single query.
+
+        Returns ``(is_valid, {'thumbnail_path': ..., 'view_image_path': ...})``.
+        """
+        paths: Dict[str, Optional[str]] = {'thumbnail_path': None, 'view_image_path': None}
         try:
-            # Combine file existence check, mtime, and size into a single os.stat call for efficiency.
-            stat_info = os.stat(file_path)  # disk-io: thumbnail validity
+            stat_info = stat_result or os.stat(file_path)  # disk-io: thumbnail validity
             mtime = stat_info.st_mtime
             file_size = stat_info.st_size
 
-            with self._lock:
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    SELECT thumbnail_path, mtime, file_size FROM image_metadata
-                    WHERE file_path = ?
-                ''', (file_path,))
-                result = cursor.fetchone()
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT thumbnail_path, view_image_path, mtime, file_size
+                FROM image_metadata WHERE file_path = ?
+            ''', (file_path,))
+            result = cursor.fetchone()
 
             if result:
-                thumbnail_path, stored_mtime, stored_file_size = result
-                if (stored_mtime >= mtime and
-                    stored_file_size == file_size and
-                    thumbnail_path and
-                    os.path.exists(thumbnail_path)):  # disk-io: cache file check
-                    return True
+                thumb, view, stored_mtime, stored_size = result
+                paths = {'thumbnail_path': thumb, 'view_image_path': view}
+                if (stored_mtime is not None and stored_mtime >= mtime
+                        and stored_size == file_size
+                        and thumb
+                        and os.path.exists(thumb)):  # disk-io: cache file check
+                    return True, paths
 
-        except FileNotFoundError:
-            # If os.stat fails, the file doesn't exist, so the thumbnail is not valid.
-            return False
+        except OSError:  # why: source file missing or NAS I/O error — treat as invalid
+            return False, paths
         except sqlite3.Error as e:
             logger.error(f"Error checking thumbnail validity for {file_path}: {e}")
 
-        return False
+        return False, paths
 
     # ------------------------------------------------------------------
     #  Rating

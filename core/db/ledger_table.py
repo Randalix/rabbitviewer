@@ -7,12 +7,15 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from typing import List
 
 from core.db.base_table import BaseTable
 
 logger = logging.getLogger(__name__)
+
+_LEDGER_FLUSH_THRESHOLD = 50
 
 
 class LedgerTable(BaseTable):
@@ -22,6 +25,9 @@ class LedgerTable(BaseTable):
         # pending_writes is a crash-recovery intent ledger — its commits must
         # survive power failure, so override the global synchronous=NORMAL.
         self.conn.execute("PRAGMA synchronous=FULL")
+        self._work_remove_buffer: list = []
+        self._ledger_complete_buffer: list = []
+        self._buffer_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     #  Write-intent ledger (pending_writes)
@@ -121,16 +127,31 @@ class LedgerTable(BaseTable):
             logger.error(f"ledger_batch_insert failed: {e}")
 
     def ledger_mark_complete(self, file_path: str) -> None:
-        """Mark a file as fully processed."""
+        """Mark a file as fully processed (buffered, flushes at threshold)."""
+        flush_needed = False
+        with self._buffer_lock:
+            self._ledger_complete_buffer.append(file_path)
+            if len(self._ledger_complete_buffer) >= _LEDGER_FLUSH_THRESHOLD:
+                flush_needed = True
+        if flush_needed:
+            self._flush_ledger_complete()
+
+    def _flush_ledger_complete(self) -> None:
+        with self._buffer_lock:
+            batch = self._ledger_complete_buffer[:]
+            self._ledger_complete_buffer.clear()
+        if not batch:
+            return
         try:
             with self._lock:
-                self.conn.execute(
+                self.conn.executemany(
                     "UPDATE scan_ledger SET status = 'complete' WHERE file_path = ?",
-                    (file_path,),
+                    [(fp,) for fp in batch],
                 )
                 self._soft_commit()
         except sqlite3.Error as e:
-            logger.error(f"ledger_mark_complete failed: {e}")
+            # why: ledger completions are best-effort; lost entries get re-processed on next scan
+            logger.error("_flush_ledger_complete failed: %s", e)
 
     def ledger_get_incomplete(self, scan_root: str) -> List[str]:
         """Return file paths that were discovered but not yet processed."""
@@ -221,16 +242,31 @@ class LedgerTable(BaseTable):
             logger.error("file_work_batch_insert failed: %s", e)
 
     def file_work_remove(self, file_path: str, work_type: str) -> None:
-        """Remove a single completed work entry."""
+        """Remove a single completed work entry (buffered, flushes at threshold)."""
+        flush_needed = False
+        with self._buffer_lock:
+            self._work_remove_buffer.append((file_path, work_type))
+            if len(self._work_remove_buffer) >= _LEDGER_FLUSH_THRESHOLD:
+                flush_needed = True
+        if flush_needed:
+            self._flush_work_removes()
+
+    def _flush_work_removes(self) -> None:
+        with self._buffer_lock:
+            batch = self._work_remove_buffer[:]
+            self._work_remove_buffer.clear()
+        if not batch:
+            return
         try:
             with self._lock:
-                self.conn.execute(
+                self.conn.executemany(
                     "DELETE FROM file_work WHERE file_path = ? AND work_type = ?",
-                    (file_path, work_type),
+                    batch,
                 )
                 self._soft_commit()
         except sqlite3.Error as e:
-            logger.error("file_work_remove failed: %s", e)
+            # why: work-remove entries are best-effort; lost entries get re-processed on next scan
+            logger.error("_flush_work_removes failed: %s", e)
 
     def file_work_batch_remove(self, file_paths: List[str], work_type: str) -> None:
         """Remove completed work entries in batch."""
@@ -362,4 +398,7 @@ class LedgerTable(BaseTable):
             logger.error("file_transfer_cleanup_completed failed: %s", e)
             return 0
 
-    # close() inherited from BaseTable
+    def close(self):
+        self._flush_ledger_complete()
+        self._flush_work_removes()
+        super().close()

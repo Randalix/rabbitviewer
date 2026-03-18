@@ -74,9 +74,9 @@ class MetadataDatabase:
             self.tags.add_image_tags(file_path, keywords)
         logger.debug(f"Metadata extracted and stored for: {file_path}")
 
-    def extract_and_store_fast_metadata(self, file_path: str):
+    def extract_and_store_fast_metadata(self, file_path: str, stat_result=None):
         """Plugin binary scan for orientation/rating/file_size only."""
-        fields = extract_fast_metadata_fields(file_path)
+        fields = extract_fast_metadata_fields(file_path, stat_result=stat_result)
         if fields is None:
             return
         self.images.store_fast_metadata(file_path, fields)

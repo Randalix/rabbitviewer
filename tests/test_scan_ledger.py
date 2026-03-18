@@ -60,6 +60,7 @@ class TestLedgerTable:
     def test_mark_complete(self, db):
         db.ledgers.ledger_batch_insert(["/a.jpg"], scan_root="/photos")
         db.ledgers.ledger_mark_complete("/a.jpg")
+        db.ledgers._flush_ledger_complete()
         status = db.ledgers.conn.execute(
             "SELECT status FROM scan_ledger WHERE file_path = '/a.jpg'"
         ).fetchone()[0]
@@ -71,6 +72,7 @@ class TestLedgerTable:
     def test_get_incomplete(self, db):
         db.ledgers.ledger_batch_insert(["/a.jpg", "/b.jpg", "/c.jpg"], scan_root="/photos")
         db.ledgers.ledger_mark_complete("/b.jpg")
+        db.ledgers._flush_ledger_complete()
         incomplete = db.ledgers.ledger_get_incomplete("/photos")
         assert sorted(incomplete) == ["/a.jpg", "/c.jpg"]
 
@@ -89,6 +91,7 @@ class TestLedgerTable:
         db.ledgers.ledger_mark_complete("/photos/2024/a.jpg")
         db.ledgers.ledger_mark_complete("/photos/2024/b.jpg")
         db.ledgers.ledger_mark_complete("/photos/2025/c.jpg")
+        db.ledgers._flush_ledger_complete()
         dirs = db.ledgers.ledger_get_walked_dirs("/photos")
         assert dirs == {"/photos/2024", "/photos/2025"}
 
@@ -98,6 +101,7 @@ class TestLedgerTable:
             scan_root="/photos",
         )
         db.ledgers.ledger_mark_complete("/photos/done/a.jpg")
+        db.ledgers._flush_ledger_complete()
         # /photos/partial/b.jpg still 'discovered' — dir should NOT be skipped
         dirs = db.ledgers.ledger_get_walked_dirs("/photos")
         assert dirs == {"/photos/done"}
@@ -105,6 +109,7 @@ class TestLedgerTable:
     def test_prune_complete(self, db):
         db.ledgers.ledger_batch_insert(["/a.jpg", "/b.jpg"], scan_root="/photos")
         db.ledgers.ledger_mark_complete("/a.jpg")
+        db.ledgers._flush_ledger_complete()
         pruned = db.ledgers.ledger_prune_complete("/photos")
         assert pruned == 1
         remaining = db.ledgers.conn.execute("SELECT file_path FROM scan_ledger").fetchall()

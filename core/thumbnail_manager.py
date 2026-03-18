@@ -183,10 +183,10 @@ class ThumbnailManager:
             return None
 
         # Check if thumbnail is already valid in DB and exists on disk
-        if self.metadata_db.images.is_thumbnail_valid(image_path):
-            paths = self.metadata_db.images.get_thumbnail_paths(image_path)
+        valid, paths = self.metadata_db.images.check_thumbnail_validity(image_path)
+        if valid:
             thumbnail_path = paths.get('thumbnail_path')
-            if thumbnail_path and os.path.exists(thumbnail_path):  # disk-io: cache file check
+            if thumbnail_path:
                 logger.debug(f"Thumbnail for {image_path} found in cache: {thumbnail_path}")
                 return thumbnail_path
 
@@ -280,11 +280,12 @@ class ThumbnailManager:
             return None
 
         # Re-check validity — another task may have already processed this file.
-        if self.metadata_db.images.is_thumbnail_valid(image_path):
+        st = self.source_cache.stat(image_path)
+        valid, paths = self.metadata_db.images.check_thumbnail_validity(image_path, stat_result=st)
+        if valid:
             logger.debug(f"Thumbnail for {image_path} already valid. Sending notification and skipping.")
             self.metadata_db.ledgers.ledger_mark_complete(image_path)
             self.metadata_db.ledgers.file_work_remove(image_path, 'thumbnail')
-            paths = self.metadata_db.images.get_thumbnail_paths(image_path)
             notification_data = protocol.PreviewsReadyData(
                 image_entry=protocol.ImageEntryModel(path=image_path),
                 thumbnail_path=paths.get('thumbnail_path'),
@@ -310,7 +311,7 @@ class ThumbnailManager:
         # read for orientation and thumbnail extraction.
         thumbnail_path = plugin.process_thumbnail(image_path, md5_hash, prefetch_buffer=prefetch_buffer)
         if thumbnail_path:
-            self.metadata_db.images.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path)
+            self.metadata_db.images.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path, stat_result=st)
             self.metadata_db.ledgers.ledger_mark_complete(image_path)
             self.metadata_db.ledgers.file_work_remove(image_path, 'thumbnail')
             if self.cache_size_manager:
@@ -797,7 +798,8 @@ class ThumbnailManager:
             return
 
         start_time = time.time()
-        self.metadata_db.extract_and_store_fast_metadata(image_path)
+        st = self.source_cache.stat(image_path)
+        self.metadata_db.extract_and_store_fast_metadata(image_path, stat_result=st)
         duration = time.time() - start_time
         logger.debug(f"Fast metadata for {os.path.basename(image_path)} took {duration:.4f}s")
         self.metadata_db.ledgers.file_work_remove(image_path, 'metadata')
@@ -877,11 +879,12 @@ class ThumbnailManager:
         if not self._passes_pre_checks(file_path):
             return []
 
-        if self.metadata_db.images.is_thumbnail_valid(file_path):
+        st = self.source_cache.stat(file_path)
+        valid, paths = self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
+        if valid:
             logger.debug(f"Previews for {file_path} already valid. No tasks created.")
             # Notify the GUI for any GUI-initiated scan (slow scan runs at GUI_REQUEST_LOW).
             if priority >= Priority.GUI_REQUEST_LOW:
-                paths = self.metadata_db.images.get_thumbnail_paths(file_path)
                 notification_data = protocol.PreviewsReadyData(
                     image_entry=protocol.ImageEntryModel(path=file_path),
                     thumbnail_path=paths.get('thumbnail_path'),
@@ -951,7 +954,9 @@ class ThumbnailManager:
 
         tasks: List[RenderTask] = []
 
-        if not self.metadata_db.images.is_thumbnail_valid(file_path):
+        st = self.source_cache.stat(file_path)
+        valid, paths = self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
+        if not valid:
             tasks.append(RenderTask(
                 task_id=f"meta::{file_path}",
                 priority=priority,
@@ -967,8 +972,7 @@ class ThumbnailManager:
 
         # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
         if self._mem_cache_get(file_path) is None:
-            paths = self.metadata_db.images.get_thumbnail_paths(file_path)
-            existing_view = paths.get('view_image_path') if paths else None
+            existing_view = paths.get('view_image_path')
             if not (existing_view and os.path.exists(existing_view)):  # disk-io: cache file check
                 tasks.append(RenderTask(
                     task_id=f"view::{file_path}",
@@ -998,15 +1002,14 @@ class ThumbnailManager:
             return []
 
         tasks: List[RenderTask] = []
-        thumb_valid = self.metadata_db.images.is_thumbnail_valid(file_path)
+        st = self.source_cache.stat(file_path)
+        thumb_valid, paths = self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
 
-        if thumb_valid:
-            # Warm cache: no thumbnail/metadata tasks needed.
-            # Don't send previews_ready here — the GUI's heatmap will call
-            # request_thumbnail() which handles cache-hit notifications in
-            # the correct priority order (cursor-outward).
-            pass
-        else:
+        # Warm cache: no thumbnail/metadata tasks needed.
+        # Don't send previews_ready here — the GUI's heatmap will call
+        # request_thumbnail() which handles cache-hit notifications in
+        # the correct priority order (cursor-outward).
+        if not thumb_valid:
             tasks.append(RenderTask(
                 task_id=f"meta::{file_path}",
                 priority=priority,
@@ -1023,8 +1026,7 @@ class ThumbnailManager:
         # View-image at BACKGROUND_SCAN — runs only after thumbnail queue drains.
         # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
         if self._mem_cache_get(file_path) is None:
-            paths = self.metadata_db.images.get_thumbnail_paths(file_path)
-            existing_view = paths.get('view_image_path') if paths else None
+            existing_view = paths.get('view_image_path')
             if not (existing_view and os.path.exists(existing_view)):  # disk-io: cache file check
                 tasks.append(RenderTask(
                     task_id=f"view::{file_path}",
