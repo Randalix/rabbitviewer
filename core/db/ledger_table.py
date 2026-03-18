@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 class LedgerTable(BaseTable):
 
+    def __init__(self, db_path: str):
+        super().__init__(db_path)
+        # pending_writes is a crash-recovery intent ledger — its commits must
+        # survive power failure, so override the global synchronous=NORMAL.
+        self.conn.execute("PRAGMA synchronous=FULL")
+
     # ------------------------------------------------------------------
     #  Write-intent ledger (pending_writes)
     # ------------------------------------------------------------------
@@ -42,7 +48,7 @@ class LedgerTable(BaseTable):
                     '(file_path, write_type, payload, created_at) VALUES (?, ?, ?, ?)',
                     (file_path, write_type, json.dumps(payload), time.time()),
                 )
-                self.conn.commit()
+                self.conn.commit()  # immediate: crash-recovery intent ledger
         except sqlite3.Error as e:
             logger.error(f"pending_write_insert failed: {e}")
 
@@ -55,7 +61,7 @@ class LedgerTable(BaseTable):
                     'WHERE file_path = ? AND write_type = ? AND payload = ?',
                     (file_path, write_type, json.dumps(payload)),
                 )
-                self.conn.commit()
+                self.conn.commit()  # immediate: crash-recovery intent ledger
         except sqlite3.Error as e:
             logger.error(f"pending_write_remove failed: {e}")
 
@@ -90,7 +96,7 @@ class LedgerTable(BaseTable):
                     f'DELETE FROM pending_writes WHERE file_path IN ({placeholders})',
                     file_paths,
                 )
-                self.conn.commit()
+                self.conn.commit()  # immediate: destructive delete
         except sqlite3.Error as e:
             logger.error(f"ledger delete_for_files failed: {e}")
 
@@ -110,7 +116,7 @@ class LedgerTable(BaseTable):
                     'VALUES (?, ?, ?, ?)',
                     [(fp, scan_root, 'discovered', now) for fp in file_paths],
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.error(f"ledger_batch_insert failed: {e}")
 
@@ -122,7 +128,7 @@ class LedgerTable(BaseTable):
                     "UPDATE scan_ledger SET status = 'complete' WHERE file_path = ?",
                     (file_path,),
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.error(f"ledger_mark_complete failed: {e}")
 
@@ -162,7 +168,7 @@ class LedgerTable(BaseTable):
                     "DELETE FROM scan_ledger WHERE scan_root = ? AND status = 'complete'",
                     (scan_root,),
                 )
-                self.conn.commit()
+                self._soft_commit()
                 return cursor.rowcount
         except sqlite3.Error as e:
             logger.error(f"ledger_prune_complete failed: {e}")
@@ -185,7 +191,7 @@ class LedgerTable(BaseTable):
         try:
             with self._lock:
                 cursor = self.conn.execute("DELETE FROM scan_ledger")
-                self.conn.commit()
+                self._soft_commit()
                 return cursor.rowcount
         except sqlite3.Error as e:
             logger.error("ledger_reset_all failed: %s", e)
@@ -210,7 +216,7 @@ class LedgerTable(BaseTable):
                     "VALUES (?, ?, ?, ?)",
                     rows,
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.error("file_work_batch_insert failed: %s", e)
 
@@ -222,7 +228,7 @@ class LedgerTable(BaseTable):
                     "DELETE FROM file_work WHERE file_path = ? AND work_type = ?",
                     (file_path, work_type),
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.error("file_work_remove failed: %s", e)
 
@@ -236,7 +242,7 @@ class LedgerTable(BaseTable):
                     "DELETE FROM file_work WHERE file_path = ? AND work_type = ?",
                     [(fp, work_type) for fp in file_paths],
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.error("file_work_batch_remove failed: %s", e)
 
@@ -285,7 +291,7 @@ class LedgerTable(BaseTable):
         try:
             with self._lock:
                 cursor = self.conn.execute("DELETE FROM file_work")
-                self.conn.commit()
+                self._soft_commit()
                 return cursor.rowcount
         except sqlite3.Error as e:
             logger.error("file_work_clear_all failed: %s", e)
@@ -310,7 +316,7 @@ class LedgerTable(BaseTable):
                     "VALUES (?, ?, ?, ?, ?)",
                     rows,
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.error("file_transfer_batch_insert failed: %s", e)
 
@@ -323,7 +329,7 @@ class LedgerTable(BaseTable):
                     "WHERE source_path = ? AND dest_dir = ? AND operation = ?",
                     (status, source_path, dest_dir, operation),
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.error("file_transfer_mark_complete failed: %s", e)
 
@@ -350,7 +356,7 @@ class LedgerTable(BaseTable):
                     "WHERE status != 'pending' AND created_at < ?",
                     (cutoff,),
                 )
-                self.conn.commit()
+                self._soft_commit()
                 return cursor.rowcount
         except sqlite3.Error as e:
             logger.error("file_transfer_cleanup_completed failed: %s", e)

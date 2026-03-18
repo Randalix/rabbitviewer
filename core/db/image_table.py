@@ -52,7 +52,7 @@ class ImageTable(BaseTable):
                     'UPDATE image_metadata SET accessed_at = ? WHERE file_path = ?',
                     (time.time(), file_path),
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error:
             pass
 
@@ -69,7 +69,7 @@ class ImageTable(BaseTable):
                     "UPDATE image_metadata SET sidecars = ? WHERE file_path = ?",
                     (json.dumps(sidecars), file_path),
                 )
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             logger.debug(f"Error updating sidecars for {file_path}: {e}")
 
@@ -202,7 +202,7 @@ class ImageTable(BaseTable):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (file_path, path_hash, file_size, orientation, rating,
                           mtime, birthtime, current_time, current_time))
-                self.conn.commit()
+                self._soft_commit()
         except sqlite3.Error as e:
             self.conn.rollback()
             logger.error(f"Error storing fast metadata for {file_path}: {e}")
@@ -286,7 +286,7 @@ class ImageTable(BaseTable):
                         metadata.get('thumbnail_path'), metadata.get('view_image_path'), exif_json, mtime, birthtime, current_time, current_time
                     ))
 
-                self.conn.commit()
+                self._soft_commit()
                 logger.debug(f"Committed full metadata for {file_path}. Rows affected: {cursor.rowcount}")
 
         except sqlite3.Error as e:
@@ -352,7 +352,7 @@ class ImageTable(BaseTable):
                           st.st_mtime, getattr(st, 'st_birthtime', None),
                           current_time, current_time))
 
-                self.conn.commit()
+                self._soft_commit()
                 logger.debug(f"Committed thumbnail paths for {file_path}. Rows affected: {cursor.rowcount}")
                 return True
 
@@ -370,7 +370,7 @@ class ImageTable(BaseTable):
                     SET thumbnail_path = NULL, view_image_path = NULL, updated_at = ?
                     WHERE file_path = ?
                 ''', (time.time(), file_path))
-                self.conn.commit()
+                self._soft_commit()
                 return cursor.rowcount > 0
         except sqlite3.Error as e:
             logger.error(f"Error clearing thumbnail paths for {file_path}: {e}")
@@ -386,7 +386,7 @@ class ImageTable(BaseTable):
                     SET thumbnail_path = NULL, view_image_path = NULL, updated_at = ?
                     WHERE thumbnail_path IS NOT NULL OR view_image_path IS NOT NULL
                 ''', (time.time(),))
-                self.conn.commit()
+                self._soft_commit()
                 return cursor.rowcount
         except sqlite3.Error as e:
             logger.error("Error clearing all thumbnail paths: %s", e)
@@ -594,7 +594,7 @@ class ImageTable(BaseTable):
                     ''', (file_path, path_hash, file_size, rating, mtime,
                           getattr(st, 'st_birthtime', None), current_time, current_time))
 
-                self.conn.commit()
+                self.conn.commit()  # immediate: user-initiated rating write
                 rowcount = cursor.rowcount
 
                 if rowcount > 0:
@@ -732,7 +732,7 @@ class ImageTable(BaseTable):
                     SET orientation = ?, updated_at = ?
                     WHERE file_path = ?
                 ''', (orientation, current_time, file_path))
-                self.conn.commit()
+                self.conn.commit()  # immediate: user-initiated orientation write
                 return cursor.rowcount > 0
         except sqlite3.Error as e:
             logger.error(f"Error setting orientation for {file_path}: {e}")
@@ -1019,7 +1019,7 @@ class ImageTable(BaseTable):
                     DELETE FROM image_metadata WHERE file_path IN ({placeholders})
                 ''', file_paths)
                 rows_affected = cursor.rowcount
-                self.conn.commit()
+                self.conn.commit()  # immediate: destructive delete
 
             logger.info(f"Deleted {rows_affected} records from database for {len(file_paths)} files.")
             return (rows_affected, cache_paths_to_delete)
@@ -1047,7 +1047,7 @@ class ImageTable(BaseTable):
                         'DELETE FROM image_metadata WHERE file_path = ?',
                         [(path,) for path in missing_paths]
                     )
-                    self.conn.commit()
+                    self.conn.commit()  # immediate: destructive cleanup
                 logger.info(f"Cleaned up {len(missing_paths)} missing files from metadata database")
 
         except sqlite3.Error as e:
@@ -1072,7 +1072,7 @@ class ImageTable(BaseTable):
                     WHERE file_path = ?
                 ''', (content_hash, time.time(), file_path))
 
-                self.conn.commit()
+                self._soft_commit()
                 if cursor.rowcount > 0:
                     logger.debug(f"Set content_hash for {os.path.basename(file_path)}")
                 else:

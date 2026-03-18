@@ -53,7 +53,7 @@ class TestConnectionIsolation:
     def test_facade_has_no_connection(self, db):
         assert not hasattr(db, 'conn'), \
             "Facade should not hold a persistent connection"
-        assert not hasattr(db, '_lock') or not isinstance(getattr(db, '_lock', None), type(threading.Lock())), \
+        assert not hasattr(db, '_lock'), \
             "Facade should not hold a persistent _lock for DB access"
 
 
@@ -67,6 +67,19 @@ class TestWALConcurrency:
         ]:
             result = table.conn.execute("PRAGMA journal_mode").fetchone()
             assert result[0] == 'wal', f"{name} connection is not in WAL mode"
+
+    def test_connections_use_synchronous_normal(self, db):
+        for name, table in [
+            ('images', db.images), ('tags', db.tags), ('faces', db.faces),
+            ('embeddings', db.embeddings), ('cache', db.cache),
+        ]:
+            result = table.conn.execute("PRAGMA synchronous").fetchone()
+            assert result[0] == 1, f"{name} connection synchronous={result[0]}, expected 1 (NORMAL)"
+
+    def test_ledger_uses_synchronous_full(self, db):
+        """pending_writes is a crash-recovery ledger — must survive power failure."""
+        result = db.ledgers.conn.execute("PRAGMA synchronous").fetchone()
+        assert result[0] == 2, f"ledgers connection synchronous={result[0]}, expected 2 (FULL)"
 
     def test_concurrent_read_across_domains(self, db, tmp_path):
         """Reads on different table connections should not block each other."""

@@ -18,6 +18,19 @@ class BaseTable:
         self._lock = Lock()
         self._local = threading.local()
 
+    def _soft_commit(self):
+        """Commit the current transaction.  Must be called with ``_lock`` held.
+
+        With ``synchronous=NORMAL`` (set in ``create_connection``), this is
+        cheap: SQLite skips the per-commit fsync to the WAL file, making
+        high-frequency commits during bulk indexing far less expensive.
+
+        Kept as a separate method so call sites document intent (batchable
+        write) and a future coalescing strategy can be dropped in without
+        touching every caller.
+        """
+        self.conn.commit()
+
     def _read_conn(self) -> sqlite3.Connection:
         """Return a thread-local read connection (WAL allows concurrent reads)."""
         conn = getattr(self._local, 'conn', None)
