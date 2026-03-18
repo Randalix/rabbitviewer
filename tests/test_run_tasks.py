@@ -148,8 +148,8 @@ class TestExecuteCompoundTask:
             call_log.append(("b", paths))
             return {"ok": True}
 
-        tm.task_ops._operations["op_a"] = op_a
-        tm.task_ops._operations["op_b"] = op_b
+        tm.task_ops.register("op_a", op_a)
+        tm.task_ops.register("op_b", op_b)
 
         results = tm.task_ops.execute_compound([
             ("op_a", ["/x.jpg"]),
@@ -168,7 +168,7 @@ class TestExecuteCompoundTask:
         def op_crash(paths):
             raise RuntimeError("boom")
 
-        tm.task_ops._operations["crasher"] = op_crash
+        tm.task_ops.register("crasher", op_crash)
         results = tm.task_ops.execute_compound([("crasher", ["/x.jpg"])])
         assert "boom" in results["crasher"]["error"]
 
@@ -182,8 +182,8 @@ class TestExecuteCompoundTask:
             call_log.append("ok")
             return {"done": True}
 
-        tm.task_ops._operations["op_fail"] = op_fail
-        tm.task_ops._operations["op_ok"] = op_ok
+        tm.task_ops.register("op_fail", op_fail)
+        tm.task_ops.register("op_ok", op_ok)
 
         results = tm.task_ops.execute_compound([
             ("op_fail", ["/x.jpg"]),
@@ -209,7 +209,7 @@ class TestCompoundTaskAsync:
             event.set()
             return {"captured": True}
 
-        tm.task_ops._operations["capture"] = capture_op
+        tm.task_ops.register("capture", capture_op)
 
         rm.submit_task(
             "test_compound::1",

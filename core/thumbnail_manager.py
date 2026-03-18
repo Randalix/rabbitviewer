@@ -137,12 +137,7 @@ class ThumbnailManager:
             logger.info(f"ThumbnailManager supports {len(self.supported_formats)} formats: {sorted(self.supported_formats)}")
 
     def get_thumbnail(self, image_path):
-        """
-        Synchronously get or generate a thumbnail. Returns the path to the thumbnail.
-        This method should be used sparingly, primarily for cases where immediate
-        availability is critical and blocking is acceptable (e.g., a single image
-        display where the user is waiting). For general grid loading, use request_thumbnail.
-        """
+        """Blocks until a thumbnail is available; use request_thumbnail for grid loading."""
         if not os.path.exists(image_path):  # disk-io: source existence guard
             logger.error(f"ThumbnailManager: Image not found: {image_path}")
             return None
@@ -195,11 +190,7 @@ class ThumbnailManager:
             return None
 
     def _passes_pre_checks(self, image_path: str) -> bool:
-        """
-        Performs pre-checks (existence, ignore patterns, file size, format support)
-        before queuing a thumbnail generation task.
-
-        Uses ``source_cache.stat()`` so files recently stat'd by the directory
+        """Uses ``source_cache.stat()`` so files recently stat'd by the directory
         scanner (or another worker task) don't incur a second NAS round-trip.
         """
         filename = os.path.basename(image_path)
@@ -803,7 +794,6 @@ class ThumbnailManager:
         return self.metadata_writer.write_orientation(file_path, orientation)
 
     def invalidate_cached_images(self, file_path: str):
-        """Deletes cached thumbnail, view image, and mem-cache entry for regeneration."""
         paths = self.metadata_db.images.get_thumbnail_paths(file_path)
         for key in ('thumbnail_path', 'view_image_path'):
             cached = paths.get(key)
@@ -849,14 +839,12 @@ class ThumbnailManager:
         return self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
 
     def _needs_view_image(self, file_path: str, paths: dict) -> bool:
-        """Return True if a view-image task should be created for *file_path*."""
         if self.fullres_cache.get(file_path) is not None:
             return False
         existing_view = paths.get('view_image_path')
         return not (existing_view and os.path.exists(existing_view))  # disk-io: cache file check
 
     def _make_thumb_meta_tasks(self, file_path: str, priority: Priority) -> List[RenderTask]:
-        """Return the metadata + thumbnail RenderTask pair."""
         return [
             RenderTask(
                 task_id=f"meta::{file_path}",
@@ -881,7 +869,6 @@ class ThumbnailManager:
         )
 
     def create_tasks_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
-        """Task Factory: Creates metadata + thumbnail tasks for a single file."""
         readiness = self._check_file_readiness(file_path)
         if readiness is None:
             return []
@@ -902,7 +889,6 @@ class ThumbnailManager:
         return self._make_thumb_meta_tasks(file_path, priority)
 
     def create_view_image_task_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
-        """Task Factory for Stage C: creates a view image task if not already cached."""
         if not self._passes_pre_checks(file_path):
             return []
 
@@ -959,7 +945,6 @@ class ThumbnailManager:
         return tasks
 
     def shutdown(self) -> None:
-        """Gracefully shuts down the ThumbnailManager and its associated RenderManager."""
         logger.info("ThumbnailManager: Shutting down.")
         self.render_manager.shutdown()
         _shutdown_exiftool_processes()

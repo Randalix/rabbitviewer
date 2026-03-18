@@ -330,7 +330,7 @@ class TestBookmarkCompoundTask:
             done.set()
             return result
 
-        tm.task_ops._operations["bookmark_copy"] = _capture
+        tm.task_ops.register("bookmark_copy", _capture)
 
         rm.submit_task(
             "test_bookmark::1",

@@ -6,11 +6,7 @@ from typing import Optional
 
 
 class FullresMemCache:
-    """Thread-safe LRU cache bounded by total byte size.
-
-    Entries are evicted oldest-first when the total stored bytes exceeds
-    *max_bytes*.
-    """
+    """Evicts oldest entries when total stored bytes exceeds *max_bytes*."""
 
     def __init__(self, max_bytes: int):
         self._cache: OrderedDict[str, bytes] = OrderedDict()
@@ -24,7 +20,6 @@ class FullresMemCache:
             if key in self._cache:
                 self._bytes -= len(self._cache.pop(key))
             self._cache[key] = data
-            self._cache.move_to_end(key)
             self._bytes += len(data)
             # Evict oldest until under budget.
             while self._bytes > self._max_bytes and self._cache:

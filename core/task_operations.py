@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 
 class TaskOperationRegistry:
-    """Maps operation names to handler functions for daemon task dispatch."""
 
     def __init__(self, metadata_db):
         self._db = metadata_db
