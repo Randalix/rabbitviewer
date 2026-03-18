@@ -93,20 +93,28 @@ class DirectoryScanner:
 
         try:
             walk_start = time.monotonic()
-            walker = os.walk(directory_path) if recursive else [(directory_path, [], os.listdir(directory_path))]  # disk-io: directory discovery
-            for root, dirs, files in walker:
-                if skip_dirs:
-                    # Prune os.walk descent into already-walked subtrees.
-                    dirs[:] = [d for d in dirs if os.path.join(root, d) not in skip_dirs]
-                    if root in skip_dirs:
-                        continue
+            dir_stack = [directory_path]
+            while dir_stack:
+                current_dir = dir_stack.pop()
+                if skip_dirs and current_dir in skip_dirs:
+                    continue
+                try:
+                    entries = list(os.scandir(current_dir))  # disk-io: directory discovery
+                except OSError as e:
+                    logger.debug(f"[chunking] scan_incremental: scandir failed on '{current_dir}': {e}")
+                    continue
                 walk_elapsed = time.monotonic() - walk_start
-                logger.info(f"[chunking] scan_incremental: entering dir '{root}' ({len(files)} entries, {walk_elapsed:.3f}s since last yield/start)")
-                for filename in files:
+                file_count = sum(1 for e in entries if not e.is_dir(follow_symlinks=False))
+                logger.info(f"[chunking] scan_incremental: entering dir '{current_dir}' ({file_count} entries, {walk_elapsed:.3f}s since last yield/start)")
+                for entry in entries:
                     try:
-                        full_path = os.path.join(root, filename)
-                        if self.is_supported_file(full_path):
-                            current_batch.append(full_path)
+                        if entry.is_dir(follow_symlinks=False):
+                            if recursive:
+                                dir_stack.append(entry.path)
+                            continue
+                        entry_stat = entry.stat()  # DirEntry.stat() — free on Linux, cheap on macOS
+                        if self.is_supported_file(entry.path, stat_result=entry_stat):
+                            current_batch.append(entry.path)
                             if len(current_batch) >= batch_size:
                                 total_yielded += len(current_batch)
                                 elapsed = time.monotonic() - scan_start
@@ -115,7 +123,7 @@ class DirectoryScanner:
                                 current_batch = []
                                 walk_start = time.monotonic()
                     except OSError as e:
-                        logger.debug(f"[chunking] scan_incremental: OSError on '{filename}': {e}")
+                        logger.debug(f"[chunking] scan_incremental: OSError on '{entry.name}': {e}")
                         continue
             if current_batch:
                 total_yielded += len(current_batch)
@@ -124,7 +132,7 @@ class DirectoryScanner:
                 yield current_batch
             elapsed = time.monotonic() - scan_start
             logger.info(f"[chunking] scan_incremental: generator exhausting for '{directory_path}' (total_yielded={total_yielded}, elapsed={elapsed:.3f}s)")
-        except Exception as e:  # why: os.walk can raise PermissionError or unexpected filesystem errors; must not abort the generator and stall the SourceJob
+        except Exception as e:  # why: scandir can raise PermissionError or unexpected filesystem errors; must not abort the generator and stall the SourceJob
             logger.error(f"Error during directory scan of {directory_path}: {e}", exc_info=True)
 
     def scan_incremental_reconcile(self, directory_path: str, recursive: bool,
