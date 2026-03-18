@@ -5,8 +5,7 @@ import time
 import logging
 import fnmatch
 import threading
-from collections import OrderedDict
-from typing import Optional, Dict, List, Set, Any, Callable
+from typing import Optional, List, Set
 from core.metadata_database import MetadataDatabase
 from core.priority import NATIVELY_VIEWABLE
 from core.rendermanager import Priority, RenderManager, RenderTask
@@ -16,6 +15,8 @@ from core.metadata_writer import MetadataWriter
 from core.volume_prober import VolumeProber
 from plugins.base_plugin import plugin_registry
 from plugins.exiftool_process import shutdown_all as _shutdown_exiftool_processes
+from core.fullres_mem_cache import FullresMemCache
+from core.task_operations import TaskOperationRegistry
 from core import notifications as protocol
 
 logger = logging.getLogger(__name__)
@@ -64,20 +65,12 @@ class ThumbnailManager:
         self.source_cache = SourceExistsCache(ttl=30.0)
 
         # In-memory LRU cache for fast fullres extractions (below threshold → RAM only).
-        self._fullres_mem_cache: OrderedDict[str, bytes] = OrderedDict()
-        self._fullres_mem_cache_lock = threading.Lock()
-        self._fullres_mem_cache_bytes = 0
         max_mb = config_manager.get("fullres_mem_cache_mb", 512)
-        self._fullres_mem_cache_max = max_mb * 1024 * 1024
+        self.fullres_cache = FullresMemCache(max_bytes=max_mb * 1024 * 1024)
         threshold_ms = config_manager.get("fullres_cache_threshold_ms", 500)
         self._fullres_cache_threshold = threshold_ms / 1000.0
 
-        self._task_operations: Dict[str, Callable] = {
-            "send2trash": self._op_send2trash,
-            "remove_records": self._op_remove_records,
-            "bookmark_copy": self._op_bookmark_copy,
-            "bookmark_move": self._op_bookmark_move,
-        }
+        self.task_ops = TaskOperationRegistry(metadata_database)
 
         # Limit speculative view tasks to 1 concurrent worker so user
         # requests at FULLRES_REQUEST are never starved.
@@ -132,34 +125,6 @@ class ThumbnailManager:
         with open(version_file, "w") as f:  # disk-io: cache version marker
             f.write(str(CACHE_VERSION))
         logger.info("Cache migration complete. Version marker set to %d.", CACHE_VERSION)
-
-    # -- Fullres memory cache (LRU, byte-size bounded) -----------------------
-
-    def _mem_cache_put(self, image_path: str, data: bytes) -> None:
-        with self._fullres_mem_cache_lock:
-            # Remove old entry if present (size accounting).
-            if image_path in self._fullres_mem_cache:
-                self._fullres_mem_cache_bytes -= len(self._fullres_mem_cache.pop(image_path))
-            self._fullres_mem_cache[image_path] = data
-            self._fullres_mem_cache.move_to_end(image_path)
-            self._fullres_mem_cache_bytes += len(data)
-            # Evict oldest until under budget.
-            while self._fullres_mem_cache_bytes > self._fullres_mem_cache_max and self._fullres_mem_cache:
-                _, evicted = self._fullres_mem_cache.popitem(last=False)
-                self._fullres_mem_cache_bytes -= len(evicted)
-
-    def _mem_cache_get(self, image_path: str) -> Optional[bytes]:
-        with self._fullres_mem_cache_lock:
-            data = self._fullres_mem_cache.get(image_path)
-            if data is not None:
-                self._fullres_mem_cache.move_to_end(image_path)
-            return data
-
-    def invalidate_mem_cache(self, image_path: str) -> None:
-        with self._fullres_mem_cache_lock:
-            data = self._fullres_mem_cache.pop(image_path, None)
-            if data is not None:
-                self._fullres_mem_cache_bytes -= len(data)
 
     # -----------------------------------------------------------------------
 
@@ -373,7 +338,7 @@ class ThumbnailManager:
             return None
 
         # Re-check: view image may already exist (disk or memory cache).
-        if self._mem_cache_get(image_path) is not None:
+        if self.fullres_cache.get(image_path) is not None:
             return "memory"
         current_paths = self.metadata_db.images.get_thumbnail_paths(image_path)
         existing_view = current_paths.get('view_image_path')
@@ -629,7 +594,7 @@ class ThumbnailManager:
             return None
 
         # Fast path: view image in daemon memory cache.
-        if self._mem_cache_get(image_path) is not None:
+        if self.fullres_cache.get(image_path) is not None:
             return "memory"
 
         # Fast path: view image already cached on disk.
@@ -766,7 +731,7 @@ class ThumbnailManager:
                 # Disk file vanished — fall through to disk-cache path.
                 logger.warning("Failed to read/remove fast view image for mem cache: %s", view_image_path)
                 return view_image_path
-            self._mem_cache_put(image_path, image_bytes)
+            self.fullres_cache.put(image_path, image_bytes)
             logger.debug("View image for %s stored in mem cache (%d bytes, %.1fms)",
                          os.path.basename(image_path), len(image_bytes), duration * 1000)
             return "memory"
@@ -848,7 +813,7 @@ class ThumbnailManager:
                     logger.debug("Removed cached %s: %s", key, cached)
                 except OSError as e:
                     logger.warning("Failed to remove cached %s: %s", cached, e)
-        self.invalidate_mem_cache(file_path)
+        self.fullres_cache.invalidate(file_path)
         self.metadata_db.images.clear_thumbnail_paths(file_path)
 
     def get_cached_thumbnail_path(self, md5_hash: str) -> str:
@@ -871,19 +836,59 @@ class ThumbnailManager:
                 image_path,
             )
 
-    def create_tasks_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
-        """
-        Task Factory: Creates all necessary tasks for a single file with correct dependencies.
-        Returns a list of tasks to be submitted to the RenderManager.
+    def _check_file_readiness(self, file_path: str):
+        """Shared pre-flight for task factories.
+
+        Returns ``(thumb_valid, paths)`` after running ``_passes_pre_checks``
+        and a single ``check_thumbnail_validity`` call, or ``None`` if the
+        file should be skipped entirely.
         """
         if not self._passes_pre_checks(file_path):
+            return None
+        st = self.source_cache.stat(file_path)
+        return self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
+
+    def _needs_view_image(self, file_path: str, paths: dict) -> bool:
+        """Return True if a view-image task should be created for *file_path*."""
+        if self.fullres_cache.get(file_path) is not None:
+            return False
+        existing_view = paths.get('view_image_path')
+        return not (existing_view and os.path.exists(existing_view))  # disk-io: cache file check
+
+    def _make_thumb_meta_tasks(self, file_path: str, priority: Priority) -> List[RenderTask]:
+        """Return the metadata + thumbnail RenderTask pair."""
+        return [
+            RenderTask(
+                task_id=f"meta::{file_path}",
+                priority=priority,
+                func=self._process_metadata_task,
+                args=(file_path,),
+            ),
+            RenderTask(
+                task_id=file_path,
+                priority=priority,
+                func=self._generate_thumbnail_task,
+                args=(file_path,),
+            ),
+        ]
+
+    def _make_view_task(self, file_path: str, priority: Priority) -> RenderTask:
+        return RenderTask(
+            task_id=f"view::{file_path}",
+            priority=priority,
+            func=self._generate_view_image_task,
+            args=(file_path,),
+        )
+
+    def create_tasks_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
+        """Task Factory: Creates metadata + thumbnail tasks for a single file."""
+        readiness = self._check_file_readiness(file_path)
+        if readiness is None:
             return []
 
-        st = self.source_cache.stat(file_path)
-        valid, paths = self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
+        valid, paths = readiness
         if valid:
             logger.debug(f"Previews for {file_path} already valid. No tasks created.")
-            # Notify the GUI for any GUI-initiated scan (slow scan runs at GUI_REQUEST_LOW).
             if priority >= Priority.GUI_REQUEST_LOW:
                 notification_data = protocol.PreviewsReadyData(
                     image_entry=protocol.ImageEntryModel(path=file_path),
@@ -894,92 +899,34 @@ class ThumbnailManager:
                 self.render_manager.notify(notification)
             return []
 
-        # Establish a baseline priority for new thumbnails. All thumbnails from a background
-        # scan start at a low priority, allowing the GUI to promote visible ones to
-        # a much higher priority (GUI_REQUEST) for maximum responsiveness.
-        base_priority = priority
- 
-        meta_id = f"meta::{file_path}"
-        thumb_id = file_path
-
-        meta_task = RenderTask(
-            task_id=meta_id,
-            priority=base_priority,
-            func=self._process_metadata_task,
-            args=(file_path,)
-        )
-
-        # Stage C (view image) is handled by a separate SourceJob.
-        thumb_task = RenderTask(
-            task_id=thumb_id,
-            priority=base_priority,
-            func=self._generate_thumbnail_task,
-            args=(file_path,)
-        )
-        return [meta_task, thumb_task]
+        return self._make_thumb_meta_tasks(file_path, priority)
 
     def create_view_image_task_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
-        """
-        Task Factory for Stage C: creates a view image generation task for a single file.
-        Returns an empty list if the view image already exists (on disk or in
-        memory cache) or the file is not a supported format.
-        """
+        """Task Factory for Stage C: creates a view image task if not already cached."""
         if not self._passes_pre_checks(file_path):
-            return []
-
-        # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
-        if self._mem_cache_get(file_path) is not None:
             return []
 
         paths = self.metadata_db.images.get_thumbnail_paths(file_path)
-        existing_view = paths.get('view_image_path')
-        if existing_view and os.path.exists(existing_view):  # disk-io: cache file check
-            logger.debug(f"View image for {file_path} already exists. No Stage C task created.")
+        if not self._needs_view_image(file_path, paths):
             return []
 
-        view_task = RenderTask(
-            task_id=f"view::{file_path}",
-            priority=priority,
-            func=self._generate_view_image_task,
-            args=(file_path,)
-        )
-        return [view_task]
+        return [self._make_view_task(file_path, priority)]
 
     def create_all_tasks_for_file(self, file_path: str, priority: Priority) -> List[RenderTask]:
         """Task factory for daemon background indexing: creates thumbnail, metadata,
-        and view image tasks in a single pass — one ``_passes_pre_checks`` call and
-        one DB lookup instead of two."""
-        if not self._passes_pre_checks(file_path):
+        and view image tasks in a single pass."""
+        readiness = self._check_file_readiness(file_path)
+        if readiness is None:
             return []
 
         tasks: List[RenderTask] = []
+        valid, paths = readiness
 
-        st = self.source_cache.stat(file_path)
-        valid, paths = self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
         if not valid:
-            tasks.append(RenderTask(
-                task_id=f"meta::{file_path}",
-                priority=priority,
-                func=self._process_metadata_task,
-                args=(file_path,),
-            ))
-            tasks.append(RenderTask(
-                task_id=file_path,
-                priority=priority,
-                func=self._generate_thumbnail_task,
-                args=(file_path,),
-            ))
+            tasks.extend(self._make_thumb_meta_tasks(file_path, priority))
 
-        # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
-        if self._mem_cache_get(file_path) is None:
-            existing_view = paths.get('view_image_path')
-            if not (existing_view and os.path.exists(existing_view)):  # disk-io: cache file check
-                tasks.append(RenderTask(
-                    task_id=f"view::{file_path}",
-                    priority=priority,
-                    func=self._generate_view_image_task,
-                    args=(file_path,),
-                ))
+        if self._needs_view_image(file_path, paths):
+            tasks.append(self._make_view_task(file_path, priority))
 
         if not tasks:
             # Everything already valid — clear from ledger so this file
@@ -994,96 +941,22 @@ class ThumbnailManager:
         """Task factory for GUI directory loads.
 
         Like create_all_tasks_for_file but assigns view-image tasks at
-        BACKGROUND_SCAN regardless of *priority*, keeping view-image work
-        below thumbnail generation in the queue.  Warm-cache files emit a
-        previews_ready notification immediately (no tasks created).
+        BACKGROUND_SCAN regardless of *priority*.
         """
-        if not self._passes_pre_checks(file_path):
+        readiness = self._check_file_readiness(file_path)
+        if readiness is None:
             return []
 
         tasks: List[RenderTask] = []
-        st = self.source_cache.stat(file_path)
-        thumb_valid, paths = self.metadata_db.images.check_thumbnail_validity(file_path, stat_result=st)
+        thumb_valid, paths = readiness
 
-        # Warm cache: no thumbnail/metadata tasks needed.
-        # Don't send previews_ready here — the GUI's heatmap will call
-        # request_thumbnail() which handles cache-hit notifications in
-        # the correct priority order (cursor-outward).
         if not thumb_valid:
-            tasks.append(RenderTask(
-                task_id=f"meta::{file_path}",
-                priority=priority,
-                func=self._process_metadata_task,
-                args=(file_path,),
-            ))
-            tasks.append(RenderTask(
-                task_id=file_path,
-                priority=priority,
-                func=self._generate_thumbnail_task,
-                args=(file_path,),
-            ))
+            tasks.extend(self._make_thumb_meta_tasks(file_path, priority))
 
-        # View-image at BACKGROUND_SCAN — runs only after thumbnail queue drains.
-        # Mem-cached view images have no DB view_image_path; skip to avoid no-op tasks.
-        if self._mem_cache_get(file_path) is None:
-            existing_view = paths.get('view_image_path')
-            if not (existing_view and os.path.exists(existing_view)):  # disk-io: cache file check
-                tasks.append(RenderTask(
-                    task_id=f"view::{file_path}",
-                    priority=Priority.BACKGROUND_SCAN,
-                    func=self._generate_view_image_task,
-                    args=(file_path,),
-                ))
+        if self._needs_view_image(file_path, paths):
+            tasks.append(self._make_view_task(file_path, Priority.BACKGROUND_SCAN))
 
         return tasks
-
-    # ──────────────────────────────────────────────────────────────────────
-    #  Generic task operations (daemon-side registry)
-    # ──────────────────────────────────────────────────────────────────────
-
-    def get_task_operation(self, name: str) -> Optional[Callable]:
-        return self._task_operations.get(name)
-
-    def execute_compound_task(self, operations: list) -> Dict[str, Any]:
-        """Execute a sequence of named operations. Runs in a RenderManager worker thread.
-
-        Each element is ``(name, file_paths)`` or ``(name, file_paths, kwargs)``.
-        """
-        results: Dict[str, Any] = {}
-        for op in operations:
-            name, file_paths = op[0], op[1]
-            kwargs = op[2] if len(op) > 2 else {}
-            handler = self._task_operations.get(name)
-            if not handler:
-                logger.error(f"Unknown task operation: {name}")
-                results[name] = {"error": f"unknown operation: {name}"}
-                continue
-            try:
-                results[name] = handler(file_paths, **kwargs)
-            except Exception as e:  # why: task operations are user-registered handlers; any exception must not crash the worker loop
-                logger.error(f"Task operation '{name}' failed: {e}", exc_info=True)
-                results[name] = {"error": str(e)}
-        return results
-
-    def _op_send2trash(self, file_paths: List[str]) -> Dict[str, Any]:
-        from core.file_ops import trash_with_sidecars
-        return trash_with_sidecars(file_paths)
-
-    def _op_remove_records(self, file_paths: List[str]) -> Dict[str, Any]:
-        success = self.metadata_db.remove_records(file_paths)
-        return {"success": success, "count": len(file_paths)}
-
-    def _op_bookmark_copy(self, file_paths: List[str], *,
-                          dest_dir: str) -> Dict[str, Any]:
-        from core.bookmark_manager import execute_bookmark_transfer
-        return execute_bookmark_transfer(file_paths, dest_dir, move=False,
-                                         db=self.metadata_db)
-
-    def _op_bookmark_move(self, file_paths: List[str], *,
-                          dest_dir: str) -> Dict[str, Any]:
-        from core.bookmark_manager import execute_bookmark_transfer
-        return execute_bookmark_transfer(file_paths, dest_dir, move=True,
-                                         db=self.metadata_db)
 
     def shutdown(self) -> None:
         """Gracefully shuts down the ThumbnailManager and its associated RenderManager."""

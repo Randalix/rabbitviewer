@@ -141,7 +141,15 @@ submit_source_job(job)
 
 ### ThumbnailManager — `core/thumbnail_manager.py`
 
-Domain layer over `RenderManager`. Owns all image-specific workflows and the task operation registry for generic daemon task dispatch (used by `ScriptAPI.daemon_tasks()`). Registered operations: `send2trash`, `remove_records`. Delegates AI tasks to `AITaskCoordinator`, file write-back to `MetadataWriter`, and volume/file-header I/O to `VolumeProber`.
+Domain layer over `RenderManager`. Owns all image-specific workflows. Delegates AI tasks to `AITaskCoordinator`, file write-back to `MetadataWriter`, volume/file-header I/O to `VolumeProber`, in-memory fullres caching to `FullresMemCache`, and compound task dispatch to `TaskOperationRegistry`.
+
+### FullresMemCache — `core/fullres_mem_cache.py`
+
+Thread-safe LRU byte-size bounded in-memory cache for decoded fullres view images. Entries below the generation-time threshold (default 500 ms) are stored in RAM instead of on disk, avoiding a disk round-trip on subsequent views. Evicts oldest entries when total bytes exceed the configured budget (default 512 MB).
+
+### TaskOperationRegistry — `core/task_operations.py`
+
+Registry for generic daemon task dispatch (used by `ScriptAPI.daemon_tasks()`). Registered operations: `send2trash`, `remove_records`, `bookmark_copy`, `bookmark_move`. Each operation is a callable that receives `(file_paths, **kwargs)`. `execute_compound` runs a sequence of operations in a single RenderManager worker thread.
 
 ### VolumeProber — `core/volume_prober.py`
 

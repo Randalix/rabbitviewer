@@ -131,7 +131,7 @@ class WatchdogHandler(FileSystemEventHandler):
         if os.path.exists(src_path):  # disk-io: replacement check
             logger.debug(f"Watchdog: File replaced (not deleted), re-indexing: {src_path}")
             self.thumbnail_manager.source_cache.invalidate(src_path)
-            self.thumbnail_manager.invalidate_mem_cache(src_path)
+            self.thumbnail_manager.fullres_cache.invalidate(src_path)
             try:
                 tasks = self.thumbnail_manager.create_tasks_for_file(src_path, Priority.LOW)
             except Exception as e:  # why: plugin error on observer thread must not crash the deferred delete callback
@@ -146,7 +146,7 @@ class WatchdogHandler(FileSystemEventHandler):
         else:
             logger.debug(f"Watchdog: Submitting deleted task for {src_path}")
             self.thumbnail_manager.source_cache.invalidate(src_path)
-            self.thumbnail_manager.invalidate_mem_cache(src_path)
+            self.thumbnail_manager.fullres_cache.invalidate(src_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_cleanup_deleted::{src_path}",
                 Priority.HIGH,
@@ -219,7 +219,7 @@ class WatchdogHandler(FileSystemEventHandler):
             new_path = event.dest_path
             logger.debug(f"Watchdog: Submitting move task for {old_path} → {new_path}")
             self.thumbnail_manager.source_cache.invalidate(old_path)
-            self.thumbnail_manager.invalidate_mem_cache(old_path)
+            self.thumbnail_manager.fullres_cache.invalidate(old_path)
             self.thumbnail_manager.render_manager.submit_task(
                 f"db_move::{old_path}::{new_path}",
                 Priority.HIGH,
@@ -239,7 +239,7 @@ class WatchdogHandler(FileSystemEventHandler):
             return
 
         logger.debug(f"Watchdog: Submitting {event.event_type} task for {file_path}")
-        self.thumbnail_manager.invalidate_mem_cache(file_path)
+        self.thumbnail_manager.fullres_cache.invalidate(file_path)
         try:
             tasks = self.thumbnail_manager.create_tasks_for_file(file_path, Priority.LOW)
         except Exception as e:

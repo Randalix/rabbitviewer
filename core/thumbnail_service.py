@@ -249,7 +249,7 @@ class ThumbnailService:
         }
 
     def get_cached_view_image(self, image_path: str) -> Optional[bytes]:
-        return self.tm._mem_cache_get(image_path)
+        return self.tm.fullres_cache.get(image_path)
 
     # ------------------------------------------------------------------
     #  Metadata
@@ -413,7 +413,7 @@ class ThumbnailService:
 
     def run_tasks(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
         for op in operations:
-            if self.tm.get_task_operation(op['name']) is None:
+            if self.tm.task_ops.get(op['name']) is None:
                 return {'status': 'error', 'message': f"Unknown task operation: {op['name']}"}
 
         with self._counter_lock:
@@ -427,7 +427,7 @@ class ThumbnailService:
         queued = self.rm.submit_task(
             task_id,
             Priority.NORMAL,
-            self.tm.execute_compound_task,
+            self.tm.task_ops.execute_compound,
             op_tuples,
         )
         if not queued:

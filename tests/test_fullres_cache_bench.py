@@ -304,7 +304,7 @@ class TestProcessViewImagePerformance:
 
         result = tm._process_view_image_task(src, md5)
         assert result == "memory", f"Expected 'memory' sentinel, got {result!r}"
-        assert tm._mem_cache_get(src) is not None, "Image not found in mem cache"
+        assert tm.fullres_cache.get(src) is not None, "Image not found in mem cache"
 
         # Verify no disk cache file was written
         cached_paths = db.images.get_thumbnail_paths(src)
@@ -338,7 +338,7 @@ class TestProcessViewImagePerformance:
 
         # Setup: put image in mem cache and clear direct conditions
         jpeg_bytes = open(src, "rb").read()
-        tm._mem_cache_put(src, jpeg_bytes)
+        tm.fullres_cache.put(src, jpeg_bytes)
         db.images.conn.execute("UPDATE image_metadata SET orientation = 6 WHERE file_path = ?", (src,))
         db.images.conn.commit()  # Disable direct path
 
@@ -346,7 +346,7 @@ class TestProcessViewImagePerformance:
         stats_mem = _bench(lambda: tm.request_view_image(src), iterations=200)
 
         # Setup: move to disk cache, clear mem cache
-        tm.invalidate_mem_cache(src)
+        tm.fullres_cache.invalidate(src)
         disk_path = str(cache_dir / "images" / "bench_view.jpg")
         with open(disk_path, "wb") as f:
             f.write(jpeg_bytes)
@@ -562,7 +562,7 @@ class TestScalingWithImageSize:
                 timings = []
                 for _ in range(iters):
                     # Clear caches so each iteration is a fresh generation.
-                    tm.invalidate_mem_cache(src)
+                    tm.fullres_cache.invalidate(src)
                     db.images.set_thumbnail_paths(src, view_image_path=None)
 
                     t0 = time.perf_counter()

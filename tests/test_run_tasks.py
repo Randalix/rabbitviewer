@@ -104,11 +104,11 @@ class TestProtocolModels:
 
 class TestOperationRegistry:
     def test_registry_contains_default_operations(self, tm):
-        assert tm.get_task_operation("send2trash") is not None
-        assert tm.get_task_operation("remove_records") is not None
+        assert tm.task_ops.get("send2trash") is not None
+        assert tm.task_ops.get("remove_records") is not None
 
     def test_unknown_operation_returns_none(self, tm):
-        assert tm.get_task_operation("nonexistent") is None
+        assert tm.task_ops.get("nonexistent") is None
 
     def test_op_remove_records(self, tm, tmp_path):
         db = tm.metadata_db
@@ -118,16 +118,16 @@ class TestOperationRegistry:
         img_str = str(img)
         db.images.set_thumbnail_paths(img_str, thumbnail_path="/cache/thumb.jpg")
 
-        result = tm._op_remove_records([img_str])
+        result = tm.task_ops._op_remove_records([img_str])
         assert result["success"] is True
         assert result["count"] == 1
 
     def test_op_remove_records_empty(self, tm):
-        result = tm._op_remove_records([])
+        result = tm.task_ops._op_remove_records([])
         assert result["success"] is True
 
     def test_op_send2trash_missing_file(self, tm):
-        result = tm._op_send2trash(["/nonexistent/file.jpg"])
+        result = tm.task_ops._op_send2trash(["/nonexistent/file.jpg"])
         assert result["failed"] == 1
         assert result["succeeded"] == 0
 
@@ -148,10 +148,10 @@ class TestExecuteCompoundTask:
             call_log.append(("b", paths))
             return {"ok": True}
 
-        tm._task_operations["op_a"] = op_a
-        tm._task_operations["op_b"] = op_b
+        tm.task_ops._operations["op_a"] = op_a
+        tm.task_ops._operations["op_b"] = op_b
 
-        results = tm.execute_compound_task([
+        results = tm.task_ops.execute_compound([
             ("op_a", ["/x.jpg"]),
             ("op_b", ["/y.jpg"]),
         ])
@@ -161,15 +161,15 @@ class TestExecuteCompoundTask:
         assert results["op_b"] == {"ok": True}
 
     def test_unknown_operation_logged_in_results(self, tm):
-        results = tm.execute_compound_task([("bogus", ["/x.jpg"])])
+        results = tm.task_ops.execute_compound([("bogus", ["/x.jpg"])])
         assert "error" in results["bogus"]
 
     def test_operation_exception_captured(self, tm):
         def op_crash(paths):
             raise RuntimeError("boom")
 
-        tm._task_operations["crasher"] = op_crash
-        results = tm.execute_compound_task([("crasher", ["/x.jpg"])])
+        tm.task_ops._operations["crasher"] = op_crash
+        results = tm.task_ops.execute_compound([("crasher", ["/x.jpg"])])
         assert "boom" in results["crasher"]["error"]
 
     def test_continues_after_failure(self, tm):
@@ -182,10 +182,10 @@ class TestExecuteCompoundTask:
             call_log.append("ok")
             return {"done": True}
 
-        tm._task_operations["op_fail"] = op_fail
-        tm._task_operations["op_ok"] = op_ok
+        tm.task_ops._operations["op_fail"] = op_fail
+        tm.task_ops._operations["op_ok"] = op_ok
 
-        results = tm.execute_compound_task([
+        results = tm.task_ops.execute_compound([
             ("op_fail", ["/x.jpg"]),
             ("op_ok", ["/y.jpg"]),
         ])
@@ -209,12 +209,12 @@ class TestCompoundTaskAsync:
             event.set()
             return {"captured": True}
 
-        tm._task_operations["capture"] = capture_op
+        tm.task_ops._operations["capture"] = capture_op
 
         rm.submit_task(
             "test_compound::1",
             Priority.NORMAL,
-            tm.execute_compound_task,
+            tm.task_ops.execute_compound,
             [("capture", ["/a.jpg", "/b.jpg"])],
         )
 

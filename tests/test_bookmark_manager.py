@@ -280,8 +280,8 @@ class TestExecuteBookmarkTransfer:
 
 class TestBookmarkCompoundTask:
     def test_registry_contains_bookmark_ops(self, tm):
-        assert tm.get_task_operation("bookmark_copy") is not None
-        assert tm.get_task_operation("bookmark_move") is not None
+        assert tm.task_ops.get("bookmark_copy") is not None
+        assert tm.task_ops.get("bookmark_move") is not None
 
     def test_op_bookmark_copy(self, tm, tmp_path):
         src = tmp_path / "src" / "a.jpg"
@@ -289,7 +289,7 @@ class TestBookmarkCompoundTask:
         src.write_bytes(b"\xff\xd8fake")
         dest = str(tmp_path / "bm_dest")
 
-        result = tm._op_bookmark_copy([str(src)], dest_dir=dest)
+        result = tm.task_ops._op_bookmark_copy([str(src)], dest_dir=dest)
         assert result["copied"] == 1
         assert src.exists()
         assert os.path.isfile(os.path.join(dest, "a.jpg"))
@@ -300,7 +300,7 @@ class TestBookmarkCompoundTask:
         src.write_bytes(b"\xff\xd8fake")
         dest = str(tmp_path / "bm_dest")
 
-        result = tm._op_bookmark_move([str(src)], dest_dir=dest)
+        result = tm.task_ops._op_bookmark_move([str(src)], dest_dir=dest)
         assert result["moved"] == 1
         assert not src.exists()
 
@@ -310,7 +310,7 @@ class TestBookmarkCompoundTask:
         src.write_bytes(b"\xff\xd8fake")
         dest = str(tmp_path / "bm_dest")
 
-        results = tm.execute_compound_task([
+        results = tm.task_ops.execute_compound([
             ("bookmark_copy", [str(src)], {"dest_dir": dest}),
         ])
         assert results["bookmark_copy"]["copied"] == 1
@@ -324,18 +324,18 @@ class TestBookmarkCompoundTask:
 
         done = threading.Event()
 
-        original = tm._op_bookmark_copy
+        original = tm.task_ops._op_bookmark_copy
         def _capture(paths, *, dest_dir):
             result = original(paths, dest_dir=dest_dir)
             done.set()
             return result
 
-        tm._task_operations["bookmark_copy"] = _capture
+        tm.task_ops._operations["bookmark_copy"] = _capture
 
         rm.submit_task(
             "test_bookmark::1",
             Priority.NORMAL,
-            tm.execute_compound_task,
+            tm.task_ops.execute_compound,
             [("bookmark_copy", [str(src)], {"dest_dir": dest})],
         )
 
