@@ -11,6 +11,7 @@ DEFAULT_CONFIG = {
     "inspector": {
         "zoom_factor": 3.0,
     },
+    "num_workers": None,  # None → max(2, cpu_count - 1)
     "logging_level": "INFO",
     "logging_levels": {},
     "gui": {

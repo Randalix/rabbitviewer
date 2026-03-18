@@ -145,12 +145,15 @@ class RawPlugin(BasePlugin):
             return None
 
     def process_view_image(self, image_path: str, md5_hash: str,
-                           cancel_event=None) -> Optional[str]:
+                           cancel_event=None,
+                           prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
         view_path = self.get_view_image_path(md5_hash)
         if os.path.exists(view_path):  # disk-io: cache file check
             return view_path
         try:
-            orientation = self._get_orientation(image_path)
+            orientation = (self._scan_exif_orientation(prefetch_buffer)
+                          if prefetch_buffer is not None
+                          else self._get_orientation(image_path))
             image_bytes = self._extract_jpg_from_raw_to_memory(image_path)
             if not image_bytes:
                 logger.error("No embedded JPEG to build view image for %s", image_path)

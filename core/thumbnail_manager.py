@@ -26,7 +26,7 @@ CACHE_VERSION = 2
 
 
 class ThumbnailManager:
-    def __init__(self, config_manager, metadata_database: MetadataDatabase, watchdog_handler=None, event_system=None, num_workers=8):
+    def __init__(self, config_manager, metadata_database: MetadataDatabase, watchdog_handler=None, event_system=None, num_workers=None):
         self.config_manager = config_manager
         self.metadata_db = metadata_database
         self.event_system = event_system
@@ -47,7 +47,9 @@ class ThumbnailManager:
         self._plugins_dir = os.path.join(os.path.dirname(__file__), '..', 'plugins')
         self.plugin_registry = plugin_registry
         self.supported_formats: set = set()  # populated by load_plugins()
-        
+
+        if num_workers is None:
+            num_workers = config_manager.get("num_workers", max(2, (os.cpu_count() or 4) - 1))
         self.render_manager = RenderManager(num_workers=num_workers)
         self.render_manager.start()
         self._watchdog_handler = watchdog_handler
@@ -389,7 +391,7 @@ class ThumbnailManager:
         header_result = self.volume_prober.read_file_header(image_path)
         if not header_result:
             return None
-        md5_hash, _prefetch_buffer = header_result
+        md5_hash, prefetch_buffer = header_result
 
         if cancel_event and cancel_event.is_set():
             return None
@@ -397,7 +399,9 @@ class ThumbnailManager:
         # Slow step: exiftool -JpgFromRaw, 7-17s per CR3 on NAS.
         from plugins.exiftool_process import ExifToolCancelled
         try:
-            result = self._process_view_image_task(image_path, md5_hash, cancel_event=cancel_event)
+            result = self._process_view_image_task(image_path, md5_hash,
+                                                   cancel_event=cancel_event,
+                                                   prefetch_buffer=prefetch_buffer)
         except ExifToolCancelled:
             logger.debug("View image cancelled for %s", os.path.basename(image_path))
             return None
@@ -714,7 +718,8 @@ class ThumbnailManager:
         self.render_manager.cancel_tasks([f"view::{p}" for p in image_paths])
 
     def _process_view_image_task(self, image_path: str, md5_hash: str,
-                                   cancel_event: Optional[threading.Event] = None):
+                                   cancel_event: Optional[threading.Event] = None,
+                                   prefetch_buffer: Optional[bytes] = None):
         logger.debug(f"Starting view image task for {image_path}")
         if not self.source_cache.exists(image_path):
             logger.warning(f"File not found for view image processing: '{image_path}'. Queuing JIT database cleanup.")
@@ -743,7 +748,8 @@ class ThumbnailManager:
 
         start_time = time.time()
         view_image_path = plugin.process_view_image(image_path, md5_hash,
-                                                    cancel_event=cancel_event)
+                                                    cancel_event=cancel_event,
+                                                    prefetch_buffer=prefetch_buffer)
         duration = time.time() - start_time
         logger.debug(f"plugin.process_view_image for {os.path.basename(image_path)} took {duration:.4f} seconds.")
         if not view_image_path:

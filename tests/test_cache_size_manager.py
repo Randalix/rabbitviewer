@@ -172,6 +172,7 @@ class TestAccessedAtTracking:
         db.images.get_thumbnail_paths(src)
         after = time.time()
 
+        db.images._flush_accessed_at()
         with db.images._lock:
             cursor = db.images.conn.cursor()
             cursor.execute("SELECT accessed_at FROM image_metadata WHERE file_path = ?", (src,))
@@ -187,6 +188,7 @@ class TestAccessedAtTracking:
         db.images.get_cached_thumbnail_paths(src)
         after = time.time()
 
+        db.images._flush_accessed_at()
         with db.images._lock:
             cursor = db.images.conn.cursor()
             cursor.execute("SELECT accessed_at FROM image_metadata WHERE file_path = ?", (src,))

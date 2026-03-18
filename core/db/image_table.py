@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -17,8 +18,19 @@ from core.priority import ImageEntry
 
 logger = logging.getLogger(__name__)
 
+_ACCESSED_AT_FLUSH_THRESHOLD = 50
+
 
 class ImageTable(BaseTable):
+
+    def __init__(self, db_path: str):
+        super().__init__(db_path)
+        self._accessed_at_buffer: Dict[str, float] = {}
+        self._accessed_at_lock = threading.Lock()
+
+    def close(self):
+        self._flush_accessed_at()
+        super().close()
 
     # ------------------------------------------------------------------
     #  Utilities
@@ -45,16 +57,32 @@ class ImageTable(BaseTable):
         return ImageEntry(path=file_path, sidecars=sidecars)
 
     def _touch_accessed_at(self, file_path: str) -> None:
-        """Best-effort LRU timestamp update."""
+        """Best-effort LRU timestamp — buffers writes and flushes in batch."""
+        now = time.time()
+        flush_needed = False
+        with self._accessed_at_lock:
+            self._accessed_at_buffer[file_path] = now
+            if len(self._accessed_at_buffer) >= _ACCESSED_AT_FLUSH_THRESHOLD:
+                flush_needed = True
+        if flush_needed:
+            self._flush_accessed_at()
+
+    def _flush_accessed_at(self) -> None:
+        """Write buffered accessed_at timestamps to DB in a single transaction."""
+        with self._accessed_at_lock:
+            batch = self._accessed_at_buffer.copy()
+            self._accessed_at_buffer.clear()
+        if not batch:
+            return
         try:
             with self._lock:
-                self.conn.execute(
+                self.conn.executemany(
                     'UPDATE image_metadata SET accessed_at = ? WHERE file_path = ?',
-                    (time.time(), file_path),
+                    [(ts, fp) for fp, ts in batch.items()],
                 )
                 self._soft_commit()
         except sqlite3.Error:
-            pass
+            pass  # why: LRU writes are best-effort; flush failure loses ordering data, not image data
 
     # ------------------------------------------------------------------
     #  Sidecars

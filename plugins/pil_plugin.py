@@ -78,7 +78,8 @@ class PILPlugin(BasePlugin):
         return None
 
     def process_view_image(self, image_path: str, md5_hash: str,
-                           cancel_event=None) -> Optional[str]:
+                           cancel_event=None,
+                           prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
         """Generates a cached view image (JPG) from the source image."""
         view_image_path = self.get_view_image_path(md5_hash)
         if os.path.exists(view_image_path):  # disk-io: cache file check

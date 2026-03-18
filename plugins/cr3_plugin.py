@@ -269,7 +269,8 @@ class CR3Plugin(BasePlugin):
             return None
 
     def process_view_image(self, image_path: str, md5_hash: str,
-                           cancel_event=None) -> Optional[str]:
+                           cancel_event=None,
+                           prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
         """
         Generates the full-resolution view image from the raw file's embedded JPG.
         """
@@ -278,7 +279,10 @@ class CR3Plugin(BasePlugin):
             return view_image_path
 
         try:
-            orientation = self._get_orientation_from_cr3(image_path)
+            if prefetch_buffer:
+                orientation = self._get_orientation_from_buffer(prefetch_buffer)
+            else:
+                orientation = self._get_orientation_from_cr3(image_path)
             image_bytes = self._extract_jpg_from_raw_to_memory(
                 image_path, cancel_event=cancel_event)
 

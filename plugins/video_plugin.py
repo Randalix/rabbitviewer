@@ -64,7 +64,8 @@ class VideoPlugin(BasePlugin):
             return None
 
     def process_view_image(self, image_path: str, md5_hash: str,
-                           cancel_event=None) -> Optional[str]:
+                           cancel_event=None,
+                           prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
         """Return a poster frame for the brief moment before mpv starts rendering."""
         output_path = self.get_view_image_path(md5_hash)
         if os.path.exists(output_path):  # disk-io: cache file check
