@@ -197,11 +197,12 @@ class ThumbnailManager:
         if not plugin:
             logger.error(f"ThumbnailManager: No plugin found for {image_path}")
             return None
-        md5_hash = self.volume_prober.hash_file(image_path)
-        if not md5_hash:
+        header_result = self.volume_prober.read_file_header(image_path)
+        if not header_result:
             return None
+        md5_hash, prefetch_buffer = header_result
 
-        thumbnail_path = plugin.process_thumbnail(image_path, md5_hash)
+        thumbnail_path = plugin.process_thumbnail(image_path, md5_hash, prefetch_buffer=prefetch_buffer)
 
         if thumbnail_path:
             self.metadata_db.images.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path)
@@ -385,9 +386,10 @@ class ThumbnailManager:
             self.metadata_db.ledgers.file_work_remove(image_path, 'view_image')
             return None
 
-        md5_hash = self.volume_prober.hash_file(image_path)
-        if not md5_hash:
+        header_result = self.volume_prober.read_file_header(image_path)
+        if not header_result:
             return None
+        md5_hash, _prefetch_buffer = header_result
 
         if cancel_event and cancel_event.is_set():
             return None
