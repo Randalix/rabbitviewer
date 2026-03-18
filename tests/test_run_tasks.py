@@ -112,15 +112,32 @@ class TestOperationRegistry:
 
     def test_op_remove_records(self, tm, tmp_path):
         db = tm.metadata_db
-        # Create a real file so set_thumbnail_paths accepts it
         img = tmp_path / "test.jpg"
         img.write_bytes(b"\xff\xd8fake")
         img_str = str(img)
         db.images.set_thumbnail_paths(img_str, thumbnail_path="/cache/thumb.jpg")
 
+        # File deleted from disk first (trash succeeded) — record should be removed.
+        img.unlink()
         result = tm.task_ops._op_remove_records([img_str])
         assert result["success"] is True
         assert result["count"] == 1
+        assert result["skipped"] == 0
+
+    def test_op_remove_records_skips_still_present_files(self, tm, tmp_path):
+        db = tm.metadata_db
+        img = tmp_path / "alive.jpg"
+        img.write_bytes(b"\xff\xd8fake")
+        img_str = str(img)
+        db.images.set_thumbnail_paths(img_str, thumbnail_path="/cache/thumb.jpg")
+
+        # File still on disk (trash failed) — record must NOT be removed.
+        result = tm.task_ops._op_remove_records([img_str])
+        assert result["skipped"] == 1
+        assert result["count"] == 0
+        # Record must still be in DB.
+        paths = db.images.get_thumbnail_paths(img_str)
+        assert paths.get("thumbnail_path") == "/cache/thumb.jpg"
 
     def test_op_remove_records_empty(self, tm):
         result = tm.task_ops._op_remove_records([])
