@@ -356,6 +356,13 @@ class VideoView(QOpenGLWidget):
     def _destroy_player(self):
         if not self._scrub and hasattr(self, '_status_timer'):
             self._status_timer.stop()
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE,
+                source="video_view",
+                timestamp=time.time(),
+                message="",
+                section=StatusSection.PROCESS,
+            ))
         if self._render_ctx:
             try:
                 self.makeCurrent()

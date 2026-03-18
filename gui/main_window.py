@@ -916,7 +916,7 @@ class MainWindow(QMainWindow):
             self._open_picture_view(file_path)
 
     def _open_video_view(self, video_path: str):
-        if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
+        if self.picture_view:
             self.picture_view.close()
             self.picture_view = None
         try:
@@ -935,7 +935,7 @@ class MainWindow(QMainWindow):
             logger.error(f"Failed to open video view: {e}", exc_info=True)
 
     def _open_picture_view(self, image_path: str):
-        if self.video_view and self.stacked_widget.currentWidget() is self.video_view:
+        if self.video_view:
             self.video_view.close()
             self.video_view = None
         try:
