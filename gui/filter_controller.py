@@ -82,7 +82,7 @@ class FilterController(QObject):
 
     def clear_clip_search(self):
         self.model.set_clip_search_paths(None)
-        self.model.hidden_indices = set()
+        self.model.apply_hidden_indices(set())
         self.reapply_filters()
 
     def apply_person_filter(self, file_paths: list):
