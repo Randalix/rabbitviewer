@@ -100,12 +100,6 @@ class FilterController(QObject):
         self.model.set_selection_filter_paths(None)
         self.reapply_filters()
 
-    def filter_affects_rating(self) -> bool:
-        return self.model.filter_affects_rating()
-
-    def has_active_tag_filter(self) -> bool:
-        return self.model.has_active_tag_filter()
-
     # -- EventSystem handlers ------------------------------------------------
 
     def _on_face_person_filter(self, event_data):
