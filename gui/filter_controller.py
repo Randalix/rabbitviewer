@@ -254,31 +254,26 @@ class FilterController(QObject):
 
         if will_update:
             self.model.apply_hidden_indices(new_hidden)
-            self._update_filtered_layout()
+            self._on_layout_rebuilt()
             logger.info(
-                "_update_filtered_layout done: current_files=%d, materialized_labels=%d",
+                "filter layout done: current_files=%d, materialized_labels=%d",
                 len(self.model.current_files), self._label_count(),
             )
-        else:
-            total_count = len(self.model.all_files)
-            visible_count = len(self.model.current_files)
-            hidden_count = total_count - visible_count
 
-            status_msg = f"Filter: '{self.model.current_filter}' - {visible_count}/{total_count} images displayed"
-            if hidden_count > 0:
-                status_msg += f" ({hidden_count} hidden)"
-            event_system.publish(StatusMessageEventData(
-                event_type=EventType.STATUS_MESSAGE,
-                source="thumbnail_view",
-                timestamp=time.time(),
-                message=status_msg,
-                timeout=4000
-            ))
-            self.filters_applied.emit()
-
-    def _update_filtered_layout(self):
-        self.model.rebuild_visible_mappings()
-        self._on_layout_rebuilt()
+        total_count = len(self.model.all_files)
+        visible_count = len(self.model.current_files)
+        hidden_count = total_count - visible_count
+        status_msg = f"Filter: '{self.model.current_filter}' - {visible_count}/{total_count} images displayed"
+        if hidden_count > 0:
+            status_msg += f" ({hidden_count} hidden)"
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE,
+            source="thumbnail_view",
+            timestamp=time.time(),
+            message=status_msg,
+            timeout=4000
+        ))
+        self.filters_applied.emit()
 
     # -- Lifecycle -----------------------------------------------------------
 
