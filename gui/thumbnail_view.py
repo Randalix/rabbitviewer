@@ -110,7 +110,13 @@ class ThumbnailViewWidget(QFrame):
         self._viewport_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewport")
 
         # Delegated controllers
-        self._filter_controller = FilterController(self, self.model, self._viewport_executor)
+        self._filter_controller = FilterController(
+            self, self.model, self._viewport_executor,
+            is_loading=lambda: self._is_loading,
+            label_count=lambda: len(self.labels),
+            on_layout_rebuilt=self._rebuild_layout_for_filter,
+        )
+        self._filter_controller.filters_applied.connect(self.filtersApplied)
         self._notifications = NotificationHandler(self, self.model, self.prioritizer, self._filter_controller)
         self._notifications.preview_tick_timer.timeout.connect(self._tick_preview_loading)
 

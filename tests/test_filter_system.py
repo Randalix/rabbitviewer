@@ -281,7 +281,6 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     # FilterController — use the real class so filter logic is tested
     from gui.filter_controller import FilterController
     fc = object.__new__(FilterController)
-    fc._widget = view
     fc.model = view.model
     fc._executor = view._viewport_executor
     fc.service = service
@@ -290,6 +289,10 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     fc.needs_heatmap_seed = False
     fc._filter_update_timer = MagicMock()
     fc._filtered_paths_ready = MagicMock()
+    fc.filters_applied = MagicMock()
+    fc._is_loading = lambda: view._is_loading
+    fc._label_count = lambda: len(view.labels)
+    fc._on_layout_rebuilt = view._rebuild_layout_for_filter
     view._filter_controller = fc
 
     return view

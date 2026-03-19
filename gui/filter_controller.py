@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
@@ -19,13 +19,25 @@ logger = logging.getLogger(__name__)
 class FilterController(QObject):
 
     _filtered_paths_ready = Signal(object)
+    filters_applied = Signal()
 
-    def __init__(self, widget, model: ThumbnailModel, executor: ThreadPoolExecutor):
-        super().__init__(parent=widget)
-        self._widget = widget
+    def __init__(
+        self,
+        parent: QObject,
+        model: ThumbnailModel,
+        executor: ThreadPoolExecutor,
+        *,
+        is_loading: Callable[[], bool],
+        label_count: Callable[[], int],
+        on_layout_rebuilt: Callable[[], None],
+    ):
+        super().__init__(parent=parent)
         self.model = model
         self._executor = executor
         self.service = None
+        self._is_loading = is_loading
+        self._label_count = label_count
+        self._on_layout_rebuilt = on_layout_rebuilt
 
         self._filter_in_flight = False
         self._filter_pending = False
@@ -154,14 +166,14 @@ class FilterController(QObject):
     def reapply_filters(self):
         logger.info(
             "[virtual] reapply_filters: is_loading=%s, all_files=%d, labels=%d",
-            self._widget._is_loading, len(self.model.all_files), len(self._widget.labels),
+            self._is_loading(), len(self.model.all_files), self._label_count(),
         )
 
         if not self.model.all_files or not self.service:
             logger.warning("Cannot apply filters: file list or service is not ready.")
             return
 
-        if self._widget._is_loading:
+        if self._is_loading():
             # Fast path: show everything during the initial scan.
             visible = set(self.model.all_files)
             if self.model.clip_search_paths is not None:
@@ -250,7 +262,7 @@ class FilterController(QObject):
             self._update_filtered_layout()
             logger.info(
                 "[virtual] _update_filtered_layout done: current_files=%d, materialized_labels=%d",
-                len(self.model.current_files), len(self._widget.labels),
+                len(self.model.current_files), self._label_count(),
             )
         else:
             total_count = len(self.model.all_files)
@@ -267,11 +279,11 @@ class FilterController(QObject):
                 message=status_msg,
                 timeout=4000
             ))
-            self._widget.filtersApplied.emit()
+            self.filters_applied.emit()
 
     def _update_filtered_layout(self):
         self.model.rebuild_visible_mappings()
-        self._widget._rebuild_layout_for_filter()
+        self._on_layout_rebuilt()
 
     # -- Lifecycle -----------------------------------------------------------
 
