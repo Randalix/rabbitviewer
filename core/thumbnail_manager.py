@@ -172,7 +172,7 @@ class ThumbnailManager:
         if thumbnail_path:
             self.metadata_db.images.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path)
             self.metadata_db.images.set_content_hash(image_path, md5_hash)
-            self.phash_coordinator.compute_and_store(image_path, thumbnail_path)
+            self.phash_coordinator.queue_for_file(image_path)
             logger.debug(f"Sync thumbnail for {image_path} done. Queueing followup tasks.")
             view_task_id = f"view::{image_path}"
             self.render_manager.submit_task(
@@ -274,7 +274,7 @@ class ThumbnailManager:
         if thumbnail_path:
             self.metadata_db.images.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path, stat_result=st)
             self.metadata_db.images.set_content_hash(image_path, md5_hash)
-            self.phash_coordinator.compute_and_store(image_path, thumbnail_path)
+            self.phash_coordinator.queue_for_file(image_path)
             self.metadata_db.ledgers.ledger_mark_complete(image_path)
             self.metadata_db.ledgers.file_work_remove(image_path, 'thumbnail')
             if self.cache_size_manager:

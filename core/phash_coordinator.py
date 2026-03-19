@@ -74,18 +74,20 @@ class PHashCoordinator:
         if batch:
             yield batch
 
-    # ── inline computation (called from within thumbnail task) ────────
-
-    def compute_and_store(self, file_path: str, thumbnail_path: str) -> None:
-        """Compute pHash from an already-open thumbnail path and write to DB.
-
-        Runs in the caller's worker thread — no extra task submission needed.
-        """
-        h = _dct_phash(thumbnail_path)
-        if h is not None:
-            self.metadata_db.images.set_phash(file_path, h)
-
     # ── background SourceJob ──────────────────────────────────────────
+
+    def queue_for_file(self, file_path: str) -> None:
+        """Queue a single pHash task at BACKGROUND_SCAN priority.
+
+        Called after thumbnail generation so pHash runs in a separate worker
+        rather than blocking the thumbnail task.
+        """
+        self.render_manager.submit_task(
+            f"phash::{file_path}",
+            Priority.BACKGROUND_SCAN,
+            self._compute_phash_task,
+            file_path,
+        )
 
     def _compute_phash_task(self, file_path: str, cancel_event=None):
         """Worker task: compute pHash from cached thumbnail and persist."""
