@@ -263,7 +263,23 @@ class FilterController(QObject):
         total_count = len(self.model.all_files)
         visible_count = len(self.model.current_files)
         hidden_count = total_count - visible_count
-        status_msg = f"Filter: '{self.model.current_filter}' - {visible_count}/{total_count} images displayed"
+        active = []
+        if self.model.current_filter:
+            active.append(f"text='{self.model.current_filter}'")
+        if not all(self.model.current_star_filter):
+            active.append("stars")
+        if self.model.current_tag_filter:
+            active.append("tags")
+        if self.model.duplicates_only:
+            active.append("duplicates")
+        if self.model.clip_search_paths is not None:
+            active.append("clip")
+        if self.model.person_filter_paths is not None:
+            active.append("faces")
+        if self.model.selection_filter_paths is not None:
+            active.append("selection")
+        filter_desc = ", ".join(active) if active else "none"
+        status_msg = f"Filter ({filter_desc}): {visible_count}/{total_count} shown"
         if hidden_count > 0:
             status_msg += f" ({hidden_count} hidden)"
         event_system.publish(StatusMessageEventData(
