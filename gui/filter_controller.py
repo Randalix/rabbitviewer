@@ -38,6 +38,7 @@ class FilterController(QObject):
         self._is_loading = is_loading
         self._label_count = label_count
         self._on_layout_rebuilt = on_layout_rebuilt
+        self._phash_progress_subscribed = False
 
         self._filter_in_flight = False
         self._filter_pending = False
@@ -125,9 +126,13 @@ class FilterController(QObject):
         self.model.set_duplicates_only(event_data.duplicates_only)
         if event_data.duplicates_only:
             self._request_phash_urgent()
-            event_system.subscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+            if not self._phash_progress_subscribed:
+                event_system.subscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+                self._phash_progress_subscribed = True
         else:
-            event_system.unsubscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+            if self._phash_progress_subscribed:
+                event_system.unsubscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+                self._phash_progress_subscribed = False
         self._filter_update_timer.start()
 
     def _on_phash_progress(self, event_data):
@@ -296,6 +301,7 @@ class FilterController(QObject):
         event_system.unsubscribe(EventType.DUPLICATES_FILTER_CHANGED, self._on_duplicates_filter_event)
         event_system.unsubscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
         # Guard: only unsubscribe if duplicates filter was active
-        if self.model.duplicates_only:
+        if self._phash_progress_subscribed:
             event_system.unsubscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+            self._phash_progress_subscribed = False
         self._filter_update_timer.stop()
