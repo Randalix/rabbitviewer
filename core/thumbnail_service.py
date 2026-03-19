@@ -130,6 +130,7 @@ class ThumbnailService:
                 self.tm.submit_clip_indexing_job(path, all_files)
                 self.tm.submit_auto_orient_job(path, all_files)
                 self.tm.submit_face_detection_job(path, all_files)
+                self.tm.submit_phash_job(path, all_files)
 
         def _ledger_batch_cb(paths):
             self.db.ledgers.ledger_batch_insert(paths, scan_root=path)
@@ -175,11 +176,22 @@ class ThumbnailService:
         return nodes
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
-                                tag_names: Optional[List[str]] = None) -> List[str]:
+                                tag_names: Optional[List[str]] = None,
+                                duplicates_only: bool = False) -> List[str]:
         return self.db.images.get_filtered_file_paths(
             text_filter, star_states,
             tag_names=tag_names if tag_names else None,
+            duplicates_only=duplicates_only,
         )
+
+    def get_phash_duplicate_paths(self, file_paths: List[str]) -> set:
+        from core.phash_coordinator import PHashCoordinator
+        pairs = self.db.images.get_phash_pairs(file_paths)
+        return PHashCoordinator.find_near_duplicates(pairs)
+
+    def request_phash_batch(self, file_paths: List[str], directory: str,
+                            priority: Priority = Priority.GUI_REQUEST) -> None:
+        self.tm.submit_phash_job(directory, file_paths, priority)
 
     # ------------------------------------------------------------------
     #  Thumbnail / Preview

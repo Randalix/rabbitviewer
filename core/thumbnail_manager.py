@@ -1,5 +1,6 @@
 
 import os
+import shutil
 import stat as stat_mod
 import time
 import logging
@@ -11,6 +12,7 @@ from core.priority import NATIVELY_VIEWABLE
 from core.rendermanager import Priority, RenderManager, RenderTask
 from core.source_cache import SourceExistsCache
 from core.ai_task_coordinator import AITaskCoordinator
+from core.phash_coordinator import PHashCoordinator
 from core.metadata_writer import MetadataWriter
 from core.volume_prober import VolumeProber
 from plugins.base_plugin import plugin_registry
@@ -61,6 +63,7 @@ class ThumbnailManager:
             self.render_manager, watchdog_handler=watchdog_handler)
         self.ai_coordinator = AITaskCoordinator(
             config_manager, metadata_database, self.render_manager)
+        self.phash_coordinator = PHashCoordinator(metadata_database, self.render_manager)
         self.cache_size_manager = None  # set by daemon after construction
         self.source_cache = SourceExistsCache(ttl=30.0)
 
@@ -70,7 +73,7 @@ class ThumbnailManager:
         threshold_ms = config_manager.get("fullres_cache_threshold_ms", 500)
         self._fullres_cache_threshold = threshold_ms / 1000.0
 
-        self.task_ops = TaskOperationRegistry(metadata_database)
+        self.task_ops = TaskOperationRegistry(metadata_database, event_system=event_system)
 
         # Limit speculative view tasks to 1 concurrent worker so user
         # requests at FULLRES_REQUEST are never starved.
@@ -168,6 +171,8 @@ class ThumbnailManager:
 
         if thumbnail_path:
             self.metadata_db.images.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path)
+            self.metadata_db.images.set_content_hash(image_path, md5_hash)
+            self.phash_coordinator.compute_and_store(image_path, thumbnail_path)
             logger.debug(f"Sync thumbnail for {image_path} done. Queueing followup tasks.")
             view_task_id = f"view::{image_path}"
             self.render_manager.submit_task(
@@ -268,6 +273,8 @@ class ThumbnailManager:
         thumbnail_path = plugin.process_thumbnail(image_path, md5_hash, prefetch_buffer=prefetch_buffer)
         if thumbnail_path:
             self.metadata_db.images.set_thumbnail_paths(image_path, thumbnail_path=thumbnail_path, stat_result=st)
+            self.metadata_db.images.set_content_hash(image_path, md5_hash)
+            self.phash_coordinator.compute_and_store(image_path, thumbnail_path)
             self.metadata_db.ledgers.ledger_mark_complete(image_path)
             self.metadata_db.ledgers.file_work_remove(image_path, 'thumbnail')
             if self.cache_size_manager:
@@ -345,26 +352,57 @@ class ThumbnailManager:
             self.metadata_db.ledgers.file_work_remove(image_path, 'view_image')
             return None
 
-        header_result = self.volume_prober.read_file_header(image_path)
-        if not header_result:
-            return None
-        md5_hash, prefetch_buffer = header_result
+        # PIL-native formats (JPEG, PNG, etc.) are directly displayable —
+        # skip decode+re-encode and use the source bytes directly.
+        from plugins.pil_plugin import PILPlugin
+        if isinstance(plugin, PILPlugin):
+            mount = self.volume_prober.get_mount_point(image_path)
+            if mount is None:
+                # Local file — point GUI at source; no copy needed.
+                self.metadata_db.images.set_thumbnail_paths(image_path, view_image_path=image_path)
+                result = image_path
+            else:
+                # NAS file — copy to local cache (raw copy, no decode).
+                if cancel_event and cancel_event.is_set():
+                    return None
+                header_result = self.volume_prober.read_file_header(image_path)
+                if not header_result:
+                    return None
+                md5_hash, _ = header_result
+                view_image_path = plugin.get_view_image_path(md5_hash)
+                try:
+                    os.makedirs(os.path.dirname(view_image_path), exist_ok=True)
+                    shutil.copy2(image_path, view_image_path)  # disk-io: NAS full-file copy
+                except OSError as e:
+                    logger.warning("Failed to copy NAS file to cache: %s: %s", image_path, e)
+                    return None
+                self.metadata_db.images.set_thumbnail_paths(image_path, view_image_path=view_image_path)
+                if self.cache_size_manager:
+                    try:
+                        self.cache_size_manager.record_cache_write(os.path.getsize(view_image_path))  # disk-io: cache size tracking
+                    except OSError:
+                        pass
+                result = view_image_path
+        else:
+            header_result = self.volume_prober.read_file_header(image_path)
+            if not header_result:
+                return None
+            md5_hash, prefetch_buffer = header_result
 
-        if cancel_event and cancel_event.is_set():
-            return None
+            if cancel_event and cancel_event.is_set():
+                return None
 
-        # Slow step: exiftool -JpgFromRaw, 7-17s per CR3 on NAS.
-        from plugins.exiftool_process import ExifToolCancelled
-        try:
-            result = self._process_view_image_task(image_path, md5_hash,
-                                                   cancel_event=cancel_event,
-                                                   prefetch_buffer=prefetch_buffer)
-        except ExifToolCancelled:
-            logger.debug("View image cancelled for %s", os.path.basename(image_path))
-            return None
-        if not result:
-            logger.error(f"View image generation failed for {image_path}.")
-            return None
+            from plugins.exiftool_process import ExifToolCancelled
+            try:
+                result = self._process_view_image_task(image_path, md5_hash,
+                                                       cancel_event=cancel_event,
+                                                       prefetch_buffer=prefetch_buffer)
+            except ExifToolCancelled:
+                logger.debug("View image cancelled for %s", os.path.basename(image_path))
+                return None
+            if not result:
+                logger.error(f"View image generation failed for {image_path}.")
+                return None
 
         # Send final notification with both paths now available.
         thumbnail_path = self.metadata_db.images.get_thumbnail_paths(image_path).get('thumbnail_path')
@@ -570,6 +608,10 @@ class ThumbnailManager:
 
     def submit_face_detection_job(self, directory: str, file_paths: List[str]):
         self.ai_coordinator.submit_face_detection_job(directory, file_paths)
+
+    def submit_phash_job(self, directory: str, file_paths: List[str],
+                         priority: Priority = Priority.BACKGROUND_SCAN):
+        self.phash_coordinator.submit_phash_job(directory, file_paths, priority)
 
     def request_view_image(self, image_path: str) -> Optional[str]:
         """Requests view image generation at FULLRES_REQUEST priority.
