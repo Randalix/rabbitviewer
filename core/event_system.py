@@ -44,6 +44,9 @@ class EventType(Enum):
     # UI command events
     OPEN_BREADCRUMB = "open_breadcrumb"
     OPEN_FILTER = "open_filter"
+    OPEN_RATING_FILTER = "open_rating_filter"
+    OPEN_NAME_FILTER = "open_name_filter"
+    TOGGLE_DUPLICATES_FILTER = "toggle_duplicates_filter"
     OPEN_TAG_EDITOR = "open_tag_editor"
     OPEN_TAG_FILTER = "open_tag_filter"
     OPEN_COMPARE_GRID = "open_compare_grid"

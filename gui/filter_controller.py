@@ -55,6 +55,7 @@ class FilterController(QObject):
         event_system.subscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
         event_system.subscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
         event_system.subscribe(EventType.DUPLICATES_FILTER_CHANGED, self._on_duplicates_filter_event)
+        event_system.subscribe(EventType.TOGGLE_DUPLICATES_FILTER, self._on_toggle_duplicates_filter)
         event_system.subscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
 
     # -- Public filter API ---------------------------------------------------
@@ -73,6 +74,14 @@ class FilterController(QObject):
 
     def clear_filter(self):
         self.model.clear_filters()
+        if self._phash_progress_subscribed:
+            event_system.unsubscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+            self._phash_progress_subscribed = False
+        # Apply the now-empty hidden set so rebuild_visible_mappings() runs
+        # immediately — without this, compute_hidden_indices sees no change
+        # (set() == set()) and skips the rebuild, leaving stale mappings.
+        self.model.apply_hidden_indices(set())
+        self._on_layout_rebuilt()
         self._filter_update_timer.start()
 
     def apply_clip_search_results(self, result_paths: list):
@@ -122,8 +131,14 @@ class FilterController(QObject):
         self.apply_tag_filter(event_data.tag_names)
 
     def _on_duplicates_filter_event(self, event_data):
-        self.model.set_duplicates_only(event_data.duplicates_only)
-        if event_data.duplicates_only:
+        self._apply_duplicates_filter(event_data.duplicates_only)
+
+    def _on_toggle_duplicates_filter(self, event_data):
+        self._apply_duplicates_filter(not self.model.duplicates_only)
+
+    def _apply_duplicates_filter(self, enabled: bool):
+        self.model.set_duplicates_only(enabled)
+        if enabled:
             self._request_phash_urgent()
             if not self._phash_progress_subscribed:
                 event_system.subscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
@@ -309,6 +324,7 @@ class FilterController(QObject):
         event_system.unsubscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
         event_system.unsubscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
         event_system.unsubscribe(EventType.DUPLICATES_FILTER_CHANGED, self._on_duplicates_filter_event)
+        event_system.unsubscribe(EventType.TOGGLE_DUPLICATES_FILTER, self._on_toggle_duplicates_filter)
         event_system.unsubscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
         # Guard: only unsubscribe if duplicates filter was active
         if self._phash_progress_subscribed:

@@ -125,9 +125,12 @@ def build_menus() -> dict:
 
     # Filter menu — all filter options in one place.
     filter_menu = MenuNode("Filter", children=[
-        MenuNode("Stars & duplicates", key="s", action=_publish(EventType.OPEN_FILTER)),
+        MenuNode("Rating", key="r", action=_publish(EventType.OPEN_RATING_FILTER)),
+        MenuNode("Name", key="n", action=_publish(EventType.OPEN_NAME_FILTER)),
+        MenuNode("Duplicates", key="d", action=_publish(EventType.TOGGLE_DUPLICATES_FILTER)),
         MenuNode("Tags", key="t", action=_publish(EventType.OPEN_TAG_FILTER)),
         MenuNode("Selection", key="l", action=_publish(EventType.SELECTION_FILTER_CHANGED)),
+        MenuNode("Clear all", key="c", action=_publish(EventType.CLEAR_FILTERS)),
     ])
 
     # Go to menu — navigation destinations.

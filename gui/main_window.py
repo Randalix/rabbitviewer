@@ -14,6 +14,8 @@ from .hotkey_manager import HotkeyManager
 from .metadata_cache import MetadataCache
 from .info_panel import InfoPanelShell, MetadataProvider
 from .filter_dialog import FilterDialog
+from .rating_filter_dialog import RatingFilterDialog
+from .name_filter_dialog import NameFilterDialog
 from .tag_editor_dialog import TagEditorDialog
 from .tag_filter_dialog import TagFilterDialog
 from .modal_menu import ModalMenu
@@ -94,6 +96,8 @@ class MainWindow(QMainWindow):
             self.setStyleSheet("QWidget { border: 1px solid red; }")
 
         self.filter_dialog = None
+        self.rating_filter_dialog = None
+        self.name_filter_dialog = None
         self.breadcrumb_bar = None
         self.tag_editor_dialog = None
         self.tag_filter_dialog = None
@@ -405,6 +409,30 @@ class MainWindow(QMainWindow):
             self.filter_dialog.show()
             self.filter_dialog.raise_()
             self.filter_dialog.activateWindow()
+
+    def open_rating_filter_dialog(self):
+        if not self.rating_filter_dialog:
+            self.rating_filter_dialog = RatingFilterDialog(self)
+
+        if self.rating_filter_dialog.isVisible():
+            self.rating_filter_dialog.hide()
+            self.rating_filter_dialog.clear_filter()
+        else:
+            self.rating_filter_dialog.show()
+            self.rating_filter_dialog.raise_()
+            self.rating_filter_dialog.activateWindow()
+
+    def open_name_filter_dialog(self):
+        if not self.name_filter_dialog:
+            self.name_filter_dialog = NameFilterDialog(self)
+
+        if self.name_filter_dialog.isVisible():
+            self.name_filter_dialog.hide()
+            self.name_filter_dialog.clear_filter()
+        else:
+            self.name_filter_dialog.show()
+            self.name_filter_dialog.raise_()
+            self.name_filter_dialog.activateWindow()
 
     def open_tag_filter(self):
         if not self.tag_filter_dialog:
@@ -762,6 +790,8 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.UNDO_SELECTION, lambda data: self.selection_history.undo())
         event_system.subscribe(EventType.REDO_SELECTION, lambda data: self.selection_history.redo())
         event_system.subscribe(EventType.OPEN_FILTER, lambda _: self.open_filter_dialog())
+        event_system.subscribe(EventType.OPEN_RATING_FILTER, lambda _: self.open_rating_filter_dialog())
+        event_system.subscribe(EventType.OPEN_NAME_FILTER, lambda _: self.open_name_filter_dialog())
         event_system.subscribe(EventType.OPEN_CLIP_SEARCH, lambda _: self.open_clip_search_dialog())
         event_system.subscribe(EventType.OPEN_TAG_EDITOR, lambda _: self.open_tag_editor())
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
