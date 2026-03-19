@@ -100,10 +100,6 @@ class FilterController(QObject):
         self.model.set_selection_filter_paths(None)
         self.reapply_filters()
 
-    def navigate_to_file(self, file_path: str):
-        if file_path in self.model.current_files:
-            self._widget.setHighlightedThumbnail(file_path)
-
     def filter_affects_rating(self) -> bool:
         return self.model.filter_affects_rating()
 

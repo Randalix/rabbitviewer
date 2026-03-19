@@ -971,6 +971,10 @@ class ThumbnailViewWidget(QFrame):
             parent = self.model.navigation_stack.pop()
             self.load_directory(parent, recursive=False)
 
+    def navigate_to_file(self, file_path: str):
+        if file_path in self.model.current_files:
+            self.setHighlightedThumbnail(file_path)
+
     def setHighlightedThumbnail(self, image_path: str):
         """Briefly highlight a thumbnail on return from picture view without changing selection."""
         try:

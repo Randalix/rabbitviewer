@@ -627,7 +627,7 @@ class MainWindow(QMainWindow):
 
     def _on_clip_result_selected(self, file_path: str):
         if self.thumbnail_view:
-            self.thumbnail_view.filter_controller.navigate_to_file(file_path)
+            self.thumbnail_view.navigate_to_file(file_path)
 
     def _warm_clip_session(self):
         from core import onnx_runtime
