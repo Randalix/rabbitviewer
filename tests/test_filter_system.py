@@ -293,7 +293,7 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     fc._is_loading = lambda: view._is_loading
     fc._label_count = lambda: len(view.labels)
     fc._on_layout_rebuilt = view._rebuild_layout_for_filter
-    view._filter_controller = fc
+    view.filter_controller = fc
 
     return view
 
@@ -362,7 +362,7 @@ class TestIsLoadingCachedFolder:
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files, is_loading=False, service=mock_client)
-        fc = view._filter_controller
+        fc = view.filter_controller
 
         with patch("gui.filter_controller.event_system"):
             fc.reapply_filters()
@@ -376,7 +376,7 @@ class TestIsLoadingCachedFolder:
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files, is_loading=True, service=mock_client)
         view.model.current_star_filter = [False, False, True, False, False, False]
-        fc = view._filter_controller
+        fc = view.filter_controller
 
         with patch("gui.filter_controller.event_system"):
             fc.reapply_filters()
@@ -394,27 +394,27 @@ class TestClearFilter:
     def test_clear_filter_resets_text(self):
         view = _make_filter_view()
         view.model.current_filter = "sunset"
-        view._filter_controller.clear_filter()
+        view.filter_controller.clear_filter()
         assert view.model.current_filter == ""
 
     def test_clear_filter_resets_star_states(self):
         view = _make_filter_view()
         view.model.current_star_filter = [False, False, True, False, False, False]
-        view._filter_controller.clear_filter()
+        view.filter_controller.clear_filter()
         assert view.model.current_star_filter == [True, True, True, True, True, True]
 
     def test_clear_filter_resets_hidden_indices(self):
         view = _make_filter_view()
         view.model.hidden_indices = {0, 3, 7}
-        view._filter_controller.clear_filter()
+        view.filter_controller.clear_filter()
         assert view.model.hidden_indices == set()
 
     def test_clear_filter_starts_debounce_timer(self):
         view = _make_filter_view()
         view.model.current_filter = "test"
         view.model.current_star_filter = [False] * 6
-        view._filter_controller.clear_filter()
-        view._filter_controller._filter_update_timer.start.assert_called_once()
+        view.filter_controller.clear_filter()
+        view.filter_controller._filter_update_timer.start.assert_called_once()
 
 
 # ===================================================================
@@ -427,7 +427,7 @@ class TestFilterQueuing:
         mock_client = MagicMock()
         files = ["/img/a.jpg"]
         view = _make_filter_view(all_files=files, service=mock_client)
-        fc = view._filter_controller
+        fc = view.filter_controller
         fc._filter_in_flight = True
 
         with patch("gui.filter_controller.event_system"):
@@ -440,7 +440,7 @@ class TestFilterQueuing:
         mock_client = MagicMock()
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files, service=mock_client)
-        fc = view._filter_controller
+        fc = view.filter_controller
         fc._filter_in_flight = True
         fc._filter_pending = True
 
@@ -460,14 +460,14 @@ class TestApplyFilter:
 
     def test_apply_filter_sets_text(self):
         view = _make_filter_view()
-        fc = view._filter_controller
+        fc = view.filter_controller
         fc.apply_filter("beach")
         assert view.model.current_filter == "beach"
         fc._filter_update_timer.start.assert_called()
 
     def test_apply_star_filter_sets_states(self):
         view = _make_filter_view()
-        fc = view._filter_controller
+        fc = view.filter_controller
         new_states = [True, False, True, False, True, False]
         fc.apply_star_filter(new_states)
         assert view.model.current_star_filter == new_states
@@ -483,7 +483,7 @@ class TestApplyFilterResults:
     def test_hides_non_visible_paths(self):
         files = ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg", "/img/d.jpg"]
         view = _make_filter_view(all_files=files)
-        fc = view._filter_controller
+        fc = view.filter_controller
         visible = {"/img/a.jpg", "/img/c.jpg"}
         with patch("gui.filter_controller.event_system"):
             fc._apply_filter_results(visible)
@@ -492,7 +492,7 @@ class TestApplyFilterResults:
     def test_all_visible_clears_hidden(self):
         files = ["/img/a.jpg", "/img/b.jpg"]
         view = _make_filter_view(all_files=files)
-        fc = view._filter_controller
+        fc = view.filter_controller
         view.model.hidden_indices = {0, 1}
         with patch("gui.filter_controller.event_system"):
             fc._apply_filter_results(set(files))
@@ -501,7 +501,7 @@ class TestApplyFilterResults:
     def test_none_visible_hides_all(self):
         files = ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
         view = _make_filter_view(all_files=files)
-        fc = view._filter_controller
+        fc = view.filter_controller
         with patch("gui.filter_controller.event_system"):
             fc._apply_filter_results(set())
         assert view.model.hidden_indices == {0, 1, 2}

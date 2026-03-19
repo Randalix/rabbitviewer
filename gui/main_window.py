@@ -443,12 +443,13 @@ class MainWindow(QMainWindow):
             self.tag_filter_dialog.set_available_tags(dir_tags, global_tags)
 
     def _toggle_selection_filter(self):
-        if self.thumbnail_view.has_active_selection_filter():
-            self.thumbnail_view.clear_selection_filter()
+        fc = self.thumbnail_view.filter_controller
+        if self.thumbnail_view.model.selection_filter_paths is not None:
+            fc.clear_selection_filter()
         else:
             selected = set(self.selection_state.selected_paths)
             if selected:
-                self.thumbnail_view.apply_selection_filter(selected)
+                fc.apply_selection_filter(selected)
 
     def get_effective_selection(self) -> list:
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
@@ -526,7 +527,7 @@ class MainWindow(QMainWindow):
             sc.remove_tags(selected, tags_to_remove)
         # Reapply filters in case tag filter is active
         if self.thumbnail_view.has_active_tag_filter():
-            self.thumbnail_view.reapply_filters()
+            self.thumbnail_view.filter_controller.reapply_filters()
 
     # ── ComfyUI ─────────────────────────────────────────────────
 
@@ -610,7 +611,7 @@ class MainWindow(QMainWindow):
             matched_set = set(result_paths)
             rest = [p for p in self.thumbnail_view.all_files if p not in matched_set]
             self.thumbnail_view.reorder_files(result_paths + rest)
-            self.thumbnail_view.apply_clip_search_results(result_paths)
+            self.thumbnail_view.filter_controller.apply_clip_search_results(result_paths)
 
     def _on_clip_search_cleared(self):
         if self.thumbnail_view:
@@ -622,11 +623,11 @@ class MainWindow(QMainWindow):
             if self._pre_clip_search_order is not None:
                 self.thumbnail_view.reorder_files(self._pre_clip_search_order)
                 self._pre_clip_search_order = None
-            self.thumbnail_view.clear_clip_search()
+            self.thumbnail_view.filter_controller.clear_clip_search()
 
     def _on_clip_result_selected(self, file_path: str):
         if self.thumbnail_view:
-            self.thumbnail_view.navigate_to_file(file_path)
+            self.thumbnail_view.filter_controller.navigate_to_file(file_path)
 
     def _warm_clip_session(self):
         from core import onnx_runtime

@@ -110,14 +110,14 @@ class ThumbnailViewWidget(QFrame):
         self._viewport_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewport")
 
         # Delegated controllers
-        self._filter_controller = FilterController(
+        self.filter_controller = FilterController(
             self, self.model, self._viewport_executor,
             is_loading=lambda: self._is_loading,
             label_count=lambda: len(self.labels),
             on_layout_rebuilt=self._rebuild_layout_for_filter,
         )
-        self._filter_controller.filters_applied.connect(self.filtersApplied)
-        self._notifications = NotificationHandler(self, self.model, self.prioritizer, self._filter_controller)
+        self.filter_controller.filters_applied.connect(self.filtersApplied)
+        self._notifications = NotificationHandler(self, self.model, self.prioritizer, self.filter_controller)
         self._notifications.preview_tick_timer.timeout.connect(self._tick_preview_loading)
 
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
@@ -157,7 +157,7 @@ class ThumbnailViewWidget(QFrame):
 
     def set_service(self, service):
         self.service = service
-        self._filter_controller.service = service
+        self.filter_controller.service = service
 
     # -- External API compatibility shims ------------------------------------
     # These delegate to self.model so that main_window.py and script_api.py
@@ -486,7 +486,7 @@ class ThumbnailViewWidget(QFrame):
             return
         self._add_image_batch(files)
         if self.model.all_files:
-            self.reapply_filters()
+            self.filter_controller.reapply_filters()
 
     @Slot(list)
     def _on_initial_folders_received(self, folder_nodes: list):
@@ -628,9 +628,9 @@ class ThumbnailViewWidget(QFrame):
                     self._insert_sorted_incremental(result.new_files)
         else:
             if self._is_loading:
-                self._filter_controller._apply_filter_results(set(self.model.all_files))
+                self.filter_controller._apply_filter_results(set(self.model.all_files))
             else:
-                self._filter_controller.start_filter_timer()
+                self.filter_controller.start_filter_timer()
 
     def _insert_sorted_incremental(self, new_files: list):
         """Insert new files at sorted positions without full rebuild."""
@@ -803,7 +803,7 @@ class ThumbnailViewWidget(QFrame):
         self.selection.dispose()
         event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed_indicators)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
-        self._filter_controller.dispose()
+        self.filter_controller.dispose()
         self._notifications.dispose()
 
         # Stop timers
@@ -837,7 +837,7 @@ class ThumbnailViewWidget(QFrame):
             self._priority_update_timer.stop()
         if hasattr(self, '_scroll_idle_timer'):
             self._scroll_idle_timer.stop()
-        self._filter_controller.reset()
+        self.filter_controller.reset()
         self._notifications.reset()
         self.model.scan_active = False
         # Recycle all materialized labels via VirtualGridManager
@@ -1015,47 +1015,6 @@ class ThumbnailViewWidget(QFrame):
 
         return None
 
-    # -- Filter delegates (public API unchanged) ------------------------------
-
-    def apply_filter(self, filter_text: str):
-        self._filter_controller.apply_filter(filter_text)
-
-    def apply_star_filter(self, star_states: list):
-        self._filter_controller.apply_star_filter(star_states)
-
-    def apply_tag_filter(self, tag_names: list):
-        self._filter_controller.apply_tag_filter(tag_names)
-
-    def clear_filter(self):
-        self._filter_controller.clear_filter()
-
-    def apply_clip_search_results(self, result_paths: list):
-        self._filter_controller.apply_clip_search_results(result_paths)
-
-    def clear_clip_search(self):
-        self._filter_controller.clear_clip_search()
-
-    def apply_person_filter(self, file_paths: list):
-        self._filter_controller.apply_person_filter(file_paths)
-
-    def clear_person_filter(self):
-        self._filter_controller.clear_person_filter()
-
-    def apply_selection_filter(self, paths: set):
-        self._filter_controller.apply_selection_filter(paths)
-
-    def clear_selection_filter(self):
-        self._filter_controller.clear_selection_filter()
-
-    def has_active_selection_filter(self) -> bool:
-        return self.model.selection_filter_paths is not None
-
-    def navigate_to_file(self, file_path: str):
-        self._filter_controller.navigate_to_file(file_path)
-
-    def reapply_filters(self):
-        self._filter_controller.reapply_filters()
-
     def _rebuild_layout_for_filter(self):
         """Callback for FilterController: widget operations after filter layout rebuild."""
         if not self._virtual_grid:
@@ -1075,8 +1034,8 @@ class ThumbnailViewWidget(QFrame):
         self._virtual_grid.update_layout()
         self._sync_virtual_viewport()
 
-        if self._filter_controller.needs_heatmap_seed:
-            self._filter_controller.needs_heatmap_seed = False
+        if self.filter_controller.needs_heatmap_seed:
+            self.filter_controller.needs_heatmap_seed = False
             self._prioritize_visible_thumbnails()
         else:
             QTimer.singleShot(100, self._prioritize_visible_thumbnails)
@@ -1201,16 +1160,16 @@ class ThumbnailViewWidget(QFrame):
         return len(self.model.current_files)
 
     def filter_affects_rating(self) -> bool:
-        return self._filter_controller.filter_affects_rating()
+        return self.model.filter_affects_rating()
 
     def has_active_tag_filter(self) -> bool:
-        return self._filter_controller.has_active_tag_filter()
+        return self.model.has_active_tag_filter()
 
     # -- RAW+JPG group mode ------------------------------------------------
 
     def toggle_group_mode(self):
         msg = self.model.toggle_group_mode()
-        self.reapply_filters()
+        self.filter_controller.reapply_filters()
         event_system.publish(StatusMessageEventData(
             event_type=EventType.STATUS_MESSAGE, source="thumbnail_view",
             timestamp=time.time(), message=msg, timeout=3000,
