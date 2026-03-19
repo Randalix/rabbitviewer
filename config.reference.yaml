@@ -112,9 +112,53 @@ hotkeys:
   "menu:open_with":
     sequence: Space
     description: Open with external application
-  open_comfyui:
+  "menu:bookmark":
+    sequence: B
+    description: Copy/move files to bookmarked directories
+  "menu:filter":
+    sequence: F
+    description: Open filter menu
+  "menu:goto":
     sequence: G
+    description: Go to navigation menu
+  "menu:export":
+    sequence: X
+    description: Open export menu
+  "menu:rotate":
+    sequence: R
+    description: Open rotate menu
+  navigate_parent:
+    sequence: Alt+Up
+    description: Navigate to parent folder
+  open_breadcrumb:
+    sequence: Ctrl+L
+    description: Open breadcrumb path bar
+  open_comfyui:
+    sequence: Z
     description: Open ComfyUI generation dialog
+  "script:delete_selected":
+    sequence: Shift+R
+    description: Delete selected images
+    extra_sequences:
+      - Del
+  clip_search:
+    sequence: "/"
+    description: Open CLIP semantic search
+  copy_paths:
+    sequence: Ctrl+Shift+C
+    description: Copy file paths to clipboard
+  copy_files:
+    sequence: Ctrl+C
+    description: Copy files to clipboard (for Finder paste)
+  copy_image:
+    sequence: Ctrl+Shift+Alt+C
+    description: Copy image pixels to clipboard (JPEG only)
+  "script:select_all":
+    sequence: Ctrl+A
+    description: Select all images
+  "script:invert_selection":
+    sequence: Ctrl+Shift+A
+    description: Invert selection
   zoom_in:
     sequence: "+"
     description: Zoom in
