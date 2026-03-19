@@ -155,7 +155,7 @@ class FilterController(QObject):
 
     def reapply_filters(self):
         logger.info(
-            "[virtual] reapply_filters: is_loading=%s, all_files=%d, labels=%d",
+            "reapply_filters: is_loading=%s, all_files=%d, labels=%d",
             self._is_loading(), len(self.model.all_files), self._label_count(),
         )
 
@@ -241,7 +241,7 @@ class FilterController(QObject):
         new_hidden, will_update = self.model.compute_hidden_indices(visible_paths)
 
         logger.info(
-            "[virtual] _apply_filter_results: all_files=%d, visible_paths=%d, "
+            "_apply_filter_results: all_files=%d, visible_paths=%d, "
             "hidden=%d, will_update=%s",
             len(self.model.all_files), len(visible_paths), len(new_hidden),
             will_update,
@@ -251,7 +251,7 @@ class FilterController(QObject):
             self.model.apply_hidden_indices(new_hidden)
             self._update_filtered_layout()
             logger.info(
-                "[virtual] _update_filtered_layout done: current_files=%d, materialized_labels=%d",
+                "_update_filtered_layout done: current_files=%d, materialized_labels=%d",
                 len(self.model.current_files), self._label_count(),
             )
         else:
