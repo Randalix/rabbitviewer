@@ -125,9 +125,13 @@ DEFAULT_CONFIG = {
             "sequence": "B",
             "description": "Copy/move files to bookmarked directories"
         },
-        "menu:recent": {
+        "menu:filter": {
             "sequence": "F",
-            "description": "Open recent directories"
+            "description": "Open filter menu"
+        },
+        "menu:goto": {
+            "sequence": "G",
+            "description": "Go to navigation menu"
         },
         "script:delete_selected": {
             "sequence": "Shift+R",
@@ -135,7 +139,7 @@ DEFAULT_CONFIG = {
             "extra_sequences": ["Del"]
         },
         "open_comfyui": {
-            "sequence": "G",
+            "sequence": "Z",
             "description": "Open ComfyUI generation dialog"
         },
         "zoom_in": {

@@ -1035,6 +1035,15 @@ class ThumbnailViewWidget(QFrame):
     def clear_person_filter(self):
         self._filter_controller.clear_person_filter()
 
+    def apply_selection_filter(self, paths: set):
+        self._filter_controller.apply_selection_filter(paths)
+
+    def clear_selection_filter(self):
+        self._filter_controller.clear_selection_filter()
+
+    def has_active_selection_filter(self) -> bool:
+        return self.model.selection_filter_paths is not None
+
     def navigate_to_file(self, file_path: str):
         self._filter_controller.navigate_to_file(file_path)
 

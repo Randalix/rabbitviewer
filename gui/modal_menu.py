@@ -295,7 +295,7 @@ class ModalMenu(QWidget):
 
             painter.setPen(self._LABEL_FG)
             label_x = key_x + self._KEY_WIDTH + 12
-            suffix = "  >" if item.children else ""
+            suffix = "  >" if (item.children or item.refresh) else ""
             painter.drawText(label_x, y, self.width() - label_x - self._PADDING,
                              self._ROW_HEIGHT, Qt.AlignVCenter | Qt.AlignLeft,
                              item.label + suffix)

@@ -80,6 +80,14 @@ class FilterController(QObject):
         self.model.set_person_filter_paths(None)
         self.reapply_filters()
 
+    def apply_selection_filter(self, paths: set):
+        self.model.set_selection_filter_paths(paths)
+        self._filter_update_timer.start()
+
+    def clear_selection_filter(self):
+        self.model.set_selection_filter_paths(None)
+        self.reapply_filters()
+
     def navigate_to_file(self, file_path: str):
         if file_path in self.model.current_files:
             self._widget.setHighlightedThumbnail(file_path)
@@ -160,6 +168,8 @@ class FilterController(QObject):
                 visible = visible & self.model.clip_search_paths
             if self.model.person_filter_paths is not None:
                 visible = visible & self.model.person_filter_paths
+            if self.model.selection_filter_paths is not None:
+                visible = visible & self.model.selection_filter_paths
             self._apply_filter_results(visible)
             return
 
@@ -214,6 +224,8 @@ class FilterController(QObject):
             visible_paths = visible_paths & self.model.clip_search_paths
         if self.model.person_filter_paths is not None:
             visible_paths = visible_paths & self.model.person_filter_paths
+        if self.model.selection_filter_paths is not None:
+            visible_paths = visible_paths & self.model.selection_filter_paths
 
         self._apply_filter_results(visible_paths)
 

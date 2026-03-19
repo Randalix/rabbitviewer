@@ -123,7 +123,19 @@ def build_menus() -> dict:
         MenuNode("Edit bookmarks", key="e", action=_edit_bookmarks),
     ])
 
-    # Recent directories menu — rebuilt from YAML each time it opens.
+    # Filter menu — all filter options in one place.
+    filter_menu = MenuNode("Filter", children=[
+        MenuNode("Stars & duplicates", key="s", action=_publish(EventType.OPEN_FILTER)),
+        MenuNode("Tags", key="t", action=_publish(EventType.OPEN_TAG_FILTER)),
+        MenuNode("Selection", key="l", action=_publish(EventType.SELECTION_FILTER_CHANGED)),
+    ])
+
+    # Go to menu — navigation destinations.
+    goto_menu = MenuNode("Go to", children=[
+        MenuNode("Recent", key="r", refresh=lambda node: _build_recent_children(node)),
+    ])
+
+    # Recent directories menu — kept for direct access via menu_id "recent".
     recent_menu = MenuNode(
         "Recent", refresh=lambda node: _build_recent_children(node),
     )
@@ -132,5 +144,5 @@ def build_menus() -> dict:
         "sort": sort_menu, "tags": tag_menu, "export": export_menu,
         "rotate": rotate_menu, "open_with": open_with_menu,
         "compare": compare_menu, "bookmark": bookmark_menu,
-        "recent": recent_menu,
+        "recent": recent_menu, "filter": filter_menu, "goto": goto_menu,
     }

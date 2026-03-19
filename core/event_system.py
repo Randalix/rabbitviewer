@@ -70,6 +70,7 @@ class EventType(Enum):
     STAR_FILTER_CHANGED = "star_filter_changed"
     TAG_FILTER_CHANGED = "tag_filter_changed"
     DUPLICATES_FILTER_CHANGED = "duplicates_filter_changed"
+    SELECTION_FILTER_CHANGED = "selection_filter_changed"
     CLEAR_FILTERS = "clear_filters"
 
     # pHash background progress

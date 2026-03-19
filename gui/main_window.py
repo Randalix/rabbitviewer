@@ -442,6 +442,14 @@ class MainWindow(QMainWindow):
         if self.tag_filter_dialog and self.tag_filter_dialog.isVisible():
             self.tag_filter_dialog.set_available_tags(dir_tags, global_tags)
 
+    def _toggle_selection_filter(self):
+        if self.thumbnail_view.has_active_selection_filter():
+            self.thumbnail_view.clear_selection_filter()
+        else:
+            selected = set(self.selection_state.selected_paths)
+            if selected:
+                self.thumbnail_view.apply_selection_filter(selected)
+
     def get_effective_selection(self) -> list:
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
             path = self.picture_view.current_path
@@ -762,6 +770,7 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_BREADCRUMB, lambda _: self._toggle_breadcrumb_bar())
         event_system.subscribe(EventType.NAVIGATE_TO_FOLDER, lambda e: self._handle_folder_navigation(e.path))
         event_system.subscribe(EventType.OPEN_RECENT_DIRECTORY, self._handle_open_recent)
+        event_system.subscribe(EventType.SELECTION_FILTER_CHANGED, lambda _: self._toggle_selection_filter())
 
     def _handle_inspector_event(self, event_data):
         if event_data.image_path == self.current_hovered_image:
