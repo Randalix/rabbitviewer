@@ -1,11 +1,11 @@
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, QCheckBox
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 import logging
 logger = logging.getLogger(__name__)
 
 import time
-from core.event_system import event_system, EventType, TextFilterEventData, StarFilterEventData
+from core.event_system import event_system, EventType, TextFilterEventData, StarFilterEventData, DuplicatesFilterEventData
 from gui.components.star_button import StarButton, StarDragContext
 
 
@@ -60,6 +60,10 @@ class FilterDialog(QDialog):
         self.filter_input.textEdited.connect(self.on_filter_changed)
         layout.addWidget(self.filter_input)
 
+        self.duplicates_checkbox = QCheckBox("Show duplicates only")
+        self.duplicates_checkbox.stateChanged.connect(self._on_duplicates_toggled)
+        layout.addWidget(self.duplicates_checkbox)
+
         self.filter_input.setFocus()
 
     def setup_shortcuts(self):
@@ -81,10 +85,17 @@ class FilterDialog(QDialog):
         self.filter_input.setFocus()
         self.filter_input.selectAll()
 
+    def _on_duplicates_toggled(self, state: int):
+        enabled = bool(state)
+        event_system.publish(DuplicatesFilterEventData(
+            event_type=EventType.DUPLICATES_FILTER_CHANGED, source="filter_dialog",
+            timestamp=time.time(), duplicates_only=enabled))
+
     def clear_filter(self):
         self.filter_input.clear()
         for button in self.star_buttons:
             button.set_state(True)
+        self.duplicates_checkbox.setChecked(False)
 
     def _on_star_button_toggled(self, index: int, new_state: bool):
         # Qt signal delivers int; cast to bool for list consistency

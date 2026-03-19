@@ -60,6 +60,7 @@ class ThumbnailModel:
         self.current_tag_filter: List[str] = []
         self.clip_search_paths: Optional[Set[str]] = None
         self.person_filter_paths: Optional[Set[str]] = None
+        self.duplicates_only: bool = False
 
         # Folder navigation state
         self.folder_nodes: Dict[str, FolderNode] = {}
@@ -277,6 +278,9 @@ class ThumbnailModel:
     def set_person_filter_paths(self, paths: Optional[Set[str]]) -> None:
         self.person_filter_paths = paths
 
+    def set_duplicates_only(self, enabled: bool) -> None:
+        self.duplicates_only = enabled
+
     def clear_filters(self) -> None:
         """Reset all filter state."""
         self.current_filter = ""
@@ -284,6 +288,7 @@ class ThumbnailModel:
         self.current_tag_filter = []
         self.clip_search_paths = None
         self.person_filter_paths = None
+        self.duplicates_only = False
         self.hidden_indices = set()
 
     def filter_affects_rating(self) -> bool:

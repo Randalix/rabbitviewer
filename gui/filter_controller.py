@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
+import os
 from core.event_system import (event_system, EventType, StatusMessageEventData)
+from core.priority import Priority
 
 if TYPE_CHECKING:
     from gui.thumbnail_model import ThumbnailModel
@@ -40,6 +42,7 @@ class FilterController(QObject):
         event_system.subscribe(EventType.TEXT_FILTER_CHANGED, self._on_text_filter_event)
         event_system.subscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
         event_system.subscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
+        event_system.subscribe(EventType.DUPLICATES_FILTER_CHANGED, self._on_duplicates_filter_event)
         event_system.subscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
 
     # -- Public filter API ---------------------------------------------------
@@ -108,6 +111,33 @@ class FilterController(QObject):
     def _on_tag_filter_event(self, event_data):
         self.apply_tag_filter(event_data.tag_names)
 
+    def _on_duplicates_filter_event(self, event_data):
+        self.model.set_duplicates_only(event_data.duplicates_only)
+        if event_data.duplicates_only:
+            self._request_phash_urgent()
+            event_system.subscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+        else:
+            event_system.unsubscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
+        self._filter_update_timer.start()
+
+    def _on_phash_progress(self, event_data):
+        # Debounce: restart the timer so the filter re-runs ~200ms after the
+        # last pHash task in a burst completes.
+        self._filter_update_timer.start()
+
+    def _request_phash_urgent(self):
+        if not self.service or not self.model.all_files:
+            return
+        directory = self.model.current_directory_path
+        if not directory:
+            # Derive from first file path as fallback
+            first = next(iter(self.model.all_files), None)
+            directory = os.path.dirname(first) if first else None
+        if not directory:
+            return
+        self.service.request_phash_batch(
+            list(self.model.all_files), directory, Priority.GUI_REQUEST)
+
     def _on_clear_filters_event(self, event_data):
         self.clear_filter()
 
@@ -145,18 +175,28 @@ class FilterController(QObject):
         text_filter = self.model.current_filter
         star_filter = list(self.model.current_star_filter)
         tag_filter = list(self.model.current_tag_filter)
-        self._executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter)
+        duplicates_only = self.model.duplicates_only
+        self._executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter, duplicates_only)
 
-    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list):
+    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list, duplicates_only: bool = False):
         try:
             response = self.service.get_filtered_file_paths(
-                text_filter, star_filter, tag_names=tag_filter or None
+                text_filter, star_filter, tag_names=tag_filter or None,
+                duplicates_only=duplicates_only,
             )
-            if response is not None:
-                self._filtered_paths_ready.emit(set(response))
-            else:
-                logger.error("Failed to get filtered paths from daemon.")
+            if response is None:
+                logger.error("Failed to get filtered paths.")
                 self._filtered_paths_ready.emit(None)
+                return
+
+            result = set(response)
+
+            if duplicates_only:
+                # Union exact-hash duplicates with pHash near-duplicates
+                phash_dupes = self.service.get_phash_duplicate_paths(list(self.model.all_files))
+                result = result | phash_dupes
+
+            self._filtered_paths_ready.emit(result)
         except Exception as e:
             # why: service calls can raise; broad guard ensures
             # _filtered_paths_ready always fires to unlock _filter_in_flight.
@@ -239,5 +279,9 @@ class FilterController(QObject):
         event_system.unsubscribe(EventType.TEXT_FILTER_CHANGED, self._on_text_filter_event)
         event_system.unsubscribe(EventType.STAR_FILTER_CHANGED, self._on_star_filter_event)
         event_system.unsubscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
+        event_system.unsubscribe(EventType.DUPLICATES_FILTER_CHANGED, self._on_duplicates_filter_event)
         event_system.unsubscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
+        # Guard: only unsubscribe if duplicates filter was active
+        if self.model.duplicates_only:
+            event_system.unsubscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
         self._filter_update_timer.stop()
