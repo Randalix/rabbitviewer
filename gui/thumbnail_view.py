@@ -628,10 +628,7 @@ class ThumbnailViewWidget(QFrame):
                 else:
                     self._insert_sorted_incremental(result.new_files)
         else:
-            if self._is_loading:
-                self.filter_controller._apply_filter_results(set(self.model.all_files))
-            else:
-                self.filter_controller.start_filter_timer()
+            self.filter_controller.reapply_filters()
 
     def _insert_sorted_incremental(self, new_files: list):
         """Insert new files at sorted positions without full rebuild."""

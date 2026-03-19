@@ -289,15 +289,15 @@ class TestAppendFastPath:
 
 class TestAppendWithFilter:
 
-    def test_filter_active_uses_debounce(self):
-        """When filter hides files and is_loading=False, use debounce timer."""
+    def test_filter_active_reapplies_filters(self):
+        """When filter hides files and is_loading=False, reapply_filters is called."""
         view = _make_view(all_files=["/img/a.jpg"], is_loading=False)
         view.model.hidden_indices = {0}  # filter is active
 
         with patch("gui.thumbnail_view.event_system"):
             ThumbnailViewWidget._add_image_batch(view, ["/img/b.jpg"])
 
-        view.filter_controller.start_filter_timer.assert_called()
+        view.filter_controller.reapply_filters.assert_called()
 
     def test_filter_active_during_scan_uses_immediate_apply(self):
         """When filter hides files and is_loading=True, apply immediately."""
