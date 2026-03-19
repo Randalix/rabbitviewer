@@ -99,7 +99,7 @@ class NotificationHandler(QObject):
             # here because model.visible_to_original is not yet populated —
             # label creation and layout update happen asynchronously via timers.
             if first_batch:
-                self._filter_controller.needs_heatmap_seed = True
+                self._widget._needs_heatmap_seed = True
         except Exception as e:
             # why: protocol extensions in future daemon versions may produce
             # unexpected field types; isolate to prevent notification loop crash.

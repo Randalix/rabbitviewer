@@ -42,7 +42,6 @@ class FilterController(QObject):
 
         self._filter_in_flight = False
         self._filter_pending = False
-        self.needs_heatmap_seed = False
 
         self._filter_update_timer = QTimer(self)
         self._filter_update_timer.setSingleShot(True)

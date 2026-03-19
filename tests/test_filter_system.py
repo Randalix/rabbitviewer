@@ -286,7 +286,7 @@ def _make_filter_view(all_files=None, is_loading=False, service=None):
     fc.service = service
     fc._filter_in_flight = False
     fc._filter_pending = False
-    fc.needs_heatmap_seed = False
+    view._needs_heatmap_seed = False
     fc._filter_update_timer = MagicMock()
     fc._filtered_paths_ready = MagicMock()
     fc.filters_applied = MagicMock()

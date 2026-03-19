@@ -174,7 +174,7 @@ def _make_view(all_files=None, is_loading=False):
     view.filter_controller._filter_update_timer = MagicMock()
     view.filter_controller._filter_in_flight = False
     view.filter_controller._filter_pending = False
-    view.filter_controller.needs_heatmap_seed = False
+    view._needs_heatmap_seed = False
 
     # NotificationHandler — use real class so _flush_scan_layout works
     from gui.thumbnail_notifications import NotificationHandler

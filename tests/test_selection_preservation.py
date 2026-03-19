@@ -146,7 +146,7 @@ def _make_view(all_files, selected_paths=None):
 
     # Delegated controllers
     view._filter_controller = MagicMock()
-    view._filter_controller.needs_heatmap_seed = False
+    view._needs_heatmap_seed = False
     view._notifications = MagicMock()
     view._notifications.scan_batch_pending = False
     view._notifications.scan_first_batch_flushed = False

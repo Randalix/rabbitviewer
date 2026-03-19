@@ -133,6 +133,7 @@ class ThumbnailViewWidget(QFrame):
         self._thumbnail_generated_signal.connect(self._on_thumbnail_ready, Qt.QueuedConnection)
 
         self._is_loading = False
+        self._needs_heatmap_seed = False
         # why: separate from _is_loading — cached folders clear _is_loading in
         # _on_initial_files_received (immediate), uncached folders wait for scan_complete.
         self._folder_is_cached = False
@@ -1038,8 +1039,8 @@ class ThumbnailViewWidget(QFrame):
         self._virtual_grid.update_layout()
         self._sync_virtual_viewport()
 
-        if self.filter_controller.needs_heatmap_seed:
-            self.filter_controller.needs_heatmap_seed = False
+        if self._needs_heatmap_seed:
+            self._needs_heatmap_seed = False
             self._prioritize_visible_thumbnails()
         else:
             QTimer.singleShot(100, self._prioritize_visible_thumbnails)
