@@ -70,10 +70,10 @@ def transfer_file(src: str, dest_dir: str, move: bool = False) -> str:
     try:
         os.makedirs(dest_dir, exist_ok=True)
         if move:
-            shutil.move(src, dst)
+            shutil.move(src, dst)  # disk-io: move source file to bookmark destination
             return "moved"
         else:
-            shutil.copy2(src, dst)
+            shutil.copy2(src, dst)  # disk-io: copy source file to bookmark destination
             return "copied"
     except OSError as e:
         return f"error:{e}"

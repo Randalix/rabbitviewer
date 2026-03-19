@@ -47,7 +47,7 @@ def trash_with_sidecars(file_paths: List[str]) -> Dict[str, Any]:
                 try:
                     os.makedirs(home_trash, exist_ok=True)
                     import shutil
-                    shutil.move(path, home_trash)
+                    shutil.move(path, home_trash)  # disk-io: move file to trash
                     succeeded += 1
                 except Exception as fallback_e:  # why: shutil.move raises shutil.Error (not OSError) on cross-device failure
                     logger.warning(f"Home trash fallback also failed for {path}: {fallback_e}")

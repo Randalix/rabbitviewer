@@ -33,6 +33,7 @@ _MARKER = "disk-io"
 
 _OS_PATH_CALLS = {"exists", "isfile", "isdir", "getsize", "getmtime", "getatime"}
 _OS_CALLS = {"stat", "listdir", "scandir", "walk", "access", "fstat"}
+_SHUTIL_CALLS = {"copy", "copy2", "copyfile", "copytree", "move"}
 
 
 class _IOCallVisitor(ast.NodeVisitor):
@@ -98,6 +99,13 @@ class _IOCallVisitor(ast.NodeVisitor):
         # Path(...).read_text() / .read_bytes()
         if (isinstance(func, ast.Attribute)
                 and func.attr in ("read_text", "read_bytes")):
+            return True
+
+        # shutil.copy2(...), shutil.copy(...), etc.
+        if (isinstance(func, ast.Attribute)
+                and func.attr in _SHUTIL_CALLS
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "shutil"):
             return True
 
         return False

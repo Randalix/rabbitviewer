@@ -81,7 +81,7 @@ if 'PySide6' not in sys.modules:
     _qtgui = types.ModuleType('PySide6.QtGui')
     for _name in ('QImage', 'QColor', 'QMouseEvent', 'QKeyEvent',
                    'QCursor', 'QPainter', 'QFont', 'QPainterPath', 'QPen',
-                   'QTransform'):
+                   'QRegion', 'QTransform'):
         setattr(_qtgui, _name, type(_name, (_Stub,), {}))
 
     class _QPixmap(_Stub):
@@ -143,7 +143,7 @@ if 'PySide6' not in sys.modules:
         def setPlaceholderText(self, t): pass
         def clear(self): self._text = ""; self._cursor = 0
     _qtwidgets.QLineEdit = _QLineEdit  # type: ignore[attr-defined]
-    for _name in ('QTextEdit', 'QPlainTextEdit', 'QComboBox', 'QSpinBox', 'QDialog'):
+    for _name in ('QTextEdit', 'QPlainTextEdit', 'QComboBox', 'QSpinBox', 'QDialog', 'QCheckBox'):
         setattr(_qtwidgets, _name, type(_name, (_QWidget,), {}))
     # QCompleter needs class-level attributes (PopupCompletion, etc.)
     class _QCompleter(_Stub):

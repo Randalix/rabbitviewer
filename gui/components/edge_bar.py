@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QMouseEvent, QTransform
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QMouseEvent, QRegion, QTransform
 from PySide6.QtWidgets import QWidget
 
 if TYPE_CHECKING:
@@ -83,7 +83,6 @@ class EdgeBar(QWidget):
         self._cached_shape: Optional[QPainterPath] = None
         self._cached_shape_key: tuple = ()
         self._last_clip: Optional[QRectF] = None
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.hide()
 
@@ -125,6 +124,11 @@ class EdgeBar(QWidget):
         else:
             self.setGeometry(0, ph - total_h, w, total_h)
         self._cached_shape = None
+        shape = _build_top_shape(float(w), float(self._bar_height), float(ph) * SIDE_FRACTION)
+        if self._edge != "top":
+            shape = QTransform.fromScale(1, -1).map(shape)
+            shape.translate(0, float(total_h))
+        self.setMask(QRegion(shape.toFillPolygon(QTransform()).toPolygon()))
         self.raise_()
 
     def schedule_repaint(self) -> None:
