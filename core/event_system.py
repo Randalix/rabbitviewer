@@ -69,7 +69,11 @@ class EventType(Enum):
     TEXT_FILTER_CHANGED = "text_filter_changed"
     STAR_FILTER_CHANGED = "star_filter_changed"
     TAG_FILTER_CHANGED = "tag_filter_changed"
+    DUPLICATES_FILTER_CHANGED = "duplicates_filter_changed"
     CLEAR_FILTERS = "clear_filters"
+
+    # pHash background progress
+    PHASH_PROGRESS = "phash_progress"
 
     # Script / menu events
     RUN_SCRIPT = "run_script"
@@ -160,6 +164,14 @@ class StarFilterEventData(EventData):
 @dataclass
 class TagFilterEventData(EventData):
     tag_names: list  # list of tag name strings
+
+@dataclass
+class DuplicatesFilterEventData(EventData):
+    duplicates_only: bool
+
+@dataclass
+class PHashProgressEventData(EventData):
+    file_path: str
 
 @dataclass
 class RunScriptEventData(EventData):

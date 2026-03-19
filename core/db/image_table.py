@@ -11,7 +11,7 @@ import os
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.db.base_table import BaseTable
 from core.priority import ImageEntry
@@ -808,8 +808,9 @@ class ImageTable(BaseTable):
             return []
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
-                                tag_names: Optional[List[str]] = None) -> List[str]:
-        """Gets file paths that match the text, star, and tag filters."""
+                                tag_names: Optional[List[str]] = None,
+                                duplicates_only: bool = False) -> List[str]:
+        """Gets file paths that match the text, star, tag, and duplicates filters."""
         try:
             conn = self._read_conn()
             cursor = conn.cursor()
@@ -841,6 +842,14 @@ class ImageTable(BaseTable):
                     WHERE t.name IN ({tag_placeholders})
                 )"""
                 params.extend(tag_names)
+
+            # Add duplicates filter
+            if duplicates_only:
+                query += """ AND content_hash IN (
+                    SELECT content_hash FROM image_metadata
+                    WHERE content_hash IS NOT NULL
+                    GROUP BY content_hash HAVING COUNT(*) > 1
+                )"""
 
             cursor.execute(query, params)
             return [row[0] for row in cursor.fetchall()]
@@ -1124,6 +1133,71 @@ class ImageTable(BaseTable):
         except sqlite3.Error as e:
             logger.error(f"Error setting content hash for {file_path}: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    #  Perceptual hash
+    # ------------------------------------------------------------------
+
+    def set_phash(self, file_path: str, phash_int: int) -> bool:
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "UPDATE image_metadata SET phash = ?, updated_at = ? WHERE file_path = ?",
+                    (phash_int, time.time(), file_path),
+                )
+                self._soft_commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logger.error("Error setting phash for %s: %s", os.path.basename(file_path), e)
+            return False
+
+    def get_files_missing_phash(self, file_paths: List[str]) -> List[str]:
+        """Returns the subset of file_paths that have a thumbnail but no phash."""
+        if not file_paths:
+            return []
+        results = []
+        chunk_size = 900
+        try:
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            for i in range(0, len(file_paths), chunk_size):
+                chunk = file_paths[i:i + chunk_size]
+                placeholders = ','.join('?' for _ in chunk)
+                cursor.execute(
+                    f"SELECT file_path FROM image_metadata "
+                    f"WHERE file_path IN ({placeholders}) "
+                    f"AND thumbnail_path IS NOT NULL AND phash IS NULL",
+                    chunk,
+                )
+                results.extend(row[0] for row in cursor.fetchall())
+            return results
+        except sqlite3.Error as e:
+            logger.error("Error getting files missing phash: %s", e)
+            return []
+
+    def get_phash_pairs(self, file_paths: List[str]) -> List[Tuple[str, int]]:
+        """Returns (file_path, phash) for files in file_paths that have a phash."""
+        if not file_paths:
+            return []
+        results = []
+        chunk_size = 900
+        try:
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            for i in range(0, len(file_paths), chunk_size):
+                chunk = file_paths[i:i + chunk_size]
+                placeholders = ','.join('?' for _ in chunk)
+                cursor.execute(
+                    f"SELECT file_path, phash FROM image_metadata "
+                    f"WHERE file_path IN ({placeholders}) AND phash IS NOT NULL",
+                    chunk,
+                )
+                results.extend((row[0], row[1]) for row in cursor.fetchall())
+            return results
+        except sqlite3.Error as e:
+            logger.error("Error getting phash pairs: %s", e)
+            return []
 
     # ------------------------------------------------------------------
     #  Move / rename

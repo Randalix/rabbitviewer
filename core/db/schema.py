@@ -79,6 +79,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Migration: add phash column for perceptual near-duplicate detection
+        try:
+            cursor.execute("ALTER TABLE image_metadata ADD COLUMN phash INTEGER")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_phash ON image_metadata(phash)')
+
         # ── tags ──────────────────────────────────────────────────────
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tags (
