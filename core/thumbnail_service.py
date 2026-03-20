@@ -13,6 +13,7 @@ from core.event_system import event_system, EventType, StatusMessageEventData, S
 from core.folder_node import FolderNode
 from core.notifications import Notification, FilesRemovedData, ImageEntryModel
 from core.rendermanager import Priority, TaskType, SourceJob
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -499,40 +500,39 @@ class ThumbnailService:
         if query_embedding is None:
             return []
 
-        # Reuse cached matrix if no embeddings were added/removed since last build
-        gen = self.db.embeddings.generation
-        with self._clip_cache_lock:
-            if self._clip_cache is not None and self._clip_cache_gen == gen:
-                file_paths, matrix = self._clip_cache
-            else:
-                rows = self.db.embeddings.get_all_embeddings()
-                file_paths, matrix = clip_search.build_embedding_matrix(rows)
-                if matrix is not None:
-                    self._clip_cache = (file_paths, matrix)
-                    self._clip_cache_gen = gen
+        if scope:
+            # Scope provided: fetch only necessary embeddings, no caching
+            rows = self.db.embeddings.get_embeddings_for_files(scope)
+            file_paths, matrix = clip_search.build_embedding_matrix(rows)
+        else:
+            # No scope: use global cache
+            gen = self.db.embeddings.generation
+            with self._clip_cache_lock:
+                if self._clip_cache is not None and self._clip_cache_gen == gen:
+                    file_paths, matrix = self._clip_cache
+                else:
+                    rows = self.db.embeddings.get_all_embeddings()
+                    file_paths, matrix = clip_search.build_embedding_matrix(rows)
+                    if matrix is not None:
+                        self._clip_cache = (file_paths, matrix)
+                        self._clip_cache_gen = gen
 
-        if matrix is None:
+        if matrix is None or len(file_paths) == 0:
             return []
 
-        np_mod = clip_search._get_numpy()
-
-        # Filter to scope if provided
-        if scope is not None:
-            scope_set = set(scope)
-            mask = [i for i, fp in enumerate(file_paths) if fp in scope_set]
-            if not mask:
-                return []
-            file_paths = [file_paths[i] for i in mask]
-            matrix = matrix[np_mod.array(mask)]
-
         scores = matrix @ query_embedding
-        results = [
-            (fp, float(scores[i]))
-            for i, fp in enumerate(file_paths)
-            if float(scores[i]) >= threshold
-        ]
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results
+
+        above_threshold_indices = np.where(scores >= threshold)[0]
+        if len(above_threshold_indices) == 0:
+            return []
+
+        scores_above_threshold = scores[above_threshold_indices]
+        sorted_indices = np.argsort(scores_above_threshold)[::-1]  # descending
+
+        # Map sorted indices back to original file_paths indices
+        original_indices = above_threshold_indices[sorted_indices]
+
+        return [(file_paths[i], float(scores[i])) for i in original_indices]
 
     def find_similar_images(self, source_path: str, threshold: float = 0.5, scope=None):
         """Return images with cosine similarity >= threshold to source_path.
@@ -552,36 +552,36 @@ class ThumbnailService:
 
         source_embedding = np_mod.frombuffer(blob, dtype=np_mod.float32).copy()
 
-        gen = self.db.embeddings.generation
-        with self._clip_cache_lock:
-            if self._clip_cache is not None and self._clip_cache_gen == gen:
-                file_paths, matrix = self._clip_cache
-            else:
-                rows = self.db.embeddings.get_all_embeddings()
-                file_paths, matrix = clip_search.build_embedding_matrix(rows)
-                if matrix is not None:
-                    self._clip_cache = (file_paths, matrix)
-                    self._clip_cache_gen = gen
+        if scope:
+            rows = self.db.embeddings.get_embeddings_for_files(scope)
+            file_paths, matrix = clip_search.build_embedding_matrix(rows)
+        else:
+            gen = self.db.embeddings.generation
+            with self._clip_cache_lock:
+                if self._clip_cache is not None and self._clip_cache_gen == gen:
+                    file_paths, matrix = self._clip_cache
+                else:
+                    rows = self.db.embeddings.get_all_embeddings()
+                    file_paths, matrix = clip_search.build_embedding_matrix(rows)
+                    if matrix is not None:
+                        self._clip_cache = (file_paths, matrix)
+                        self._clip_cache_gen = gen
 
         if matrix is None or not file_paths:
             return []
 
-        if scope is not None:
-            scope_set = set(scope)
-            mask = [i for i, fp in enumerate(file_paths) if fp in scope_set]
-            if not mask:
-                return []
-            file_paths = [file_paths[i] for i in mask]
-            matrix = matrix[np_mod.array(mask)]
-
         scores = matrix @ source_embedding
-        results = [
-            (fp, float(scores[i]))
-            for i, fp in enumerate(file_paths)
-            if float(scores[i]) >= threshold
-        ]
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results
+
+        above_threshold_indices = np.where(scores >= threshold)[0]
+        if len(above_threshold_indices) == 0:
+            return []
+
+        scores_above_threshold = scores[above_threshold_indices]
+        sorted_indices = np.argsort(scores_above_threshold)[::-1]  # descending
+
+        original_indices = above_threshold_indices[sorted_indices]
+
+        return [(file_paths[i], float(scores[i])) for i in original_indices]
 
     def find_similar_by_phash(self, source_path: str, max_distance: int, scope):
         """Return images within max_distance Hamming distance of source_path's pHash.

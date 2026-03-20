@@ -67,6 +67,27 @@ class EmbeddingTable(BaseTable):
             logger.error(f"Error getting all embeddings: {e}")
             return []
 
+    def get_embeddings_for_files(self, file_paths: List[str],
+                                 model_name: str = "clip-vit-b-32") -> List[tuple]:
+        """Return (file_path, embedding_blob) pairs for a list of files."""
+        if not file_paths:
+            return []
+        try:
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            placeholders = ','.join('?' for _ in file_paths)
+            query_params = file_paths + [model_name]
+            cursor.execute(
+                f'''SELECT file_path, embedding
+                    FROM clip_embeddings
+                    WHERE file_path IN ({placeholders}) AND model_name = ?''',
+                query_params
+            )
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting embeddings for files: {e}")
+            return []
+
     def get_files_missing_embeddings(self, file_paths: List[str],
                                      model_name: str = "clip-vit-b-32") -> List[str]:
         """Return file_paths not yet processed for CLIP embedding.
