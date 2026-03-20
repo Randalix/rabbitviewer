@@ -391,12 +391,13 @@ class ThumbnailManager:
                     return None
                 md5_hash, _ = header_result
                 view_image_path = plugin.get_view_image_path(md5_hash)
-                try:
-                    os.makedirs(os.path.dirname(view_image_path), exist_ok=True)
-                    shutil.copy2(image_path, view_image_path)  # disk-io: NAS full-file copy
-                except OSError as e:
-                    logger.warning("Failed to copy NAS file to cache: %s: %s", image_path, e)
-                    return None
+                if not os.path.exists(view_image_path):  # disk-io: skip copy if already cached
+                    try:
+                        os.makedirs(os.path.dirname(view_image_path), exist_ok=True)
+                        shutil.copy(image_path, view_image_path)  # disk-io: NAS full-file copy
+                    except OSError as e:
+                        logger.warning("Failed to copy NAS file to cache: %s: %s", image_path, e)
+                        return None
                 self.metadata_db.images.set_thumbnail_paths(image_path, view_image_path=view_image_path)
                 if self.cache_size_manager:
                     try:
