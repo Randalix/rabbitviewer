@@ -550,6 +550,37 @@ class ThumbnailService:
         results.sort(key=lambda x: x[1], reverse=True)
         return results
 
+    def find_similar_by_phash(self, source_path: str, max_distance: int, scope):
+        """Return images within max_distance Hamming distance of source_path's pHash.
+
+        Returns [(file_path, distance), ...] sorted ascending by distance,
+        or None if source has no pHash stored.
+        scope: required list of file_paths to search within.
+        """
+        max_distance = int(max_distance)
+
+        source_pairs = self.db.images.get_phash_pairs([source_path])
+        if not source_pairs:
+            return None
+        source_hash = source_pairs[0][1]
+
+        if not scope:
+            return []
+        pairs = self.db.images.get_phash_pairs(list(scope))
+        if not pairs:
+            return []
+
+        results = []
+        for fp, h in pairs:
+            if fp == source_path:
+                continue
+            # Mask to 64 bits before counting to handle signed int64 storage
+            dist = bin((source_hash ^ h) & 0xFFFFFFFFFFFFFFFF).count('1')
+            if dist <= max_distance:
+                results.append((fp, dist))
+        results.sort(key=lambda x: x[1])
+        return results
+
     def invalidate_clip_cache(self):
         with self._clip_cache_lock:
             self._clip_cache = None
