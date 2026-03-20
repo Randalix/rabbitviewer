@@ -26,6 +26,11 @@ THUMBNAIL_SIZE = 128
 @pytest.fixture(scope="function")
 def clean_environment():
     """Set up and tear down test environment."""
+    # Reset global plugin registry to ensure config changes are applied
+    from plugins.base_plugin import plugin_registry
+    plugin_registry.plugins.clear()
+    plugin_registry.format_map.clear()
+
     os.makedirs(TEST_DIR, exist_ok=True)
     os.makedirs(TEST_CACHE_DIR, exist_ok=True)
 

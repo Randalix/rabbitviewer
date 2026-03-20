@@ -75,6 +75,12 @@ def get_session(model_path: str) -> Optional[object]:
             opts = ort.SessionOptions()
             opts.inter_op_num_threads = 1
             opts.intra_op_num_threads = 1
+
+            # Enable graph optimization caching. The first run will be slow as it
+            # saves the optimized graph; subsequent runs will be much faster.
+            optimized_model_path = model_path + ".ort"
+            opts.optimized_model_filepath = optimized_model_path
+
             session = ort.InferenceSession(model_path, opts, providers=providers)
             logger.info("ONNX session created in %.3fs: %s", time.perf_counter() - t0, model_path)
         except Exception:  # why: onnxruntime raises undocumented C++ exceptions on CoreML init failure, model format errors, provider mismatches
