@@ -285,7 +285,7 @@ class ScriptAPI:
             if view:
                 view.invalidate_thumbnails(image_paths, clear_labels=clear_gui)
         self._on_main_thread(_do)
-        self.service.invalidate_thumbnail_paths(image_paths)
+        self.main_window.service.invalidate_thumbnail_paths(image_paths)
 
     def rotate_thumbnails(self, image_paths: List[str], degrees: int) -> None:
         """Visually rotate thumbnails in-place without regeneration."""
@@ -308,7 +308,7 @@ class ScriptAPI:
             return
 
         # DB + sidecar update (background). No cache invalidation.
-        success = self.service.rotate_images(image_paths, degrees)
+        success = self.main_window.service.rotate_images(image_paths, degrees)
 
         # Immediate visual rotation in PySide (no NAS round-trip).
         def _gui_update():
@@ -340,7 +340,7 @@ class ScriptAPI:
         """Adds tags to the given images via the daemon."""
         if not image_paths or not tags:
             return
-        success = self.service.set_tags(image_paths, tags)
+        success = self.main_window.service.set_tags(image_paths, tags)
         if success:
             logger.debug(f"set_tags_for_images: {len(tags)} tags set on {len(image_paths)} images.")
         else:
@@ -350,7 +350,7 @@ class ScriptAPI:
         """Removes tags from the given images via the daemon."""
         if not image_paths or not tags:
             return
-        success = self.service.remove_tags(image_paths, tags)
+        success = self.main_window.service.remove_tags(image_paths, tags)
         if success:
             logger.debug(f"remove_tags_from_images: {len(tags)} tags removed from {len(image_paths)} images.")
         else:
@@ -360,7 +360,7 @@ class ScriptAPI:
         """Returns {path: [tag_names]} for the given images."""
         if not image_paths:
             return {}
-        response = self.service.get_image_tags(image_paths)
+        response = self.main_window.service.get_image_tags(image_paths)
         return response if response else {}
 
     def show_overlay(self, image_paths: List[str], renderer: str,
