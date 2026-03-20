@@ -51,6 +51,7 @@ class ThumbnailModel:
 
         # Directory and scan state
         self.current_directory_path: Optional[str] = None
+        self.is_recursive: bool = True
         self.scan_active: bool = False
         self.last_layout_file_count: int = 0
 
@@ -381,6 +382,7 @@ class ThumbnailModel:
         self.thumb_path_cache.clear()
         self.initial_thumb_paths.clear()
         self.current_directory_path = None
+        self.is_recursive = True
         self.folder_nodes.clear()
         self.navigation_stack.clear()
         self.scan_active = False

@@ -845,7 +845,9 @@ class ImageTable(BaseTable):
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None,
                                 duplicates_only: bool = False,
-                                date_range: Optional[Tuple[float, float]] = None) -> List[str]:
+                                date_range: Optional[Tuple[float, float]] = None,
+                                directory: Optional[str] = None,
+                                recursive: bool = True) -> List[str]:
         """Gets file paths that match the text, star, tag, and duplicates filters."""
         try:
             conn = self._read_conn()
@@ -853,6 +855,16 @@ class ImageTable(BaseTable):
 
             query = "SELECT file_path FROM image_metadata WHERE 1=1"
             params: list = []
+
+            # Add directory scope
+            if directory is not None:
+                search_path = os.path.join(directory, '')
+                if recursive:
+                    query += " AND file_path LIKE ?"
+                    params.append(search_path + '%')
+                else:
+                    query += " AND file_path LIKE ? AND SUBSTR(file_path, LENGTH(?) + 1) NOT LIKE '%/%'"
+                    params.extend([search_path + '%', search_path])
 
             # Add text filter
             if text_filter:

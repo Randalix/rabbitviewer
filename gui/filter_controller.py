@@ -226,13 +226,16 @@ class FilterController(QObject):
         tag_filter = list(self.model.current_tag_filter)
         duplicates_only = self.model.duplicates_only
         date_range = self.model.current_date_filter
-        self._executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter, duplicates_only, date_range)
+        directory = self.model.current_directory_path
+        is_recursive = self.model.is_recursive
+        self._executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter, duplicates_only, date_range, directory, is_recursive)
 
-    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list, duplicates_only: bool = False, date_range: Optional[Tuple[float, float]] = None):
+    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list, duplicates_only: bool = False, date_range: Optional[Tuple[float, float]] = None, directory: Optional[str] = None, is_recursive: bool = True):
         try:
             response = self.service.get_filtered_file_paths(
                 text_filter, star_filter, tag_names=tag_filter or None,
                 duplicates_only=duplicates_only, date_range=date_range,
+                directory=directory, recursive=is_recursive,
             )
             if response is None:
                 logger.error("Failed to get filtered paths.")

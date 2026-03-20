@@ -179,12 +179,16 @@ class ThumbnailService:
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None,
                                 duplicates_only: bool = False,
-                                date_range: Optional[Tuple[float, float]] = None) -> List[str]:
+                                date_range: Optional[Tuple[float, float]] = None,
+                                directory: Optional[str] = None,
+                                recursive: bool = True) -> List[str]:
         return self.db.images.get_filtered_file_paths(
             text_filter, star_states,
             tag_names=tag_names if tag_names else None,
             duplicates_only=duplicates_only,
             date_range=date_range,
+            directory=directory,
+            recursive=recursive,
         )
 
     def get_date_range_for_paths(self, file_paths: List[str]) -> Optional[Tuple[float, float]]:

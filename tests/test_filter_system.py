@@ -667,6 +667,71 @@ class TestDateRangeFiltering:
 
 
 # ===================================================================
+# Directory-scoped filtering
+# ===================================================================
+
+class TestDirectoryScopedFiltering:
+
+    def test_directory_none_returns_all(self, tmp_env):
+        """directory=None is a no-op — all rows are returned (regression guard)."""
+        db = tmp_env["db"]
+        _insert_with_rating(db, "/photos/a.jpg", 0)
+        _insert_with_rating(db, "/docs/b.jpg", 0)
+
+        result = db.images.get_filtered_file_paths("", [True] * 6, directory=None)
+        assert set(result) == {"/photos/a.jpg", "/docs/b.jpg"}
+
+    def test_directory_recursive_excludes_other_dirs(self, tmp_env):
+        """directory set, recursive=True returns only paths under that prefix."""
+        db = tmp_env["db"]
+        _insert_with_rating(db, "/photos/vacation/a.jpg", 0)
+        _insert_with_rating(db, "/photos/vacation/sub/b.jpg", 0)
+        _insert_with_rating(db, "/docs/c.jpg", 0)
+
+        result = db.images.get_filtered_file_paths(
+            "", [True] * 6, directory="/photos/vacation", recursive=True
+        )
+        assert set(result) == {"/photos/vacation/a.jpg", "/photos/vacation/sub/b.jpg"}
+
+    def test_directory_non_recursive_excludes_subdirs(self, tmp_env):
+        """directory set, recursive=False returns only direct children."""
+        db = tmp_env["db"]
+        _insert_with_rating(db, "/photos/direct.jpg", 0)
+        _insert_with_rating(db, "/photos/sub/nested.jpg", 0)
+        _insert_with_rating(db, "/other/x.jpg", 0)
+
+        result = db.images.get_filtered_file_paths(
+            "", [True] * 6, directory="/photos", recursive=False
+        )
+        assert result == ["/photos/direct.jpg"]
+
+    def test_directory_with_text_filter(self, tmp_env):
+        """Text filter and directory scope compose correctly."""
+        db = tmp_env["db"]
+        _insert_with_rating(db, "/photos/beach.jpg", 0)
+        _insert_with_rating(db, "/photos/mountain.jpg", 0)
+        _insert_with_rating(db, "/other/beach.jpg", 0)
+
+        result = db.images.get_filtered_file_paths(
+            "beach", [True] * 6, directory="/photos", recursive=True
+        )
+        assert result == ["/photos/beach.jpg"]
+
+    def test_directory_with_star_filter(self, tmp_env):
+        """Star filter and directory scope compose correctly."""
+        db = tmp_env["db"]
+        _insert_with_rating(db, "/photos/low.jpg", 1)
+        _insert_with_rating(db, "/photos/high.jpg", 5)
+        _insert_with_rating(db, "/other/high.jpg", 5)
+
+        stars = [False, False, False, False, False, True]
+        result = db.images.get_filtered_file_paths(
+            "", stars, directory="/photos", recursive=True
+        )
+        assert result == ["/photos/high.jpg"]
+
+
+# ===================================================================
 # FilterDialog.clear_filter syncs button state
 # ===================================================================
 

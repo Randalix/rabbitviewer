@@ -437,6 +437,7 @@ class ThumbnailViewWidget(QFrame):
         self._is_loading = True
         self._folder_is_cached = False
         self.model.current_directory_path = directory_path
+        self.model.is_recursive = recursive
         self._load_directory_deferred(directory_path, recursive)
 
     def _load_directory_deferred(self, directory_path: str, recursive: bool = True):
