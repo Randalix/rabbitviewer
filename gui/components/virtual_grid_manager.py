@@ -5,6 +5,7 @@ from typing import Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QPoint
 from PySide6.QtWidgets import QScrollArea, QWidget
+from shiboken6 import isValid
 
 if TYPE_CHECKING:
     from gui.components.thumbnail_label import ThumbnailLabel
@@ -327,8 +328,12 @@ class VirtualGridManager(QObject):
 
     def clear(self, recycle_label: Callable[[ThumbnailLabel], None]) -> None:
         """Recycle all materialized labels."""
-        for label in self._mat_labels.values():
-            recycle_label(label)
+        # why: snapshot values before iterating so _mat_labels.clear() always
+        # runs even if recycle_label raises (stale C++ object). Skipping invalid
+        # labels avoids crashing on labels that were already deleted externally.
+        for label in list(self._mat_labels.values()):
+            if isValid(label):
+                recycle_label(label)
         self._mat_labels.clear()
         self._mat_start = 0
         self._mat_end = 0
@@ -339,6 +344,9 @@ class VirtualGridManager(QObject):
 
     def _reposition_materialized(self) -> None:
         """Move all materialized labels to their current grid positions."""
+        stale = [idx for idx, lbl in self._mat_labels.items() if not isValid(lbl)]
+        for idx in stale:
+            del self._mat_labels[idx]
         for vis_idx, label in self._mat_labels.items():
             label.move(self._pos_x(vis_idx), self._pos_y(vis_idx))
 

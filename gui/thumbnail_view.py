@@ -32,6 +32,7 @@ from gui.viewport_prioritizer import ViewportPrioritizer
 from gui.filter_controller import FilterController
 from gui.thumbnail_notifications import NotificationHandler
 from gui.components.edge_bar import EdgeBar, SelectionEdgeIndicator
+from shiboken6 import isValid
 
 class ThumbnailViewWidget(QFrame):
     doubleClicked = Signal(str)
@@ -153,7 +154,7 @@ class ThumbnailViewWidget(QFrame):
     def _update_label_selection(self, orig_idx: int, selected: bool) -> None:
         """Callback for SelectionInteraction to update label highlight state."""
         label = self.labels.get(orig_idx)
-        if label and label.isVisible():
+        if label and isValid(label) and label.isVisible():
             label.setSelected(selected)
 
     def set_service(self, service):
@@ -254,6 +255,8 @@ class ThumbnailViewWidget(QFrame):
             self.selection.on_mouse_move(current_idx)
 
     def _recycle_label(self, label: ThumbnailLabel):
+        if not isValid(label):
+            return
         if len(self._widget_pool) < self._pool_size:
             label.hide()
             label.setPixmap(QPixmap())
@@ -273,11 +276,16 @@ class ThumbnailViewWidget(QFrame):
     def _get_or_create_label(self, file_path: str, original_idx: int) -> ThumbnailLabel:
         if original_idx in self.labels:
             label = self.labels[original_idx]
-            label.file_path = file_path
-            label.original_path = file_path
-            label.loaded = False
-            label.show()
-            return label
+            if not isValid(label):
+                # why: C++ object was deleted externally (deleteLater fired);
+                # evict the stale wrapper so it can't propagate into _mat_labels.
+                del self.labels[original_idx]
+            else:
+                label.file_path = file_path
+                label.original_path = file_path
+                label.loaded = False
+                label.show()
+                return label
 
         if self._widget_pool:
             label = self._widget_pool.pop()
@@ -718,7 +726,7 @@ class ThumbnailViewWidget(QFrame):
         self.labels.clear()
         self._recompute_selected_indices()
 
-        self._update_filtered_layout()
+        self._rebuild_layout_for_filter()
 
     def scroll_to_top(self, image_path: str) -> None:
         """Scroll so the row containing *image_path* is the first visible row,

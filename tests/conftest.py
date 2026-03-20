@@ -162,6 +162,14 @@ if 'PySide6' not in sys.modules:
     sys.modules['PySide6.QtWidgets'] = _qtwidgets
 
 # ---------------------------------------------------------------------------
+# shiboken6 stub — isValid(obj) always returns True in tests (no real Qt objects)
+# ---------------------------------------------------------------------------
+if 'shiboken6' not in sys.modules:
+    _shiboken6 = types.ModuleType('shiboken6')
+    _shiboken6.isValid = lambda obj: True  # type: ignore[attr-defined]
+    sys.modules['shiboken6'] = _shiboken6
+
+# ---------------------------------------------------------------------------
 # watchdog stubs — allow filewatcher/network modules to import without watchdog
 # ---------------------------------------------------------------------------
 if 'watchdog' not in sys.modules:
