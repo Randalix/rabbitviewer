@@ -9,6 +9,7 @@ import time
 from typing import List, Optional, Dict, Any, Tuple
 
 from core.directory_scanner import DirectoryScanner, ReconcileContext
+from core.event_system import event_system, EventType, StatusMessageEventData, StatusSection
 from core.folder_node import FolderNode
 from core.notifications import Notification, FilesRemovedData, ImageEntryModel
 from core.rendermanager import Priority, TaskType, SourceJob
@@ -69,6 +70,15 @@ class ThumbnailService:
         reconcile_ctx = ReconcileContext(db_file_set=set(db_files))
 
         def _on_reconcile_complete():
+            if reconcile_ctx.inaccessible:
+                event_system.publish(StatusMessageEventData(
+                    event_type=EventType.STATUS_MESSAGE,
+                    source="thumbnail_service",
+                    timestamp=time.time(),
+                    message=f"Directory not accessible (volume unmounted?): {path}",
+                    section=StatusSection.PROCESS,
+                    permanent=True,
+                ))
             if reconcile_ctx.ghost_files:
                 logger.info(
                     f"Reconciliation found {len(reconcile_ctx.ghost_files)} "
@@ -122,15 +132,11 @@ class ThumbnailService:
             if all_files:
                 cfg = self.tm.config_manager
                 if cfg.get("ai.enabled", True):
-                    if cfg.get("ai.clip_search.enabled", True):
-                        self.db.ledgers.file_work_batch_insert(all_files, 'clip', scan_root=path)
                     if cfg.get("ai.auto_orient.enabled", False):
                         self.db.ledgers.file_work_batch_insert(all_files, 'auto_orient', scan_root=path)
-                    if cfg.get("ai.face_recognition.enabled", True):
-                        self.db.ledgers.file_work_batch_insert(all_files, 'face_detect', scan_root=path)
-                self.tm.submit_clip_indexing_job(path, all_files)
+                    # CLIP and face detection are daemon-only. The GUI triggers them
+                    # only on explicit user requests (clip_search / face filter).
                 self.tm.submit_auto_orient_job(path, all_files)
-                self.tm.submit_face_detection_job(path, all_files)
                 self.tm.submit_phash_job(path, all_files)
 
         def _ledger_batch_cb(paths):
@@ -470,11 +476,12 @@ class ThumbnailService:
     #  CLIP Search
     # ------------------------------------------------------------------
 
-    def clip_search(self, query: str, top_k: int = 50, scope=None):
+    def clip_search(self, query: str, threshold: float = 0.0, scope=None):
         """Search images by text query using CLIP embeddings.
 
+        Returns all images with cosine similarity >= threshold, sorted descending.
         scope: optional list of file_paths to restrict search to (e.g. current view).
-        Returns [(file_path, similarity_score), ...] sorted by score descending.
+        Returns [(file_path, similarity_score), ...] or [] if models unavailable.
         """
         from core import clip_inference, clip_search
 
@@ -498,17 +505,25 @@ class ThumbnailService:
         if matrix is None:
             return []
 
+        np_mod = clip_search._get_numpy()
+
         # Filter to scope if provided
         if scope is not None:
-            np = clip_search._get_numpy()
             scope_set = set(scope)
             mask = [i for i, fp in enumerate(file_paths) if fp in scope_set]
             if not mask:
                 return []
             file_paths = [file_paths[i] for i in mask]
-            matrix = matrix[np.array(mask)]
+            matrix = matrix[np_mod.array(mask)]
 
-        return clip_search.search(query_embedding, file_paths, matrix, top_k=top_k)
+        scores = matrix @ query_embedding
+        results = [
+            (fp, float(scores[i]))
+            for i, fp in enumerate(file_paths)
+            if float(scores[i]) >= threshold
+        ]
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results
 
     def find_similar_images(self, source_path: str, threshold: float = 0.5, scope=None):
         """Return images with cosine similarity >= threshold to source_path.
@@ -649,6 +664,18 @@ class ThumbnailService:
 
     def get_person_by_name(self, name: str):
         return self.db.faces.get_person_by_name(name)
+
+    def index_faces_on_demand(self, directory: str, file_paths: list) -> None:
+        """Submit on-demand face detection for any unindexed files in file_paths."""
+        missing = self.db.faces.get_files_missing_faces(file_paths)
+        if missing:
+            self.tm.submit_face_detection_job(directory, missing, on_demand=True)
+
+    def index_clip_on_demand(self, directory: str, file_paths: list) -> None:
+        """Submit CLIP indexing for any unindexed files in file_paths."""
+        missing = self.db.embeddings.get_files_missing_embeddings(file_paths)
+        if missing:
+            self.tm.submit_clip_indexing_job(directory, missing)
 
     # ------------------------------------------------------------------
     #  Lifecycle

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtWidgets import QWidget, QGraphicsDropShadowEffect, QApplication
+from PySide6.QtWidgets import QWidget, QApplication
 from PySide6.QtCore import Qt, QSize, QEvent, QObject, QRectF, QSettings
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QMouseEvent, QFontMetrics
 
@@ -122,11 +122,6 @@ class HotkeyHelpOverlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.StrongFocus)
 
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(24)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 120))
-        self.setGraphicsEffect(shadow)
 
     # ------------------------------------------------------------------
     # Public API

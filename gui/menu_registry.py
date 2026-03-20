@@ -146,6 +146,8 @@ def build_menus() -> dict:
         MenuNode("Tags", key="t", action=_publish(EventType.OPEN_TAG_FILTER)),
         MenuNode("Selection", key="l", action=_publish(EventType.SELECTION_FILTER_CHANGED)),
         MenuNode("Similarity", key="s", action=_publish(EventType.OPEN_SIMILARITY_FILTER)),
+        MenuNode("Persons", key="p", action=_publish(EventType.TOGGLE_FACE_PALETTE)),
+        MenuNode("Clip search", key="v", action=_publish(EventType.OPEN_CLIP_SEARCH)),
         MenuNode("Clear all", key="c", action=_publish(EventType.CLEAR_FILTERS)),
     ])
 

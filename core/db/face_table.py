@@ -152,22 +152,34 @@ class FaceTable(BaseTable):
 
     def get_files_missing_faces(self, file_paths: List[str],
                                 model_name: str = "buffalo_l") -> List[str]:
-        """Return file_paths that have no face detection for the given model."""
+        """Return file_paths not yet scanned for faces by the given model.
+
+        A file is considered "done" if it either has face detection rows OR has
+        been marked in ai_scanned (meaning it was processed but no faces found).
+        """
         if not file_paths:
             return []
         try:
             conn = self._read_conn()
             cursor = conn.cursor()
             placeholders = ','.join('?' for _ in file_paths)
+            model_type = f'face:{model_name}'
             cursor.execute(f'''
-                SELECT DISTINCT file_path FROM face_detections
+                SELECT file_path FROM face_detections
                 WHERE file_path IN ({placeholders}) AND model_name = ?
-            ''', file_paths + [model_name])
+                UNION
+                SELECT file_path FROM ai_scanned
+                WHERE file_path IN ({placeholders}) AND model_type = ?
+            ''', file_paths + [model_name] + file_paths + [model_type])
             existing = {row[0] for row in cursor.fetchall()}
             return [fp for fp in file_paths if fp not in existing]
         except sqlite3.Error as e:
             logger.error(f"Error checking missing faces: {e}")
             return file_paths
+
+    def mark_file_face_scanned(self, file_path: str, model_name: str = "buffalo_l") -> None:
+        """Record that a file was scanned for faces (even if none were found)."""
+        self.mark_ai_scanned(file_path, f'face:{model_name}')
 
     # ------------------------------------------------------------------
     #  Person management

@@ -74,7 +74,7 @@ def get_session(model_path: str) -> Optional[object]:
             t0 = time.perf_counter()
             opts = ort.SessionOptions()
             opts.inter_op_num_threads = 1
-            opts.intra_op_num_threads = 2
+            opts.intra_op_num_threads = 1
             session = ort.InferenceSession(model_path, opts, providers=providers)
             logger.info("ONNX session created in %.3fs: %s", time.perf_counter() - t0, model_path)
         except Exception:  # why: onnxruntime raises undocumented C++ exceptions on CoreML init failure, model format errors, provider mismatches
@@ -86,14 +86,72 @@ def get_session(model_path: str) -> Optional[object]:
         return session
 
 
+def _set_background_priority() -> None:
+    """Drop the calling thread to background OS priority.
+
+    On macOS: QOS_CLASS_BACKGROUND — scheduler gives spare cycles only.
+    On Linux: nice(10) — lower than interactive but not completely starved.
+    Silently ignored on other platforms or if the syscall fails.
+    """
+    try:
+        if os.name == "posix":
+            import sys
+            if sys.platform == "darwin":
+                import ctypes, ctypes.util
+                libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+                # pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND=0x09, 0)
+                libc.pthread_set_qos_class_self_np(0x09, 0)
+            else:
+                os.nice(10)
+    except Exception:
+        pass  # best-effort; never block on priority failure
+
+
+def get_session_bg(model_path: str) -> Optional[object]:
+    """Like get_session(), but guarantees first load runs at background OS priority.
+
+    If the session is already cached, returns it directly (no thread overhead).
+    If not, spawns a short-lived background-priority thread to load it and blocks
+    until done. This prevents CoreML from calling dispatch_sync(main_queue) and
+    freezing the Qt event loop — CoreML at QOS_CLASS_BACKGROUND avoids GPU/ANE
+    code paths that require main-thread Metal initialization.
+
+    Call sites are worker threads that must not be permanently demoted to background
+    priority (they also run thumbnail work), so the demotion is isolated to the
+    loader thread.
+    """
+    # Fast path: already cached — return without spawning a thread.
+    with _registry_lock:
+        if model_path in _sessions:
+            return _sessions[model_path]
+
+    # Slow path: first load — isolate in a background-priority thread.
+    result: list[Optional[object]] = [None]
+    done = threading.Event()
+
+    def _load():
+        _set_background_priority()
+        result[0] = get_session(model_path)
+        done.set()
+
+    threading.Thread(target=_load, daemon=True, name="onnx-load-bg").start()
+    done.wait()
+    return result[0]
+
+
 def prewarm_session(model_path: str) -> None:
-    """Load an ONNX session in a background thread so it's cached for first use."""
-    if not is_available():
-        return
+    """Load an ONNX session in a background thread so it's cached for first use.
+
+    The thread runs at background OS priority so CoreML compilation never
+    competes with the UI thread or active render workers.  All work (including
+    onnxruntime import and CoreML dylib init) is deferred to the background
+    thread — calling this from any thread is safe and non-blocking.
+    """
     if not os.path.isfile(model_path):  # disk-io: local model cache check
         return
 
     def _warm():
+        _set_background_priority()
         try:
             get_session(model_path)
         except Exception:  # why: best-effort warmup; missing model or runtime error must not surface

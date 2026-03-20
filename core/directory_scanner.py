@@ -18,10 +18,15 @@ class ReconcileContext:
     discarded.  After the generator is exhausted, *ghost_files* contains
     DB entries that no longer exist on disk.  *discovered_files* accumulates
     every file found during the walk for post-scan task creation.
+
+    *inaccessible* is set to True when the directory could not be entered
+    (e.g. NAS not mounted), so callers can warn the user without deleting
+    cached data.
     """
     db_file_set: Set[str]
     ghost_files: List[str] = field(default_factory=list)
     discovered_files: List[str] = field(default_factory=list)
+    inaccessible: bool = False
 
 class DirectoryScanner:
 
@@ -143,7 +148,20 @@ class DirectoryScanner:
         Wraps scan_incremental: for each discovered file, discards it from
         ctx.db_file_set.  After the walk finishes, any paths remaining in
         db_file_set are ghost files (in DB but deleted on disk).
+
+        If the directory is not accessible (e.g. NAS unmounted), the scan is
+        skipped entirely and no ghost files are recorded — preserving cached DB
+        entries until the volume is available again.
         """
+        if not os.path.isdir(directory_path):  # disk-io: mount/existence guard
+            logger.warning(
+                "scan_incremental_reconcile: directory not accessible, "
+                "skipping ghost detection to preserve cached data: %s",
+                directory_path,
+            )
+            ctx.inaccessible = True
+            return
+
         for batch in self.scan_incremental(directory_path, recursive, batch_size,
                                            skip_dirs=skip_dirs):
             for f in batch:

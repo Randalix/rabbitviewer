@@ -69,22 +69,35 @@ class EmbeddingTable(BaseTable):
 
     def get_files_missing_embeddings(self, file_paths: List[str],
                                      model_name: str = "clip-vit-b-32") -> List[str]:
-        """Return file_paths that have no embedding for the given model."""
+        """Return file_paths not yet processed for CLIP embedding.
+
+        A file is done if it has an embedding row OR has been marked in ai_scanned
+        (meaning it was attempted but failed — e.g. unsupported format).
+        """
         if not file_paths:
             return []
         try:
             conn = self._read_conn()
             cursor = conn.cursor()
             placeholders = ','.join('?' for _ in file_paths)
+            model_type = f'clip:{model_name}'
             cursor.execute(f'''
                 SELECT file_path FROM clip_embeddings
                 WHERE file_path IN ({placeholders}) AND model_name = ?
-            ''', file_paths + [model_name])
+                UNION
+                SELECT file_path FROM ai_scanned
+                WHERE file_path IN ({placeholders}) AND model_type = ?
+            ''', file_paths + [model_name] + file_paths + [model_type])
             existing = {row[0] for row in cursor.fetchall()}
             return [fp for fp in file_paths if fp not in existing]
         except sqlite3.Error as e:
             logger.error(f"Error checking missing embeddings: {e}")
             return file_paths  # conservative: assume all missing
+
+    def mark_file_clip_scanned(self, file_path: str,
+                               model_name: str = "clip-vit-b-32") -> None:
+        """Record that a file was attempted for CLIP embedding (even if it failed)."""
+        self.mark_ai_scanned(file_path, f'clip:{model_name}')
 
     def count_embeddings(self, model_name: str = "clip-vit-b-32") -> int:
         """Return the number of stored embeddings for a model."""

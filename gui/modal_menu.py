@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List
 
-from PySide6.QtWidgets import QWidget, QGraphicsDropShadowEffect, QApplication
+from PySide6.QtWidgets import QWidget, QApplication
 from PySide6.QtCore import Qt, QSize, QEvent, QObject
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QKeyEvent, QMouseEvent
 
@@ -75,11 +75,6 @@ class ModalMenu(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.StrongFocus)
 
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(24)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 120))
-        self.setGraphicsEffect(shadow)
 
     # ------------------------------------------------------------------
     # Public API

@@ -172,7 +172,7 @@ def encode_image(image_path: str, thumbnail_path: Optional[str] = None,
     if not model_path:
         return None
 
-    session = onnx_runtime.get_session(model_path)
+    session = onnx_runtime.get_session_bg(model_path)
     if session is None:
         return None
 
@@ -207,7 +207,7 @@ def encode_text(query: str, config_manager=None):
     if not model_path:
         return None
 
-    session = onnx_runtime.get_session(model_path)
+    session = onnx_runtime.get_session_bg(model_path)
     if session is None:
         return None
 

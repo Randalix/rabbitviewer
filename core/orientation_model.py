@@ -58,7 +58,7 @@ def predict_orientation(
     t_model_resolve = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    session = onnx_runtime.get_session(model_path)
+    session = onnx_runtime.get_session_bg(model_path)
     if session is None:
         return None
     t_session = time.perf_counter() - t0

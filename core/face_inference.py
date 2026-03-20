@@ -200,7 +200,7 @@ def detect_faces(image_path: str, view_image_path: str = None,
     if not model_path:
         return None
 
-    session = onnx_runtime.get_session(model_path)
+    session = onnx_runtime.get_session_bg(model_path)
     if session is None:
         return None
 
@@ -399,7 +399,7 @@ def extract_embedding(aligned_crop, config_manager=None):
     if not model_path:
         return None
 
-    session = onnx_runtime.get_session(model_path)
+    session = onnx_runtime.get_session_bg(model_path)
     if session is None:
         return None
 
@@ -484,7 +484,7 @@ def _clip_filter_batch(crop_pils, config_manager=None):
     model_path = get_model_path("clip-vit-b-32-visual", config_manager)
     if not model_path:
         return [True] * len(crop_pils)
-    session = onnx_runtime.get_session(model_path)
+    session = onnx_runtime.get_session_bg(model_path)
     if session is None:
         return [True] * len(crop_pils)
 

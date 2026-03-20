@@ -187,6 +187,20 @@ def init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_face_file ON face_detections(file_path)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_face_person ON face_detections(person_id)')
 
+        # ── ai_scanned ────────────────────────────────────────────────
+        # Tracks files that have been processed by an AI model regardless of
+        # whether a positive result was found. Prevents re-scanning files that
+        # had no faces, no embedding, etc. on every launch.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_scanned (
+                file_path  TEXT NOT NULL,
+                model_type TEXT NOT NULL,
+                scanned_at REAL NOT NULL,
+                PRIMARY KEY (file_path, model_type)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_scanned_file ON ai_scanned(file_path)')
+
         # ── persons ───────────────────────────────────────────────────
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS persons (

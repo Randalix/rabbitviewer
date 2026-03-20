@@ -67,6 +67,7 @@ class EventType(Enum):
 
     # Face recognition
     FACE_PERSON_FILTER = "face_person_filter"
+    TOGGLE_FACE_PALETTE = "toggle_face_palette"
 
     # Thumbnail hover events
     THUMBNAIL_HOVERED = "thumbnail_hovered"

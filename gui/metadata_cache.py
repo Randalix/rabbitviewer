@@ -19,6 +19,10 @@ class MetadataCache:
         self._cache: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.Lock()
 
+    def set_service(self, service) -> None:
+        """Replace the backing service (called after deferred service startup)."""
+        self._service = service
+
     def get(self, path: str) -> Optional[dict]:
         """Return cached metadata for path, or None if not cached."""
         with self._lock:

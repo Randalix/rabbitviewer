@@ -53,10 +53,6 @@ DEFAULT_CONFIG = {
             "sequence": "Shift+I",
             "description": "Pin/unpin inspector to current image"
         },
-        "toggle_face_palette": {
-            "sequence": "P",
-            "description": "Open face palette"
-        },
         "script:set_rating_0": {
             "sequence": "0",
             "description": "Rate selected images 0 stars"

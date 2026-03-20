@@ -4,11 +4,15 @@ Provides a write connection + lock for mutations and thread-local read
 connections so readers never block on the write lock (SQLite WAL).
 """
 
+import logging
 import sqlite3
 import threading
+import time
 from threading import Lock
 
 from core.db.connection import create_connection
+
+logger = logging.getLogger(__name__)
 
 
 class BaseTable:
@@ -38,6 +42,23 @@ class BaseTable:
             conn = create_connection(self._db_path)
             self._local.conn = conn
         return conn
+
+    def mark_ai_scanned(self, file_path: str, model_type: str) -> None:
+        """Record that a file was processed by an AI model (success or failure).
+
+        Uses _soft_commit so bulk indexing doesn't pay per-file fsync overhead.
+        model_type convention: 'face:<model_name>' or 'clip:<model_name>'.
+        """
+        try:
+            with self._lock:
+                self.conn.execute(
+                    'INSERT OR IGNORE INTO ai_scanned (file_path, model_type, scanned_at) '
+                    'VALUES (?, ?, ?)',
+                    (file_path, model_type, time.time()),
+                )
+                self._soft_commit()
+        except sqlite3.Error as e:
+            logger.error("mark_ai_scanned failed for %s/%s: %s", file_path, model_type, e)
 
     def close(self):
         with self._lock:

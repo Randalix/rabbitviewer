@@ -16,6 +16,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _submit_face_detection_if_needed(service, directory: str, all_files: list) -> None:
+    """Worker-thread: submit face detection for unindexed files (on-demand only).
+
+    Called when the user activates a face-person filter. The daemon handles
+    bulk indexing; this covers images that arrived while the GUI was open.
+    """
+    try:
+        service.index_faces_on_demand(directory, all_files)
+    except Exception:
+        logger.debug("_submit_face_detection_if_needed failed", exc_info=True)
+
+
 class FilterController(QObject):
 
     _filtered_paths_ready = Signal(object)
@@ -131,6 +143,15 @@ class FilterController(QObject):
             return
         if not self.service:
             return
+
+        # On-demand: kick off face detection for any unindexed files in the
+        # current directory. The daemon handles bulk indexing; this covers the
+        # case where the GUI is open and the user explicitly requests face search.
+        directory = self.model.current_directory_path
+        if directory and self.model.all_files:
+            self._executor.submit(_submit_face_detection_if_needed,
+                                  self.service, directory, list(self.model.all_files))
+
         file_paths = self.service.get_face_paths_for_persons(person_ids)
         self.apply_person_filter(file_paths or [])
 

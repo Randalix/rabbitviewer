@@ -28,6 +28,19 @@ logger = logging.getLogger(__name__)
 CACHE_VERSION = 2
 
 
+def preload_plugins(config_manager) -> None:
+    """Load all plugins into the global registry without a ThumbnailManager.
+
+    Safe to call from any thread before ThumbnailManager is constructed.
+    ThumbnailManager.load_plugins() will skip the directory scan if the
+    registry is already populated by this call.
+    """
+    plugins_dir = os.path.join(os.path.dirname(__file__), '..', 'plugins')
+    cache_dir = os.path.expanduser(config_manager.get("cache_dir"))
+    thumbnail_size = config_manager.get("thumbnail_size", 64)
+    plugin_registry.load_plugins_from_directory(plugins_dir, cache_dir, thumbnail_size)
+
+
 class ThumbnailManager:
     def __init__(self, config_manager, metadata_database: MetadataDatabase, watchdog_handler=None, event_system=None, num_workers=None):
         self.config_manager = config_manager
@@ -132,12 +145,20 @@ class ThumbnailManager:
     # -----------------------------------------------------------------------
 
     def load_plugins(self) -> None:
-        plugin_registry.load_plugins_from_directory(self._plugins_dir, self.cache_dir, self.thumbnail_size)
+        if not plugin_registry.plugins:
+            # Normal path: scan and load plugins from disk.
+            plugin_registry.load_plugins_from_directory(
+                self._plugins_dir, self.cache_dir, self.thumbnail_size
+            )
+        # Fast path: registry already populated by preload_plugins() — just sync formats.
         self.supported_formats = self.plugin_registry.get_supported_formats()
         if not self.supported_formats:
             logger.warning("No format plugins loaded — scanning and thumbnailing will be non-functional.")
         else:
-            logger.info(f"ThumbnailManager supports {len(self.supported_formats)} formats: {sorted(self.supported_formats)}")
+            logger.info(
+                "ThumbnailManager supports %d formats: %s",
+                len(self.supported_formats), sorted(self.supported_formats),
+            )
 
     def get_thumbnail(self, image_path):
         """Blocks until a thumbnail is available; use request_thumbnail for grid loading."""
@@ -600,14 +621,19 @@ class ThumbnailManager:
 
     # -- AI task delegation (see core/ai_task_coordinator.py) -----------------
 
+    def prewarm_models(self) -> None:
+        """Start background AI model pre-warming (daemon use only)."""
+        self.ai_coordinator.prewarm_all_models()
+
     def submit_clip_indexing_job(self, directory: str, file_paths: List[str]):
         self.ai_coordinator.submit_clip_indexing_job(directory, file_paths)
 
     def submit_auto_orient_job(self, directory: str, file_paths: List[str]):
         self.ai_coordinator.submit_auto_orient_job(directory, file_paths)
 
-    def submit_face_detection_job(self, directory: str, file_paths: List[str]):
-        self.ai_coordinator.submit_face_detection_job(directory, file_paths)
+    def submit_face_detection_job(self, directory: str, file_paths: List[str], *,
+                                   on_demand: bool = False):
+        self.ai_coordinator.submit_face_detection_job(directory, file_paths, on_demand=on_demand)
 
     def submit_phash_job(self, directory: str, file_paths: List[str],
                          priority: Priority = Priority.BACKGROUND_SCAN):

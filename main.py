@@ -171,6 +171,10 @@ def _run_daemon(config_manager, log_level_override=None):
     )
     background_indexer.start_indexing()
 
+    # Warm AI models in background before indexing tasks start consuming workers.
+    # Daemon prewarm runs at QOS_CLASS_BACKGROUND; no UI to freeze.
+    thumbnail_manager.prewarm_models()
+
     rm = thumbnail_manager.render_manager
     gui_was_active = False
     startup_head = _read_git_head()
@@ -270,7 +274,6 @@ def _run_gui(args, config_manager):
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
     from PySide6.QtCore import QTimer, QEvent, qInstallMessageHandler, QtMsgType
-    from core.thumbnail_service import ThumbnailService
     from network.daemon_signals import DaemonSignals
     from gui.main_window import MainWindow
 
@@ -282,6 +285,23 @@ def _run_gui(args, config_manager):
     setup_logging(log_level,
                   logging_levels=config_manager.get("logging_levels", {}))
     logger.info("Starting RabbitViewer")
+
+    # Add a signal handler for SIGUSR1 to dump all thread stacks for debugging freezes.
+    def _dump_threads(signum, frame):
+        import traceback
+        logger.info(f"Received signal {signum}. Dumping all thread stacks:")
+        for thread_id, stack in sys._current_frames().items():
+            logger.info(f"\n--- Thread {thread_id} ---")
+            for filename, lineno, name, line in traceback.extract_stack(stack):
+                logger.info(f'  File "{filename}", line {lineno}, in {name}')
+                if line:
+                    logger.info(f'    {line.strip()}')
+    
+    # On Windows, SIGUSR1 is not available. This will raise an AttributeError.
+    try:
+        signal.signal(signal.SIGUSR1, _dump_threads)
+    except AttributeError:
+        logger.warning("SIGUSR1 not available on this platform; thread dump signal handler disabled.")
 
     # why: PySide6 swallows unhandled slot exceptions without logging; this surfaces them.
     def _handle_exception(exc_type, exc_value, exc_traceback):
@@ -314,15 +334,14 @@ def _run_gui(args, config_manager):
         print("Another RabbitViewer GUI is already running.", file=sys.stderr)
         return 1
 
-    thumbnail_manager, watcher, watch_paths = _init_core(config_manager)
-    directory_scanner = DirectoryScanner(thumbnail_manager, config_manager,
-                                        source_cache=thumbnail_manager.source_cache)
-    service = ThumbnailService(thumbnail_manager, directory_scanner)
-    recovered = service.recover_pending_writes()
-    if recovered:
-        logger.info(f"Recovered {recovered} pending file writes from prior session")
+    if target_dir and not os.path.isdir(target_dir):
+        logger.error(f"Invalid directory provided: {target_dir}")
+        release_gui_lock(gui_lock_fd)
+        return 1
 
     # --- Qt Application ---
+    # Build the Qt app and show the window immediately so the user sees the UI
+    # while core services (DB, plugins, workers) initialize in the background.
     if sys.platform == 'darwin':
         _set_macos_app_name("Rabbit Viewer")
     app = QApplication(sys.argv)
@@ -347,19 +366,12 @@ def _run_gui(args, config_manager):
     qInstallMessageHandler(_qt_message_handler)
 
     daemon_signals = DaemonSignals()
-    thumbnail_manager.render_manager.add_notification_callback(
-        daemon_signals.dispatch_notification
-    )
 
     icon_path = os.path.join(os.path.dirname(__file__), "logo", "rabbitViewerLogo.png")
     app.setWindowIcon(QIcon(icon_path))
 
-    if target_dir and not os.path.isdir(target_dir):
-        logger.error(f"Invalid directory provided: {target_dir}")
-        release_gui_lock(gui_lock_fd)
-        return 1
-
-    window = MainWindow(config_manager, service, daemon_signals,
+    # Show window with service=None; service is injected via _service_ready once ready.
+    window = MainWindow(config_manager, None, daemon_signals,
                         debug_ui=args.debug_ui)
 
     # macOS "Open With" sends files via QFileOpenEvent (Apple Events),
@@ -368,8 +380,12 @@ def _run_gui(args, config_manager):
         if event.type() == QEvent.Type.FileOpen:
             path = event.file()
             if path and os.path.isfile(path):
+                svc = window.service
+                if not svc:
+                    logger.debug("QFileOpenEvent: service not ready, ignoring %s", path)
+                    return False
                 _, ext = os.path.splitext(path)
-                if not ext or ext.lower() not in service.tm.supported_formats:
+                if not ext or ext.lower() not in svc.tm.supported_formats:
                     logger.debug("QFileOpenEvent: ignoring unsupported file %s", path)
                     return False
                 logger.info("QFileOpenEvent: %s", path)
@@ -384,26 +400,134 @@ def _run_gui(args, config_manager):
 
     window.show()
     app.processEvents()
-    logger.info("[startup] window shown, services ready")
+    logger.info("[startup] window shown, initializing core services in background")
 
-    # Start watchdog in a background thread so NAS directory probing
-    # (~9-16s on networked volumes) doesn't freeze the GUI.
-    threading.Thread(target=watcher.start, daemon=True).start()
+    # _core_state lets shutdown find managers even if the scheduler is still
+    # running when the event loop exits (user closes window during init).
+    _core_state = {"thumbnail_manager": None, "watcher": None}
 
-    if target_dir:
-        def _load():
-            window.load_directory(target_dir, recursive_scan)
-            if target_file:
-                window.open_media_view(target_file)
-        QTimer.singleShot(0, _load)
+    # Qt-free bridge: emits _startup_task_done on the main thread when any
+    # scheduler task completes.  QueuedConnection auto-applies across threads.
+    from PySide6.QtCore import QObject, Signal as _Signal
+
+    class _Bridge(QObject):
+        task_done = _Signal(str, object)
+
+    _bridge = _Bridge()
+    _bridge.task_done.connect(window._startup_task_done)
+
+    _init_cancelled = threading.Event()
+    app.aboutToQuit.connect(_init_cancelled.set)
+
+    # Only tasks with GUI handlers need to cross the thread boundary.
+    _GUI_TASKS = {"service", "recover"}
+
+    def _on_task_done(name: str, result) -> None:
+        if name in _GUI_TASKS and not _init_cancelled.is_set():
+            _bridge.task_done.emit(name, result)
+
+    from core.startup_scheduler import StartupScheduler, Phase
+    from core.thumbnail_service import ThumbnailService
+    from core.thumbnail_manager import preload_plugins
+
+    sched = StartupScheduler(on_task_done=_on_task_done)
+
+    # ── Phase 10: independent tasks run in parallel ──────────────────────────
+
+    _files_cache_dir = os.path.expanduser(
+        config_manager.get("files.cache.dir", "~/.rabbitviewer/cache")
+    )
+
+    def _task_db(r):
+        metadata_db_path = os.path.join(_files_cache_dir, "metadata.db")
+        return get_metadata_database(metadata_db_path)
+
+    def _task_plugins(r):
+        # why: populates the global plugin_registry as a side effect; returns None.
+        # _task_core calls thumbnail_manager.load_plugins() which skips the directory
+        # scan when the registry is already populated, making that call near-instant.
+        preload_plugins(config_manager)
+
+    sched.add("db",      Phase.PARALLEL_INIT, _task_db)
+    sched.add("plugins", Phase.PARALLEL_INIT, _task_plugins)
+
+    # ── Phase 20: ThumbnailManager (needs DB; plugins already in registry) ───
+
+    def _task_core(r):
+        metadata_db = r["db"]
+        thumbnail_manager = ThumbnailManager(config_manager, metadata_db)
+
+        max_cache_mb = config_manager.get("max_cache_size_mb", 0)
+        max_disk_pct = config_manager.get("max_disk_usage_pct", 90.0)
+        cache_size_manager = CacheSizeManager(
+            metadata_db, max_cache_mb,
+            cache_dir=_files_cache_dir, max_disk_usage_pct=max_disk_pct,
+        )
+        thumbnail_manager.cache_size_manager = cache_size_manager
+        thumbnail_manager.render_manager.cache_size_manager = cache_size_manager
+
+        thumbnail_manager.load_plugins()  # fast: registry already populated
+        _core_state["thumbnail_manager"] = thumbnail_manager
+        return thumbnail_manager
+
+    sched.add("core", Phase.CORE, _task_core)
+
+    # ── Phase 30: service wiring (needs core) ────────────────────────────────
+
+    watch_paths = [
+        os.path.expanduser(p) for p in config_manager.get("watch_paths", [])
+    ]
+
+    def _task_service(r):
+        tm = r["core"]
+        watcher = WatchdogHandler(tm, watch_paths)
+        tm.watchdog_handler = watcher
+        _core_state["watcher"] = watcher
+
+        directory_scanner = DirectoryScanner(
+            tm, config_manager, source_cache=tm.source_cache
+        )
+        service = ThumbnailService(tm, directory_scanner)
+        tm.render_manager.add_notification_callback(
+            daemon_signals.dispatch_notification
+        )
+        logger.info("[startup] core services ready")
+        return {
+            "service": service,
+            "watcher": watcher,
+            "target_dir": target_dir,
+            "target_file": target_file,
+            "recursive": recursive_scan,
+        }
+
+    sched.add("service", Phase.SERVICE, _task_service)
+
+    # ── Phase 50: supporting tasks (run in parallel, need service) ───────────
+
+    def _task_watcher_start(r):
+        # NAS directory probing can take 9-16 s — run off the GUI thread.
+        threading.Thread(target=r["service"]["watcher"].start, daemon=True).start()
+
+    def _task_recover(r):
+        return r["service"]["service"].recover_pending_writes()
+
+    sched.add("watcher", Phase.SUPPORTING, _task_watcher_start)
+    sched.add("recover", Phase.SUPPORTING, _task_recover)
+
+    # ── Start the scheduler after first frame paints ─────────────────────────
+    QTimer.singleShot(0, sched.run)
 
     exit_code = app.exec()
 
     # Blocking shutdown runs after the event loop exits so the window
     # can close and repaint immediately rather than freezing.
     logger.info("GUI closed. Shutting down workers...")
-    watcher.stop()
-    thumbnail_manager.shutdown()
+    watcher = _core_state.get("watcher")
+    thumbnail_manager = _core_state.get("thumbnail_manager")
+    if watcher:
+        watcher.stop()
+    if thumbnail_manager:
+        thumbnail_manager.shutdown()
     release_gui_lock(gui_lock_fd)
 
     # Launch daemon after releasing flock so it can start indexing immediately.

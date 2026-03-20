@@ -51,6 +51,8 @@ class MainWindow(QMainWindow):
     _tag_editor_ready = Signal(int, list, list, list)  # (count, common_tags, dir_tags, global_tags)
     _clip_results_ready = Signal(object)  # list of (path, score) or None
     _similarity_results_ready = Signal(object)  # list of (path, score) or None
+    _startup_task_done = Signal(str, object)  # (task_name, result); bridge from StartupScheduler
+
     def __init__(self, config_manager, service,
                  daemon_signals: DaemonSignals, *, debug_ui: bool = False):
         super().__init__()
@@ -106,11 +108,13 @@ class MainWindow(QMainWindow):
         self.date_filter_dialog = None
         self.comfyui_dialog = None
         self.clip_search_dialog = None
-        self._pre_clip_search_order = None
+        self._clip_search_query: str | None = None
+        self._clip_raw_results: list | None = None
         self.similarity_filter_dialog = None
         self._similarity_source_path = None
         self._removed_images = []
 
+        self._startup_task_done.connect(self._handle_startup_task)
         QTimer.singleShot(0, self._deferred_init)
 
     def _deferred_init(self):
@@ -136,6 +140,34 @@ class MainWindow(QMainWindow):
 
         if show_at_startup():
             QTimer.singleShot(0, self._toggle_hotkey_help)
+
+    @Slot(str, object)
+    def _handle_startup_task(self, name: str, result):
+        """Dispatch StartupScheduler task completions to the appropriate handler.
+
+        Called on the main thread via QueuedConnection from the scheduler's
+        worker threads. Add a branch here for any new startup task that needs
+        to update GUI state on completion.
+        """
+        if name == "service":
+            service = result["service"]
+            self.service = service
+            self.thumbnail_view.set_service(service)
+            self.metadata_cache.set_service(service)
+            target_dir = result.get("target_dir")
+            target_file = result.get("target_file")
+            recursive = result.get("recursive", True)
+            if target_dir:
+                def _load():
+                    self.load_directory(target_dir, recursive)
+                    if target_file:
+                        self.open_media_view(target_file)
+                QTimer.singleShot(0, _load)
+            logger.info("[startup] services injected, UI ready")
+
+        elif name == "recover":
+            if result:
+                logger.info("Recovered %d pending file writes from prior session", result)
 
     def _setup_thumbnail_view(self):
         self.thumbnail_view = ThumbnailViewWidget(self.config_manager)
@@ -616,8 +648,8 @@ class MainWindow(QMainWindow):
             from .clip_search_dialog import ClipSearchDialog
             self.clip_search_dialog = ClipSearchDialog(self)
             self.clip_search_dialog.search_requested.connect(self._on_clip_search)
-            self.clip_search_dialog.search_cleared.connect(self._on_clip_search_cleared)
-            self.clip_search_dialog.result_selected.connect(self._on_clip_result_selected)
+            self.clip_search_dialog.threshold_changed.connect(self._on_clip_threshold_changed)
+            self.clip_search_dialog.filter_cleared.connect(self._on_clip_search_cleared)
             # Warm the ONNX text session in background so first search is fast
             self._warm_clip_session()
 
@@ -629,11 +661,11 @@ class MainWindow(QMainWindow):
 
     def _on_clip_search(self, query: str):
         import threading as _threading
-        # Save pre-search order so we can restore on clear
-        if self.thumbnail_view and self._pre_clip_search_order is None:
-            self._pre_clip_search_order = list(self.thumbnail_view.all_files)
-
-        # Snapshot current files on main thread for scoped search
+        self._clip_search_query = query
+        # Snapshot current files on main thread for scoped search.
+        # Always fetch with threshold=0.0 to get the full result set; threshold
+        # filtering happens client-side in _apply_clip_threshold so slider moves
+        # don't re-run inference.
         scope = list(self.thumbnail_view.all_files) if self.thumbnail_view else None
 
         def _bg_search():
@@ -641,7 +673,15 @@ class MainWindow(QMainWindow):
                 if not self.service:
                     self._clip_results_ready.emit(None)
                     return
-                results = self.service.clip_search(query, scope=scope)
+                # On-demand: index any files missing CLIP embeddings so new
+                # images appear in future searches. Daemon handles bulk indexing;
+                # this covers files present while the GUI is open.
+                if scope:
+                    directory = (self.thumbnail_view.current_directory_path
+                                 if self.thumbnail_view else None)
+                    if directory:
+                        self.service.index_clip_on_demand(directory, scope)
+                results = self.service.clip_search(query, threshold=0.0, scope=scope)
                 self._clip_results_ready.emit(results)
             except Exception:  # why: clip_search calls ONNX inference + DB reads
                 logger.error("CLIP search failed", exc_info=True)
@@ -649,37 +689,42 @@ class MainWindow(QMainWindow):
 
         _threading.Thread(target=_bg_search, daemon=True).start()
 
+    def _on_clip_threshold_changed(self, value: float):
+        # No re-inference needed — filter the cached raw results client-side.
+        self._apply_clip_threshold()
+
+    def _apply_clip_threshold(self):
+        """Filter cached CLIP results by the current threshold and update the view."""
+        if self._clip_raw_results is None or not self.clip_search_dialog:
+            return
+        threshold = self.clip_search_dialog.threshold
+        filtered = [(fp, s) for fp, s in self._clip_raw_results if s >= threshold]
+        result_paths = [fp for fp, _ in filtered]
+        if self.thumbnail_view:
+            self.thumbnail_view.filter_controller.apply_clip_search_results(result_paths)
+        self.clip_search_dialog.set_result_count(len(filtered))
+
     def _on_clip_results_ready(self, results):
         if not self.clip_search_dialog:
             return
         if results is None:
+            self._clip_raw_results = None
             self.clip_search_dialog.set_error("Search failed — are models downloaded?")
             return
-
-        self.clip_search_dialog.set_results(results)
-        if results and self.thumbnail_view:
-            result_paths = [fp for fp, _ in results]
-            # Reorder: matched files first (by score), then the rest
-            matched_set = set(result_paths)
-            rest = [p for p in self.thumbnail_view.all_files if p not in matched_set]
-            self.thumbnail_view.reorder_files(result_paths + rest)
-            self.thumbnail_view.filter_controller.apply_clip_search_results(result_paths)
+        self._clip_raw_results = results
+        self._apply_clip_threshold()
 
     def _on_clip_search_cleared(self):
+        self._clip_search_query = None
+        self._clip_raw_results = None
         if self.thumbnail_view:
-            # Restore original order first, then clear the filter.
-            # reorder_files rebuilds the layout using current _hidden_indices,
-            # so the clip filter must still be active during reorder to avoid
-            # a stale layout flash.  clear_clip_search then removes the filter
-            # and triggers reapply_filters which unhides everything.
-            if self._pre_clip_search_order is not None:
-                self.thumbnail_view.reorder_files(self._pre_clip_search_order)
-                self._pre_clip_search_order = None
             self.thumbnail_view.filter_controller.clear_clip_search()
 
-    def _on_clip_result_selected(self, file_path: str):
-        if self.thumbnail_view:
-            self.thumbnail_view.navigate_to_file(file_path)
+    def _on_clear_clip_on_global_clear(self):
+        self._clip_search_query = None
+        self._clip_raw_results = None
+        if self.clip_search_dialog and self.clip_search_dialog.isVisible():
+            self.clip_search_dialog.close()
 
     # ── Similarity Filter ────────────────────────────────────────
 
@@ -904,6 +949,7 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_CLIP_SEARCH, lambda _: self.open_clip_search_dialog())
         event_system.subscribe(EventType.OPEN_SIMILARITY_FILTER, lambda _: self.open_similarity_filter_dialog())
         event_system.subscribe(EventType.CLEAR_FILTERS, lambda _: self._on_clear_similarity_on_global_clear())
+        event_system.subscribe(EventType.CLEAR_FILTERS, lambda _: self._on_clear_clip_on_global_clear())
         event_system.subscribe(EventType.OPEN_TAG_EDITOR, lambda _: self.open_tag_editor())
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
@@ -913,6 +959,7 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.NAVIGATE_TO_FOLDER, lambda e: self._handle_folder_navigation(e.path))
         event_system.subscribe(EventType.OPEN_RECENT_DIRECTORY, self._handle_open_recent)
         event_system.subscribe(EventType.SELECTION_FILTER_CHANGED, lambda _: self._toggle_selection_filter())
+        event_system.subscribe(EventType.TOGGLE_FACE_PALETTE, lambda _: self._open_face_palette())
 
     def _handle_inspector_event(self, event_data):
         if event_data.image_path == self.current_hovered_image:
@@ -936,7 +983,6 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("toggle_info_panel", self._open_info_panel)
         self.hotkey_manager.add_action("open_comfyui", self.open_comfyui_dialog)
         self.hotkey_manager.add_action("clip_search", self.open_clip_search_dialog)
-        self.hotkey_manager.add_action("toggle_face_palette", self._open_face_palette)
         self.hotkey_manager.add_action("zoom_in", lambda: self._handle_hotkey_zoom(1))
         self.hotkey_manager.add_action("zoom_out", lambda: self._handle_hotkey_zoom(-1))
         self.hotkey_manager.add_action("toggle_group_mode", self._toggle_group_mode)
