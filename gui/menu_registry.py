@@ -49,6 +49,20 @@ def _open_recent(path: str):
     return _fire
 
 
+# -- Goto bookmark helpers ------------------------------------------------
+
+def _build_goto_bookmark_children(node):
+    from core.bookmark_manager import load_bookmarks
+    node.children = [
+        MenuNode(
+            label=bm.name,
+            key=bm.key,
+            action=_open_recent(bm.path),
+        )
+        for bm in load_bookmarks()
+    ]
+
+
 # -- Bookmark menu helpers ------------------------------------------------
 
 def _build_bookmark_children(node, operation: str):
@@ -136,6 +150,7 @@ def build_menus() -> dict:
     # Go to menu — navigation destinations.
     goto_menu = MenuNode("Go to", children=[
         MenuNode("Recent", key="r", refresh=lambda node: _build_recent_children(node)),
+        MenuNode("Bookmarks", key="b", refresh=lambda node: _build_goto_bookmark_children(node)),
     ])
 
     # Recent directories menu — kept for direct access via menu_id "recent".
