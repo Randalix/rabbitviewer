@@ -454,8 +454,9 @@ class MainWindow(QMainWindow):
             return
 
         all_paths = list(tv.model.all_files)
-        visible_paths = list(tv.model.current_files)
-        self.date_filter_dialog.open_for(tv.service, all_paths, visible_paths)
+        selected = list(self.selection_state.selected_paths)
+        seed_paths = selected if selected else list(tv.model.current_files)
+        self.date_filter_dialog.open_for(tv.service, all_paths, seed_paths)
 
     def open_tag_filter(self):
         if not self.tag_filter_dialog:
@@ -722,8 +723,10 @@ class MainWindow(QMainWindow):
                     self._similarity_results_ready.emit(None)
                     return
                 if mode == "pHash":
+                    # value 0.0=open→max_distance=64, value 1.0=close→max_distance=0
+                    max_dist = round((1.0 - value) * 64)
                     results = self.service.find_similar_by_phash(
-                        source_path, int(value), scope=scope or [])
+                        source_path, max_dist, scope=scope or [])
                 else:
                     results = self.service.find_similar_images(
                         source_path, threshold=value, scope=scope)

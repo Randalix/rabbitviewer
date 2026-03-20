@@ -577,8 +577,6 @@ class ThumbnailService:
 
         results = []
         for fp, h in pairs:
-            if fp == source_path:
-                continue
             # Mask to 64 bits before counting to handle signed int64 storage
             dist = bin((source_hash ^ h) & 0xFFFFFFFFFFFFFFFF).count('1')
             if dist <= max_distance:

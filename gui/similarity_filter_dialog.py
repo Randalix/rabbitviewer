@@ -8,23 +8,21 @@ from PySide6.QtWidgets import (
 
 _MODES = ["CLIP", "pHash"]
 
-# Per-mode slider config: (min, max, default, label_prefix, scale)
-# scale: float to multiply raw slider int to produce the emitted value
+# Per-mode slider config: (min, max, default, label, scale)
+# Both modes emit a 0.0–1.0 similarity value: 0 = open filter, 1 = close match.
+# scale: multiplier from raw slider int to emitted float value.
 _MODE_CONFIG = {
-    "CLIP":  dict(min=0,  max=100, default=50, label="Threshold:",    scale=0.01),
-    "pHash": dict(min=0,  max=64,  default=10, label="Max distance:", scale=1.0),
+    "CLIP":  dict(min=0, max=100, default=50, label="Similarity:", scale=0.01),
+    "pHash": dict(min=0, max=100, default=84, label="Similarity:", scale=0.01),
 }
 
 
 class SimilarityFilterDialog(QDialog):
     """Filter images by visual similarity to a source image.
 
-    Supports two modes:
-    - CLIP: cosine-similarity threshold (0.0–1.0); higher = stricter.
-    - pHash: max Hamming distance (0–64); lower = stricter.
-
-    Emits params_changed(mode, value) whenever the slider or mode changes.
-    Emits filter_cleared on close so the caller can tear down the filter.
+    Both modes emit a 0.0–1.0 similarity value: 0 = open filter, 1 = close match.
+    Emits params_changed(mode, value) on every slider/mode change.
+    Emits filter_cleared on close.
     """
 
     params_changed = Signal(str, float)  # (mode, value)
@@ -107,12 +105,8 @@ class SimilarityFilterDialog(QDialog):
             self.params_changed.emit(mode, cfg["default"] * cfg["scale"])
 
     def _update_value_label(self, mode: str, raw: int):
-        cfg = _MODE_CONFIG[mode]
-        value = raw * cfg["scale"]
-        if mode == "CLIP":
-            self._value_label.setText(f"{value:.2f}")
-        else:
-            self._value_label.setText(str(int(value)))
+        value = raw * _MODE_CONFIG[mode]["scale"]
+        self._value_label.setText(f"{value:.2f}")
 
     def _on_mode_changed(self, mode: str):
         self._count_label.setText("")
