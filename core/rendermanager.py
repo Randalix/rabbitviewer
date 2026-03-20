@@ -135,7 +135,7 @@ class RenderManager:
         logger.info(f"RenderManager: Submitted new source job '{job.job_id}'.")
         with self.active_jobs_lock:
             if job.job_id in self.active_jobs:
-                logger.warning(f"Job '{job.job_id}' is already active. Ignoring submission.")
+                logger.debug(f"Job '{job.job_id}' is already active. Ignoring submission.")
                 return
             self.active_jobs[job.job_id] = job
 
@@ -638,7 +638,9 @@ class RenderManager:
             while True:
                 try:
                     task = self.task_queue.get_nowait()
-                    if task.task_id == '_SHUTDOWN_': # Keep shutdown sentinel for workers
+                    if task.task_id == '_SHUTDOWN_':
+                        # why: sentinels are only enqueued *after* this drain loop exits,
+                        # so this branch is defensive-only and should never fire in practice.
                         self.task_queue.put(task)
                         continue
                     
@@ -663,6 +665,9 @@ class RenderManager:
             logger.info(f"RenderManager: Discarded {discarded_count} pending tasks.")
 
         # Now, wait only for tasks that were already running.
+        # Unblock any workers that are paused — without this, workers blocked on
+        # _resume_event.wait() never reach the sentinel and time out.
+        self._resume_event.set()
         # Signal workers to exit by adding sentinel to the queue for each worker.
         self._running = False # Signal workers to finish their current task and exit loop
         for _ in range(self.num_workers):

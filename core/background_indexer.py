@@ -97,28 +97,37 @@ class BackgroundIndexer:
                         )
                         rm.submit_source_job(job)
 
-            # AI work — delegate to existing submit methods (they do their
-            # own skip-checks via DB queries).
+            # AI work — skip if the job is already running (long-running jobs
+            # outlast GUI sessions; re-submitting on every GUI disconnect is noisy).
             if 'clip' in pending_types:
-                files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'clip')
-                if files:
-                    logger.info("BackgroundIndexer: resuming CLIP indexing for %d files in %s",
-                                len(files), scan_root)
-                    self.thumbnail_manager.submit_clip_indexing_job(scan_root, files)
+                with rm.active_jobs_lock:
+                    clip_active = f"clip_index::{scan_root}" in rm.active_jobs
+                if not clip_active:
+                    files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'clip')
+                    if files:
+                        logger.info("BackgroundIndexer: resuming CLIP indexing for %d files in %s",
+                                    len(files), scan_root)
+                        self.thumbnail_manager.submit_clip_indexing_job(scan_root, files)
 
             if 'face_detect' in pending_types:
-                files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'face_detect')
-                if files:
-                    logger.info("BackgroundIndexer: resuming face detection for %d files in %s",
-                                len(files), scan_root)
-                    self.thumbnail_manager.submit_face_detection_job(scan_root, files)
+                with rm.active_jobs_lock:
+                    face_active = f"face_detect::{scan_root}" in rm.active_jobs
+                if not face_active:
+                    files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'face_detect')
+                    if files:
+                        logger.info("BackgroundIndexer: resuming face detection for %d files in %s",
+                                    len(files), scan_root)
+                        self.thumbnail_manager.submit_face_detection_job(scan_root, files)
 
             if 'auto_orient' in pending_types:
-                files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'auto_orient')
-                if files:
-                    logger.info("BackgroundIndexer: resuming auto-orient for %d files in %s",
-                                len(files), scan_root)
-                    self.thumbnail_manager.submit_auto_orient_job(scan_root, files)
+                with rm.active_jobs_lock:
+                    orient_active = f"auto_orient::{scan_root}" in rm.active_jobs
+                if not orient_active:
+                    files = self.metadata_db.ledgers.file_work_get_pending(scan_root, 'auto_orient')
+                    if files:
+                        logger.info("BackgroundIndexer: resuming auto-orient for %d files in %s",
+                                    len(files), scan_root)
+                        self.thumbnail_manager.submit_auto_orient_job(scan_root, files)
 
     @staticmethod
     def _batch_generator(files: List[str]):
@@ -139,8 +148,8 @@ class BackgroundIndexer:
         """Submit work for files in the DB that have no thumbnail.
 
         This catches files that were discovered by a prior scan but whose
-        thumbnail tasks never ran (e.g. due to the resume_pending_work
-        deadlock fixed in 71cac8c).
+        thumbnail tasks never ran (e.g. due to a prior resume_pending_work
+        deadlock).
         """
         missing = self.metadata_db.images.get_files_missing_thumbnails(self.watch_paths)
         if not missing:
