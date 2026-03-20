@@ -24,7 +24,6 @@ class ScriptAPI:
             main_thread_invoke: Callable that dispatches a function to the Qt main thread
         """
         self.main_window = main_window
-        self.service = main_window.service
         self._invoke = main_thread_invoke
         self._last_operation_time = 0
         self._operation_stats = {}
@@ -127,7 +126,7 @@ class ScriptAPI:
                 if len(op) > 2:
                     d["kwargs"] = op[2]
                 ops.append(d)
-            response = self.service.run_tasks(ops)
+            response = self.main_window.service.run_tasks(ops)
             if response is None:
                 logger.error("daemon_tasks failed: no response (connection issue)")
                 return False
@@ -217,7 +216,7 @@ class ScriptAPI:
         dict on failure.
         """
         try:
-            resp = self.service.get_metadata_batch(image_paths)
+            resp = self.main_window.service.get_metadata_batch(image_paths)
             return resp if resp else {}
         except Exception as e:  # why: service may raise on internal error
             logger.error(f"Error in get_metadata_batch: {e}", exc_info=True)
@@ -246,7 +245,7 @@ class ScriptAPI:
         start_time = time.time()
 
         # The new API handles DB updates and file writes in one call
-        success = self.service.set_rating(all_paths, rating)
+        success = self.main_window.service.set_rating(all_paths, rating)
 
         duration = time.time() - start_time
 

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from scripts.sort_by_date import run_script as sort_by_date
 from scripts.sort_by_name import run_script as sort_by_name
+from scripts.sort_by_phash import run_script as sort_by_phash
 from scripts.sort_by_rating import run_script as sort_by_rating
 from scripts.sort_by_size import run_script as sort_by_size
 from scripts.sort_by_type import run_script as sort_by_type
@@ -162,3 +163,82 @@ class TestSortByType:
         api.set_image_order.assert_called_once_with(
             ["/a.jpg", "/c.jpg", "/b.png", "/z.png"]
         )
+
+# ---------------------------------------------------------------------------
+# sort_by_phash
+# ---------------------------------------------------------------------------
+
+class TestSortByPhash:
+    def test_sorts_by_phash_similarity(self):
+        # Reference image: /a.jpg with phash 0b001 (1)
+        # /b.jpg: 0b010 (2) -> distance 2
+        # /c.jpg: 0b000 (0) -> distance 1
+        paths = ["/b.jpg", "/a.jpg", "/c.jpg", "/d.jpg"]
+        metadata = {
+            "/a.jpg": {"phash": 0b001},
+            "/b.jpg": {"phash": 0b010},
+            "/c.jpg": {"phash": 0b000},
+            "/d.jpg": {"phash": 0b111}, # distance 2
+        }
+        api = _make_api(paths, metadata)
+        api.get_selected_images.return_value = {"/a.jpg"} # Select /a.jpg as reference
+
+        sort_by_phash(api)
+
+        # Expected order: /a.jpg (distance 0), /c.jpg (distance 1), /b.jpg and /d.jpg (distance 2, then by original order)
+        api.set_image_order.assert_called_once_with(["/a.jpg", "/c.jpg", "/b.jpg", "/d.jpg"])
+
+    def test_selected_image_first(self):
+        paths = ["/b.jpg", "/a.jpg"]
+        metadata = {
+            "/b.jpg": {"phash": 0b000},
+            "/a.jpg": {"phash": 0b111},
+        }
+        api = _make_api(paths, metadata)
+        api.get_selected_images.return_value = {"/a.jpg"}
+
+        sort_by_phash(api)
+        assert api.set_image_order.call_args[0][0][0] == "/a.jpg"
+
+    def test_missing_phash_at_end(self):
+        paths = ["/b.jpg", "/a.jpg", "/c.jpg", "/e.jpg"]
+        metadata = {
+            "/b.jpg": {"phash": 0b010},
+            "/a.jpg": {"phash": 0b001},
+            "/c.jpg": {"phash": 0b000},
+            "/e.jpg": {"phash": None}, # Missing phash
+        }
+        api = _make_api(paths, metadata)
+        api.get_selected_images.return_value = {"/a.jpg"}
+
+        sort_by_phash(api)
+        api.set_image_order.assert_called_once_with(["/a.jpg", "/c.jpg", "/b.jpg", "/e.jpg"])
+
+    def test_empty_selection(self):
+        api = _make_api(["/a.jpg"])
+        api.get_selected_images.return_value = set()
+
+        sort_by_phash(api)
+        api.show_message.assert_called_once()
+        api.set_image_order.assert_not_called()
+
+    def test_reference_image_missing_phash(self):
+        paths = ["/a.jpg", "/b.jpg"]
+        metadata = {
+            "/a.jpg": {"phash": None},
+            "/b.jpg": {"phash": 0b100},
+        }
+        api = _make_api(paths, metadata)
+        api.get_selected_images.return_value = {"/a.jpg"}
+
+        sort_by_phash(api)
+        api.show_message.assert_called_once()
+        api.set_image_order.assert_not_called()
+
+    def test_empty_paths(self):
+        api = _make_api([])
+        api.get_selected_images.return_value = {"/dummy.jpg"} # Selected, but not in all_images
+
+        sort_by_phash(api)
+        api.show_message.assert_not_called() # No message about missing phash as there are no images
+        api.set_image_order.assert_not_called()
