@@ -691,8 +691,8 @@ class MainWindow(QMainWindow):
         if not self.similarity_filter_dialog:
             from .similarity_filter_dialog import SimilarityFilterDialog
             self.similarity_filter_dialog = SimilarityFilterDialog(self)
-            self.similarity_filter_dialog.threshold_changed.connect(
-                self._on_similarity_threshold_changed)
+            self.similarity_filter_dialog.params_changed.connect(
+                self._on_similarity_params_changed)
             self.similarity_filter_dialog.filter_cleared.connect(
                 self._on_similarity_filter_cleared)
 
@@ -706,13 +706,14 @@ class MainWindow(QMainWindow):
         self.similarity_filter_dialog.set_source(source_path)
         self.similarity_filter_dialog.show()
         self.similarity_filter_dialog.activateWindow()
-        self._run_similarity_search(source_path, self.similarity_filter_dialog.threshold)
+        mode, value = self.similarity_filter_dialog.current_params
+        self._run_similarity_search(source_path, mode, value)
 
-    def _on_similarity_threshold_changed(self, threshold: float):
+    def _on_similarity_params_changed(self, mode: str, value: float):
         if self._similarity_source_path:
-            self._run_similarity_search(self._similarity_source_path, threshold)
+            self._run_similarity_search(self._similarity_source_path, mode, value)
 
-    def _run_similarity_search(self, source_path: str, threshold: float):
+    def _run_similarity_search(self, source_path: str, mode: str, value: float):
         scope = list(self.thumbnail_view.all_files) if self.thumbnail_view else None
 
         def _bg():
@@ -720,10 +721,14 @@ class MainWindow(QMainWindow):
                 if not self.service:
                     self._similarity_results_ready.emit(None)
                     return
-                results = self.service.find_similar_images(
-                    source_path, threshold=threshold, scope=scope)
+                if mode == "pHash":
+                    results = self.service.find_similar_by_phash(
+                        source_path, int(value), scope=scope or [])
+                else:
+                    results = self.service.find_similar_images(
+                        source_path, threshold=value, scope=scope)
                 self._similarity_results_ready.emit(results)
-            except Exception:  # why: find_similar_images calls numpy + DB reads; thread must not silently die
+            except Exception:  # why: similarity search calls numpy + DB reads; thread must not silently die
                 logger.error("Similarity search failed", exc_info=True)
                 self._similarity_results_ready.emit(None)
 
@@ -734,7 +739,7 @@ class MainWindow(QMainWindow):
             return
         if results is None:
             self.similarity_filter_dialog.set_error(
-                "Search failed — are CLIP embeddings indexed?")
+                "Search failed — no similarity data available for this image")
             return
         if self.thumbnail_view:
             paths = {fp for fp, _ in results}
