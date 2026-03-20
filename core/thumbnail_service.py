@@ -79,6 +79,15 @@ class ThumbnailService:
                     section=StatusSection.PROCESS,
                     permanent=True,
                 ))
+            elif reconcile_ctx.scan_had_errors:
+                event_system.publish(StatusMessageEventData(
+                    event_type=EventType.STATUS_MESSAGE,
+                    source="thumbnail_service",
+                    timestamp=time.time(),
+                    message=f"Scan incomplete (filesystem error) — cached data preserved: {path}",
+                    section=StatusSection.PROCESS,
+                    permanent=True,
+                ))
             if reconcile_ctx.ghost_files:
                 logger.info(
                     f"Reconciliation found {len(reconcile_ctx.ghost_files)} "

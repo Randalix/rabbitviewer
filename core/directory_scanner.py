@@ -27,6 +27,7 @@ class ReconcileContext:
     ghost_files: List[str] = field(default_factory=list)
     discovered_files: List[str] = field(default_factory=list)
     inaccessible: bool = False
+    scan_had_errors: bool = False
 
 class DirectoryScanner:
 
@@ -80,12 +81,16 @@ class DirectoryScanner:
         return True
 
     def scan_incremental(self, directory_path: str, recursive: bool = True,
-                         batch_size: int = 10, skip_dirs: Optional[Set[str]] = None):
+                         batch_size: int = 10, skip_dirs: Optional[Set[str]] = None,
+                         on_error=None):
         """Generator that incrementally yields batches of supported file paths.
 
         *skip_dirs* is an optional set of absolute directory paths to skip
         (including their subtrees).  Used by the daemon to avoid re-walking
         directories already recorded in the scan ledger.
+
+        *on_error*, if provided, is called as ``on_error(failed_dir, exc)``
+        whenever a ``scandir`` call fails mid-walk.
         """
         logger.info(f"Performing incremental scan for: {directory_path} (Recursive: {recursive}, batch_size={batch_size}, skip_dirs={len(skip_dirs) if skip_dirs else 0})")
         current_batch = []
@@ -106,7 +111,9 @@ class DirectoryScanner:
                 try:
                     entries = list(os.scandir(current_dir))  # disk-io: directory discovery
                 except OSError as e:
-                    logger.debug(f"[chunking] scan_incremental: scandir failed on '{current_dir}': {e}")
+                    logger.warning(f"[chunking] scan_incremental: scandir failed on '{current_dir}': {e}")
+                    if on_error:
+                        on_error(current_dir, e)
                     continue
                 walk_elapsed = time.monotonic() - walk_start
                 file_count = sum(1 for e in entries if not e.is_dir(follow_symlinks=False))
@@ -162,15 +169,22 @@ class DirectoryScanner:
             ctx.inaccessible = True
             return
 
+        def _on_scan_error(failed_dir, exc):
+            logger.warning(
+                "scan_incremental_reconcile: scan error in '%s', suppressing ghost "
+                "detection to preserve cached data: %s", failed_dir, exc,
+            )
+            ctx.scan_had_errors = True
+
         for batch in self.scan_incremental(directory_path, recursive, batch_size,
-                                           skip_dirs=skip_dirs):
+                                           skip_dirs=skip_dirs, on_error=_on_scan_error):
             for f in batch:
                 ctx.db_file_set.discard(f)
             ctx.discovered_files.extend(batch)
             yield batch
 
-        # Only mark ghosts if we had formats to scan for. With 0 supported
-        # extensions the scan rejects everything — treating all DB entries as
-        # ghosts would cause irreversible data loss.
-        if self._supported_extensions:
+        # Only mark ghosts if we had formats to scan for and the walk completed
+        # without errors. An incomplete walk (permission error, mid-walk NAS
+        # failure) would falsely ghost files that simply weren't reached.
+        if self._supported_extensions and not ctx.scan_had_errors:
             ctx.ghost_files = list(ctx.db_file_set)
