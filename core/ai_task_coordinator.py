@@ -21,6 +21,20 @@ class AITaskCoordinator:
         self.config_manager = config_manager
         self.metadata_db = metadata_db
         self.render_manager = render_manager
+        self._prewarm_clip_visual()
+
+    def _prewarm_clip_visual(self) -> None:
+        """Warm the CLIP visual ONNX session in a background thread.
+
+        The visual model takes ~7s to load on first use (CoreML compilation).
+        Starting this at init time means the session is ready before post_scan
+        triggers clip_embed tasks, so no worker is blocked waiting for it.
+        """
+        from core.model_manager import get_model_path
+        from core import onnx_runtime
+        path = get_model_path("clip-vit-b-32-visual", self.config_manager)
+        if path:
+            onnx_runtime.prewarm_session(path)
 
     @staticmethod
     def _batched_generator(items, batch_size=10):

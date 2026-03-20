@@ -43,12 +43,12 @@ class CacheSizeManager:
         self._notified_disk_full = False
 
         if self._enabled:
-            self.refresh()
-            logger.info(
-                "CacheSizeManager: limit=%d MB, current=%d MB",
-                max_cache_size_mb,
-                self._current_bytes // (1024 * 1024),
-            )
+            logger.info("CacheSizeManager: limit=%d MB, computing current size in background", max_cache_size_mb)
+            # why: get_total_cache_size() stats every cached file (~80K syscalls);
+            # running it on the main thread blocks startup by ~1.5s. Workers are
+            # idle during this window and the first thumbnail writes arrive several
+            # seconds later, so the brief under-count is harmless.
+            threading.Thread(target=self._init_refresh, args=(max_cache_size_mb,), daemon=True).start()
         else:
             logger.info("CacheSizeManager: no cache size limit configured")
 
@@ -154,6 +154,12 @@ class CacheSizeManager:
         finally:
             with self._lock:
                 self._evicting = False
+
+    def _init_refresh(self, max_cache_size_mb: int) -> None:
+        self.refresh()
+        with self._lock:
+            current_mb = self._current_bytes // (1024 * 1024)
+        logger.info("CacheSizeManager: limit=%d MB, current=%d MB", max_cache_size_mb, current_mb)
 
     def refresh(self) -> None:
         total = self._db.get_total_cache_size()
