@@ -391,6 +391,16 @@ class ScriptAPI:
             overlay_id=overlay_id,
         ))
 
+    def show_message(self, message: str, timeout: int = 5000) -> None:
+        """Displays a message in the status bar."""
+        event_system.publish(StatusMessageEventData(
+            event_type=EventType.STATUS_MESSAGE,
+            source="script_api",
+            timestamp=time.time(),
+            message=message,
+            timeout=timeout
+        ))
+
     # -- RAW+JPG group mode helpers ----------------------------------------
 
     def is_group_mode(self) -> bool:
