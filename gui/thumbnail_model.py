@@ -62,6 +62,7 @@ class ThumbnailModel:
         self.person_filter_paths: Optional[Set[str]] = None
         self.selection_filter_paths: Optional[Set[str]] = None
         self.duplicates_only: bool = False
+        self.current_date_filter: Optional[Tuple[float, float]] = None
 
         # Folder navigation state
         self.folder_nodes: Dict[str, FolderNode] = {}
@@ -285,11 +286,15 @@ class ThumbnailModel:
     def set_duplicates_only(self, enabled: bool) -> None:
         self.duplicates_only = enabled
 
+    def set_date_filter(self, date_range: Optional[Tuple[float, float]]) -> None:
+        self.current_date_filter = date_range
+
     def clear_filters(self) -> None:
         """Reset all filter state."""
         self.current_filter = ""
         self.current_star_filter = [True, True, True, True, True, True]
         self.current_tag_filter = []
+        self.current_date_filter = None
         self.clip_search_paths = None
         self.person_filter_paths = None
         self.selection_filter_paths = None

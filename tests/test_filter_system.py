@@ -559,6 +559,114 @@ class TestDatabaseFiltering:
 
 
 # ===================================================================
+# Date range filtering
+# ===================================================================
+
+def _insert_with_dates(db, file_path, *, date_taken=None, mtime=0.0):
+    """Insert a DB record with specific date_taken (str epoch) and mtime."""
+    import hashlib, time as _time
+    path_hash = hashlib.md5(file_path.encode()).hexdigest()
+    now = _time.time()
+    with db.images._lock:
+        db.images.conn.execute(
+            "INSERT OR REPLACE INTO image_metadata "
+            "(file_path, path_hash, date_taken, mtime, file_size, rating, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 0, 0, ?, ?)",
+            (file_path, path_hash, str(date_taken) if date_taken is not None else None, mtime, now, now),
+        )
+        db.images.conn.commit()
+
+
+class TestDateRangeFiltering:
+
+    def test_get_date_range_with_date_taken(self, tmp_env):
+        db = tmp_env["db"]
+        _insert_with_dates(db, "/img/a.jpg", date_taken=1000.0, mtime=500.0)
+        _insert_with_dates(db, "/img/b.jpg", date_taken=2000.0, mtime=500.0)
+        _insert_with_dates(db, "/img/c.jpg", date_taken=3000.0, mtime=500.0)
+
+        result = db.images.get_date_range_for_paths(["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"])
+        assert result == (1000.0, 3000.0)
+
+    def test_get_date_range_mtime_fallback(self, tmp_env):
+        db = tmp_env["db"]
+        _insert_with_dates(db, "/img/a.jpg", date_taken=None, mtime=100.0)
+        _insert_with_dates(db, "/img/b.jpg", date_taken=None, mtime=900.0)
+
+        result = db.images.get_date_range_for_paths(["/img/a.jpg", "/img/b.jpg"])
+        assert result == (100.0, 900.0)
+
+    def test_get_date_range_mixed(self, tmp_env):
+        """date_taken takes priority; mtime fills in for rows without it."""
+        db = tmp_env["db"]
+        _insert_with_dates(db, "/img/exif.jpg",  date_taken=5000.0, mtime=100.0)
+        _insert_with_dates(db, "/img/nometa.jpg", date_taken=None,   mtime=9000.0)
+
+        result = db.images.get_date_range_for_paths(["/img/exif.jpg", "/img/nometa.jpg"])
+        assert result == (5000.0, 9000.0)
+
+    def test_get_date_range_paths_not_in_db_returns_none(self, tmp_env):
+        """Paths not in the DB return None (no rows match = no usable date)."""
+        db = tmp_env["db"]
+        result = db.images.get_date_range_for_paths(["/img/ghost.jpg", "/img/ghost2.jpg"])
+        assert result is None
+
+    def test_get_date_range_empty_list_returns_none(self, tmp_env):
+        db = tmp_env["db"]
+        assert db.images.get_date_range_for_paths([]) is None
+
+    def test_get_date_range_chunking(self, tmp_env):
+        """600 paths crosses the 500-item chunk boundary; both chunks contribute."""
+        db = tmp_env["db"]
+        paths = [f"/img/img_{i:04d}.jpg" for i in range(600)]
+        # First chunk: dates 1..500, second chunk: dates 501..600
+        for i, p in enumerate(paths):
+            _insert_with_dates(db, p, date_taken=float(i + 1))
+
+        result = db.images.get_date_range_for_paths(paths)
+        assert result == (1.0, 600.0)
+
+    def test_get_filtered_file_paths_date_range(self, tmp_env):
+        db = tmp_env["db"]
+        _insert_with_dates(db, "/img/old.jpg",    date_taken=1000.0)
+        _insert_with_dates(db, "/img/mid.jpg",    date_taken=5000.0)
+        _insert_with_dates(db, "/img/recent.jpg", date_taken=9000.0)
+
+        result = db.images.get_filtered_file_paths("", [True] * 6, date_range=(2000.0, 8000.0))
+        assert set(result) == {"/img/mid.jpg"}
+
+    def test_get_filtered_file_paths_date_range_boundaries(self, tmp_env):
+        """BETWEEN is inclusive on both ends."""
+        db = tmp_env["db"]
+        _insert_with_dates(db, "/img/lo.jpg", date_taken=100.0)
+        _insert_with_dates(db, "/img/hi.jpg", date_taken=900.0)
+
+        result = db.images.get_filtered_file_paths("", [True] * 6, date_range=(100.0, 900.0))
+        assert set(result) == {"/img/lo.jpg", "/img/hi.jpg"}
+
+    def test_get_filtered_file_paths_date_range_excludes_out_of_range(self, tmp_env):
+        """Images whose effective date (mtime fallback) falls outside the range are hidden."""
+        db = tmp_env["db"]
+        # mtime=0 (epoch) simulates an image with no EXIF date but a very old filesystem time
+        _insert_with_dates(db, "/img/old_mtime.jpg", date_taken=None, mtime=0.0)
+        _insert_with_dates(db, "/img/dated.jpg", date_taken=500.0, mtime=0.0)
+
+        # range starts at 1.0 — excludes old_mtime.jpg (mtime=0) but includes dated.jpg
+        result = db.images.get_filtered_file_paths("", [True] * 6, date_range=(1.0, 9999.0))
+        assert "/img/old_mtime.jpg" not in result
+        assert "/img/dated.jpg" in result
+
+    def test_get_filtered_file_paths_no_date_range_includes_all(self, tmp_env):
+        """Without date_range, images with no date are included normally."""
+        db = tmp_env["db"]
+        _insert_with_dates(db, "/img/dated.jpg", date_taken=500.0)
+        _insert_with_dates(db, "/img/nodates.jpg", date_taken=None, mtime=0.0)
+
+        result = db.images.get_filtered_file_paths("", [True] * 6, date_range=None)
+        assert {"/img/dated.jpg", "/img/nodates.jpg"}.issubset(set(result))
+
+
+# ===================================================================
 # FilterDialog.clear_filter syncs button state
 # ===================================================================
 

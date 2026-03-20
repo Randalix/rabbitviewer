@@ -141,6 +141,7 @@ def build_menus() -> dict:
     filter_menu = MenuNode("Filter", children=[
         MenuNode("Rating", key="r", action=_publish(EventType.OPEN_RATING_FILTER)),
         MenuNode("Name", key="n", action=_publish(EventType.OPEN_NAME_FILTER)),
+        MenuNode("Date", key="a", action=_publish(EventType.OPEN_DATE_FILTER)),
         MenuNode("Duplicates", key="d", action=_publish(EventType.TOGGLE_DUPLICATES_FILTER)),
         MenuNode("Tags", key="t", action=_publish(EventType.OPEN_TAG_FILTER)),
         MenuNode("Selection", key="l", action=_publish(EventType.SELECTION_FILTER_CHANGED)),
