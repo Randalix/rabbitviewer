@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 
 from core.event_system import event_system, EventType, DateFilterEventData
@@ -26,7 +26,6 @@ from gui.components.date_range_slider import DateRangeSlider
 
 logger = logging.getLogger(__name__)
 
-_DEBOUNCE_MS = 150
 
 
 def _date_str(ts: float) -> str:
@@ -34,8 +33,6 @@ def _date_str(ts: float) -> str:
 
 
 class DateFilterDialog(QDialog):
-    """Filter images by capture date using a non-linear range slider."""
-
     _data_ready = Signal(object, object)  # (full_range, visible_range)
 
     def __init__(self, parent=None):
@@ -53,17 +50,14 @@ class DateFilterDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
-        # Full range label
         self._range_label = QLabel("Loading…")
         self._range_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._range_label)
 
-        # Slider
         self._slider = DateRangeSlider(self)
         self._slider.range_changed.connect(self._on_slider_changed)
         layout.addWidget(self._slider)
 
-        # Bottom row: Clear button
         bottom = QHBoxLayout()
         bottom.addStretch()
         self._clear_btn = QPushButton("Clear filter")
@@ -72,11 +66,6 @@ class DateFilterDialog(QDialog):
         layout.addLayout(bottom)
 
         self.adjustSize()
-
-        self._debounce = QTimer(self)
-        self._debounce.setSingleShot(True)
-        self._debounce.setInterval(_DEBOUNCE_MS)
-        self._debounce.timeout.connect(self._emit_filter)
 
         QShortcut(QKeySequence("Esc"), self).activated.connect(self._on_esc)
 
@@ -105,9 +94,13 @@ class DateFilterDialog(QDialog):
     def _fetch_ranges(self) -> None:
         if not self._service:
             return
-        full = self._service.get_date_range_for_paths(self._all_paths)
-        visible = self._service.get_date_range_for_paths(self._visible_paths)
-        self._data_ready.emit(full, visible)
+        try:
+            full = self._service.get_date_range_for_paths(self._all_paths)
+            visible = self._service.get_date_range_for_paths(self._visible_paths)
+            self._data_ready.emit(full, visible)
+        except Exception:
+            logger.exception("Failed to fetch date ranges")
+            self._data_ready.emit(None, None)
 
     def _on_data_ready(self, full_range, visible_range) -> None:
         if full_range is None:
@@ -128,7 +121,6 @@ class DateFilterDialog(QDialog):
             f"Full range:  {_date_str(t_min)}  –  {_date_str(t_max)}"
         )
 
-        # Apply the initial filter immediately
         self._active = True
         self._emit_filter()
 
@@ -137,7 +129,7 @@ class DateFilterDialog(QDialog):
 
     def _on_slider_changed(self, lo: float, hi: float) -> None:
         self._active = True
-        self._debounce.start()
+        self._emit_filter()
 
     def _emit_filter(self) -> None:
         if not self._active:

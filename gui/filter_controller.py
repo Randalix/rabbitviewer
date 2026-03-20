@@ -45,7 +45,7 @@ class FilterController(QObject):
 
         self._filter_update_timer = QTimer(self)
         self._filter_update_timer.setSingleShot(True)
-        self._filter_update_timer.setInterval(200)
+        self._filter_update_timer.setInterval(80)
         self._filter_update_timer.timeout.connect(self.reapply_filters)
 
         self._filtered_paths_ready.connect(self._on_filtered_paths_ready)
@@ -352,7 +352,6 @@ class FilterController(QObject):
         event_system.unsubscribe(EventType.TOGGLE_DUPLICATES_FILTER, self._on_toggle_duplicates_filter)
         event_system.unsubscribe(EventType.DATE_FILTER_CHANGED, self._on_date_filter_event)
         event_system.unsubscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
-        # Guard: only unsubscribe if duplicates filter was active
         if self._phash_progress_subscribed:
             event_system.unsubscribe(EventType.PHASH_PROGRESS, self._on_phash_progress)
             self._phash_progress_subscribed = False

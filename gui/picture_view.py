@@ -382,6 +382,9 @@ class PictureView(QWidget):
     def has_image(self) -> bool:
         return self._picture_base.has_image()
 
+    def get_image(self):
+        return self._picture_base.get_image()
+
     def screen_to_normalized(self, pos: QPointF) -> QPointF:
         return self._picture_base.screenToNormalized(pos)
 

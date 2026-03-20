@@ -18,9 +18,7 @@ _MODE_CONFIG = {
 
 
 class SimilarityFilterDialog(QDialog):
-    """Filter images by visual similarity to a source image.
-
-    Both modes emit a 0.0–1.0 similarity value: 0 = open filter, 1 = close match.
+    """Both modes emit a 0.0–1.0 similarity value: 0 = open filter, 1 = close match.
     Emits params_changed(mode, value) on every slider/mode change.
     Emits filter_cleared on close.
     """
@@ -85,7 +83,6 @@ class SimilarityFilterDialog(QDialog):
 
     @property
     def current_params(self) -> tuple:
-        """Return (mode: str, value: float) reflecting the current UI state."""
         mode = self._mode_combo.currentText()
         return mode, self._slider.value() * _MODE_CONFIG[mode]["scale"]
 
@@ -117,6 +114,3 @@ class SimilarityFilterDialog(QDialog):
         self._update_value_label(mode, raw)
         self.params_changed.emit(mode, raw * _MODE_CONFIG[mode]["scale"])
 
-    def closeEvent(self, event):
-        self.filter_cleared.emit()
-        super().closeEvent(event)

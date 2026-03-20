@@ -763,12 +763,7 @@ class MainWindow(QMainWindow):
         """
         self._similarity_source_path = None
         if self.similarity_filter_dialog and self.similarity_filter_dialog.isVisible():
-            # Block filter_cleared so _on_similarity_filter_cleared doesn't
-            # call clear_similarity_filter() a second time — model is already
-            # clean from FilterController's CLEAR_FILTERS handler.
-            self.similarity_filter_dialog.blockSignals(True)
             self.similarity_filter_dialog.close()
-            self.similarity_filter_dialog.blockSignals(False)
 
     def _warm_clip_session(self):
         from core import onnx_runtime
@@ -980,7 +975,7 @@ class MainWindow(QMainWindow):
     def _copy_image(self):
         from .clipboard import copy_image_pixels, JPEG_EXTENSIONS
         if self.picture_view and self.stacked_widget.currentWidget() is self.picture_view:
-            image = self.picture_view._picture_base.get_image()
+            image = self.picture_view.get_image()
             path = self.picture_view.current_path
         else:
             self._show_status("Copy image: open in picture view first")
@@ -1006,15 +1001,15 @@ class MainWindow(QMainWindow):
         ))
 
     def load_directory(self, directory_path: str, recursive: bool = True):
-        logger.info(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")
+        logger.debug(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")
         self.last_known_directory = directory_path
         from core.recent_directories import add as add_recent
         add_recent(directory_path)
-        logger.info("MainWindow: Calling thumbnail_view.load_directory...")
+        logger.debug("MainWindow: Calling thumbnail_view.load_directory...")
         self.thumbnail_view.load_directory(directory_path, recursive)
-        logger.info("MainWindow: Directory loading completed, setting current widget...")
+        logger.debug("MainWindow: Directory loading completed, setting current widget...")
         self.stacked_widget.setCurrentWidget(self.thumbnail_view)
-        logger.info("MainWindow: ThumbnailView is now the current widget")
+        logger.debug("MainWindow: ThumbnailView is now the current widget")
 
     def _handle_open_recent(self, event_data):
         self.load_directory(event_data.path)
