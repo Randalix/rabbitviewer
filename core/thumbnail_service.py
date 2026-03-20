@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from core.directory_scanner import DirectoryScanner, ReconcileContext
 from core.folder_node import FolderNode
@@ -178,12 +178,17 @@ class ThumbnailService:
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None,
-                                duplicates_only: bool = False) -> List[str]:
+                                duplicates_only: bool = False,
+                                date_range: Optional[Tuple[float, float]] = None) -> List[str]:
         return self.db.images.get_filtered_file_paths(
             text_filter, star_states,
             tag_names=tag_names if tag_names else None,
             duplicates_only=duplicates_only,
+            date_range=date_range,
         )
+
+    def get_date_range_for_paths(self, file_paths: List[str]) -> Optional[Tuple[float, float]]:
+        return self.db.images.get_date_range_for_paths(file_paths)
 
     def get_phash_duplicate_paths(self, file_paths: List[str]) -> set:
         from core.phash_coordinator import PHashCoordinator

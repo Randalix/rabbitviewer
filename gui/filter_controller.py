@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Optional, Tuple
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
@@ -56,6 +56,7 @@ class FilterController(QObject):
         event_system.subscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
         event_system.subscribe(EventType.DUPLICATES_FILTER_CHANGED, self._on_duplicates_filter_event)
         event_system.subscribe(EventType.TOGGLE_DUPLICATES_FILTER, self._on_toggle_duplicates_filter)
+        event_system.subscribe(EventType.DATE_FILTER_CHANGED, self._on_date_filter_event)
         event_system.subscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
 
     # -- Public filter API ---------------------------------------------------
@@ -101,6 +102,10 @@ class FilterController(QObject):
         self.model.set_person_filter_paths(None)
         self.reapply_filters()
 
+    def apply_date_filter(self, date_range: Optional[Tuple[float, float]]) -> None:
+        self.model.set_date_filter(date_range)
+        self._filter_update_timer.start()
+
     def apply_selection_filter(self, paths: set):
         self.model.set_selection_filter_paths(paths)
         self._filter_update_timer.start()
@@ -137,6 +142,9 @@ class FilterController(QObject):
 
     def _on_tag_filter_event(self, event_data):
         self.apply_tag_filter(event_data.tag_names)
+
+    def _on_date_filter_event(self, event_data):
+        self.apply_date_filter(event_data.date_range)
 
     def _on_duplicates_filter_event(self, event_data):
         self._apply_duplicates_filter(event_data.duplicates_only)
@@ -217,13 +225,14 @@ class FilterController(QObject):
         star_filter = list(self.model.current_star_filter)
         tag_filter = list(self.model.current_tag_filter)
         duplicates_only = self.model.duplicates_only
-        self._executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter, duplicates_only)
+        date_range = self.model.current_date_filter
+        self._executor.submit(self._fetch_filtered_paths, text_filter, star_filter, tag_filter, duplicates_only, date_range)
 
-    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list, duplicates_only: bool = False):
+    def _fetch_filtered_paths(self, text_filter: str, star_filter: list, tag_filter: list, duplicates_only: bool = False, date_range: Optional[Tuple[float, float]] = None):
         try:
             response = self.service.get_filtered_file_paths(
                 text_filter, star_filter, tag_names=tag_filter or None,
-                duplicates_only=duplicates_only,
+                duplicates_only=duplicates_only, date_range=date_range,
             )
             if response is None:
                 logger.error("Failed to get filtered paths.")
@@ -298,6 +307,8 @@ class FilterController(QObject):
             active.append("tags")
         if self.model.duplicates_only:
             active.append("duplicates")
+        if self.model.current_date_filter is not None:
+            active.append("date")
         if self.model.clip_search_paths is not None:
             active.append("clip")
         if self.model.person_filter_paths is not None:
@@ -339,6 +350,7 @@ class FilterController(QObject):
         event_system.unsubscribe(EventType.TAG_FILTER_CHANGED, self._on_tag_filter_event)
         event_system.unsubscribe(EventType.DUPLICATES_FILTER_CHANGED, self._on_duplicates_filter_event)
         event_system.unsubscribe(EventType.TOGGLE_DUPLICATES_FILTER, self._on_toggle_duplicates_filter)
+        event_system.unsubscribe(EventType.DATE_FILTER_CHANGED, self._on_date_filter_event)
         event_system.unsubscribe(EventType.CLEAR_FILTERS, self._on_clear_filters_event)
         # Guard: only unsubscribe if duplicates filter was active
         if self._phash_progress_subscribed:

@@ -18,6 +18,7 @@ from .rating_filter_dialog import RatingFilterDialog
 from .name_filter_dialog import NameFilterDialog
 from .tag_editor_dialog import TagEditorDialog
 from .tag_filter_dialog import TagFilterDialog
+from .date_filter_dialog import DateFilterDialog
 from .modal_menu import ModalMenu
 from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
@@ -102,6 +103,7 @@ class MainWindow(QMainWindow):
         self.breadcrumb_bar = None
         self.tag_editor_dialog = None
         self.tag_filter_dialog = None
+        self.date_filter_dialog = None
         self.comfyui_dialog = None
         self.clip_search_dialog = None
         self._pre_clip_search_order = None
@@ -437,6 +439,23 @@ class MainWindow(QMainWindow):
             self.name_filter_dialog.show()
             self.name_filter_dialog.raise_()
             self.name_filter_dialog.activateWindow()
+
+    def open_date_filter_dialog(self):
+        if not self.date_filter_dialog:
+            self.date_filter_dialog = DateFilterDialog(self)
+
+        if self.date_filter_dialog.isVisible():
+            self.date_filter_dialog.hide()
+            self.date_filter_dialog.clear_filter()
+            return
+
+        tv = self.thumbnail_view
+        if not tv or not tv.service:
+            return
+
+        all_paths = list(tv.model.all_files)
+        visible_paths = list(tv.model.current_files)
+        self.date_filter_dialog.open_for(tv.service, all_paths, visible_paths)
 
     def open_tag_filter(self):
         if not self.tag_filter_dialog:
@@ -878,6 +897,7 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_FILTER, lambda _: self.open_filter_dialog())
         event_system.subscribe(EventType.OPEN_RATING_FILTER, lambda _: self.open_rating_filter_dialog())
         event_system.subscribe(EventType.OPEN_NAME_FILTER, lambda _: self.open_name_filter_dialog())
+        event_system.subscribe(EventType.OPEN_DATE_FILTER, lambda _: self.open_date_filter_dialog())
         event_system.subscribe(EventType.OPEN_CLIP_SEARCH, lambda _: self.open_clip_search_dialog())
         event_system.subscribe(EventType.OPEN_SIMILARITY_FILTER, lambda _: self.open_similarity_filter_dialog())
         event_system.subscribe(EventType.CLEAR_FILTERS, lambda _: self._on_clear_similarity_on_global_clear())

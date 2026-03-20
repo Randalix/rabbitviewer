@@ -396,7 +396,17 @@ Grid display of file placeholders (`ThumbnailLabel`). Delegates filter orchestra
 
 ### FilterController — `gui/filter_controller.py`
 
-QObject that orchestrates text/star/tag/CLIP/person filtering. Subscribes to EventSystem filter events, debounces via QTimer, and queries the daemon on a background executor. Intersects filter results with CLIP search and person filter paths. Calls back into the widget for grid rebuild after visibility changes.
+QObject that orchestrates text/star/tag/date/CLIP/person filtering. Subscribes to EventSystem filter events, debounces via QTimer, and queries the daemon on a background executor. Intersects filter results with CLIP search and person filter paths. Calls back into the widget for grid rebuild after visibility changes.
+
+### Date Filter — `gui/date_filter_dialog.py`, `gui/components/date_range_slider.py`
+
+Non-modal dialog with a two-handle range slider for filtering images by capture date.
+
+- **On open**: fetches the full folder date range and the visible-images date range in a background thread. Handles pre-position to the visible span; track spans the full folder range.
+- **Slider**: `DateRangeSlider` is a custom `QWidget` with a non-linear power-law time axis — `p^alpha` maps slider position to timestamp so small movements near the extremes cover hours while coarser movements in the middle cover days/months. `alpha` adapts to the total span (1.0 for sub-hour ranges up to 3.0 for multi-year spans).
+- **Date source**: `COALESCE(CAST(date_taken AS REAL), mtime)` — uses EXIF capture date, falls back to filesystem mtime. Images where the effective date falls outside the selected range are hidden.
+- **DB query**: `ImageTable.get_date_range_for_paths()` chunks path lists into batches of 500 to stay within SQLite's variable-binding limit. `get_filtered_file_paths()` accepts an optional `date_range: Tuple[float, float]` parameter that adds a `BETWEEN` clause on the same expression.
+- **Events**: `OPEN_DATE_FILTER` (menu → opens dialog) and `DATE_FILTER_CHANGED` (`DateFilterEventData` with `date_range: Optional[Tuple[float, float]]`) — handled by `FilterController._on_date_filter_event`.
 
 ### NotificationHandler — `gui/thumbnail_notifications.py`
 
@@ -458,6 +468,8 @@ Three pure functions for clipboard operations: `copy_paths_as_text` (newline-sep
 ### EventSystem — `core/event_system.py`
 
 Pub-sub bus for GUI-internal communication. Typed event data classes; history capped at 100 via `deque`. Thread-safe: `subscribe`/`unsubscribe`/`publish` all hold a lock; `publish` snapshots the subscriber list before iterating so callbacks may safely call `subscribe`/`unsubscribe`. Use for all GUI→GUI state changes; never call GUI methods directly. Ephemeral event types (`INSPECTOR_UPDATE`, `THUMBNAIL_OVERLAY`) skip history to avoid evicting useful events.
+
+Filter-related events: `TEXT_FILTER_CHANGED`, `STAR_FILTER_CHANGED`, `TAG_FILTER_CHANGED`, `DUPLICATES_FILTER_CHANGED`, `DATE_FILTER_CHANGED` (carries `DateFilterEventData.date_range: Optional[Tuple[float, float]]`), `SELECTION_FILTER_CHANGED`, `CLEAR_FILTERS`. Dialog-open events: `OPEN_RATING_FILTER`, `OPEN_NAME_FILTER`, `OPEN_DATE_FILTER`, `OPEN_TAG_FILTER`, `OPEN_TAG_EDITOR`.
 
 ---
 

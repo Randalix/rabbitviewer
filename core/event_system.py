@@ -1,5 +1,5 @@
 from PySide6.QtCore import QObject, QPointF
-from typing import Dict, List, Callable, Optional, Set, FrozenSet
+from typing import Dict, List, Callable, Optional, Set, FrozenSet, Tuple
 from dataclasses import dataclass, field
 from collections import deque
 from enum import Enum
@@ -45,6 +45,7 @@ class EventType(Enum):
     OPEN_BREADCRUMB = "open_breadcrumb"
     OPEN_FILTER = "open_filter"
     OPEN_RATING_FILTER = "open_rating_filter"
+    OPEN_DATE_FILTER = "open_date_filter"
     OPEN_NAME_FILTER = "open_name_filter"
     TOGGLE_DUPLICATES_FILTER = "toggle_duplicates_filter"
     OPEN_TAG_EDITOR = "open_tag_editor"
@@ -77,6 +78,7 @@ class EventType(Enum):
     TAG_FILTER_CHANGED = "tag_filter_changed"
     DUPLICATES_FILTER_CHANGED = "duplicates_filter_changed"
     SELECTION_FILTER_CHANGED = "selection_filter_changed"
+    DATE_FILTER_CHANGED = "date_filter_changed"
     CLEAR_FILTERS = "clear_filters"
 
     # pHash background progress
@@ -191,6 +193,10 @@ class OpenModalMenuEventData(EventData):
 @dataclass
 class FacePersonFilterEventData(EventData):
     person_ids: List[str]  # empty = clear filter
+
+@dataclass
+class DateFilterEventData(EventData):
+    date_range: Optional[Tuple[float, float]]  # (min_ts, max_ts) epoch seconds, or None to clear
 
 
 @dataclass

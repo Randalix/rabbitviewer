@@ -807,9 +807,45 @@ class ImageTable(BaseTable):
             logger.error(f"Error searching by camera: {e}")
             return []
 
+    def get_date_range_for_paths(self, file_paths: List[str]) -> Optional[Tuple[float, float]]:
+        """Returns (min_ts, max_ts) epoch seconds for the given paths using date_taken with mtime fallback.
+
+        Queries in chunks of 500 to stay within SQLite's variable-binding limit.
+        Returns None if no paths have a usable date.
+        """
+        if not file_paths:
+            return None
+        _CHUNK = 500
+        min_ts, max_ts = float('inf'), float('-inf')
+        try:
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            for i in range(0, len(file_paths), _CHUNK):
+                chunk = file_paths[i:i + _CHUNK]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor.execute(
+                    f"SELECT MIN(COALESCE(CAST(date_taken AS REAL), mtime)),"
+                    f"       MAX(COALESCE(CAST(date_taken AS REAL), mtime))"
+                    f"  FROM image_metadata"
+                    f" WHERE file_path IN ({placeholders})"
+                    f"   AND COALESCE(CAST(date_taken AS REAL), mtime) IS NOT NULL",
+                    chunk,
+                )
+                row = cursor.fetchone()
+                if row and row[0] is not None:
+                    min_ts = min(min_ts, row[0])
+                    max_ts = max(max_ts, row[1])
+            if min_ts == float('inf'):
+                return None
+            return (min_ts, max_ts)
+        except sqlite3.Error as e:
+            logger.error(f"Error getting date range: {e}")
+            return None
+
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None,
-                                duplicates_only: bool = False) -> List[str]:
+                                duplicates_only: bool = False,
+                                date_range: Optional[Tuple[float, float]] = None) -> List[str]:
         """Gets file paths that match the text, star, tag, and duplicates filters."""
         try:
             conn = self._read_conn()
@@ -850,6 +886,12 @@ class ImageTable(BaseTable):
                     WHERE content_hash IS NOT NULL
                     GROUP BY content_hash HAVING COUNT(*) > 1
                 )"""
+
+            # Add date range filter (date_taken with mtime fallback; no-date images excluded)
+            if date_range is not None:
+                min_ts, max_ts = date_range
+                query += """ AND COALESCE(CAST(date_taken AS REAL), mtime) BETWEEN ? AND ?"""
+                params.extend([min_ts, max_ts])
 
             cursor.execute(query, params)
             return [row[0] for row in cursor.fetchall()]
