@@ -61,6 +61,7 @@ class ThumbnailModel:
         self.clip_search_paths: Optional[Set[str]] = None
         self.person_filter_paths: Optional[Set[str]] = None
         self.selection_filter_paths: Optional[Set[str]] = None
+        self.similarity_filter_paths: Optional[Set[str]] = None
         self.duplicates_only: bool = False
 
         # Folder navigation state
@@ -282,6 +283,9 @@ class ThumbnailModel:
     def set_selection_filter_paths(self, paths: Optional[Set[str]]) -> None:
         self.selection_filter_paths = paths
 
+    def set_similarity_filter_paths(self, paths: Optional[Set[str]]) -> None:
+        self.similarity_filter_paths = paths
+
     def set_duplicates_only(self, enabled: bool) -> None:
         self.duplicates_only = enabled
 
@@ -293,6 +297,7 @@ class ThumbnailModel:
         self.clip_search_paths = None
         self.person_filter_paths = None
         self.selection_filter_paths = None
+        self.similarity_filter_paths = None
         self.duplicates_only = False
         self.hidden_indices = set()
 

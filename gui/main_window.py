@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
     _tag_filter_ready = Signal(list, list)  # (dir_tags, global_tags)
     _tag_editor_ready = Signal(int, list, list, list)  # (count, common_tags, dir_tags, global_tags)
     _clip_results_ready = Signal(object)  # list of (path, score) or None
+    _similarity_results_ready = Signal(object)  # list of (path, score) or None
     def __init__(self, config_manager, service,
                  daemon_signals: DaemonSignals, *, debug_ui: bool = False):
         super().__init__()
@@ -104,6 +105,8 @@ class MainWindow(QMainWindow):
         self.comfyui_dialog = None
         self.clip_search_dialog = None
         self._pre_clip_search_order = None
+        self.similarity_filter_dialog = None
+        self._similarity_source_path = None
         self._removed_images = []
 
         QTimer.singleShot(0, self._deferred_init)
@@ -157,6 +160,7 @@ class MainWindow(QMainWindow):
         self._hover_rating_ready.connect(self._on_hover_rating_ready)
         self._hover_metadata_ready.connect(self._on_hover_metadata_ready)
         self._clip_results_ready.connect(self._on_clip_results_ready)
+        self._similarity_results_ready.connect(self._on_similarity_results_ready)
 
     def _handle_benchmark_result(self, operation: str, time: float):
         logger.info(f"Benchmark - {operation}: {time:.3f} seconds")
@@ -657,6 +661,88 @@ class MainWindow(QMainWindow):
         if self.thumbnail_view:
             self.thumbnail_view.navigate_to_file(file_path)
 
+    # ── Similarity Filter ────────────────────────────────────────
+
+    def open_similarity_filter_dialog(self):
+        sources = self.get_effective_selection()
+        if not sources:
+            return
+        source_path = sources[0]
+
+        if not self.similarity_filter_dialog:
+            from .similarity_filter_dialog import SimilarityFilterDialog
+            self.similarity_filter_dialog = SimilarityFilterDialog(self)
+            self.similarity_filter_dialog.threshold_changed.connect(
+                self._on_similarity_threshold_changed)
+            self.similarity_filter_dialog.filter_cleared.connect(
+                self._on_similarity_filter_cleared)
+
+        # Toggle off if same source re-selected and dialog is open
+        if (self.similarity_filter_dialog.isVisible()
+                and self._similarity_source_path == source_path):
+            self.similarity_filter_dialog.close()
+            return
+
+        self._similarity_source_path = source_path
+        self.similarity_filter_dialog.set_source(source_path)
+        self.similarity_filter_dialog.show()
+        self.similarity_filter_dialog.activateWindow()
+        self._run_similarity_search(source_path, self.similarity_filter_dialog.threshold)
+
+    def _on_similarity_threshold_changed(self, threshold: float):
+        if self._similarity_source_path:
+            self._run_similarity_search(self._similarity_source_path, threshold)
+
+    def _run_similarity_search(self, source_path: str, threshold: float):
+        scope = list(self.thumbnail_view.all_files) if self.thumbnail_view else None
+
+        def _bg():
+            try:
+                if not self.service:
+                    self._similarity_results_ready.emit(None)
+                    return
+                results = self.service.find_similar_images(
+                    source_path, threshold=threshold, scope=scope)
+                self._similarity_results_ready.emit(results)
+            except Exception:  # why: find_similar_images calls numpy + DB reads; thread must not silently die
+                logger.error("Similarity search failed", exc_info=True)
+                self._similarity_results_ready.emit(None)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _on_similarity_results_ready(self, results):
+        if not self.similarity_filter_dialog:
+            return
+        if results is None:
+            self.similarity_filter_dialog.set_error(
+                "Search failed — are CLIP embeddings indexed?")
+            return
+        if self.thumbnail_view:
+            paths = {fp for fp, _ in results}
+            self.thumbnail_view.filter_controller.apply_similarity_filter(paths)
+        self.similarity_filter_dialog.set_result_count(len(results))
+
+    def _on_similarity_filter_cleared(self):
+        self._similarity_source_path = None
+        if self.thumbnail_view:
+            self.thumbnail_view.filter_controller.clear_similarity_filter()
+
+    def _on_clear_similarity_on_global_clear(self):
+        """Close the similarity dialog when the user clears all filters.
+
+        FilterController.clear_filter() zeroes similarity_filter_paths via
+        model.clear_filters(). This method owns the complementary dialog and
+        source-path teardown so the two don't need to stay in lock-step.
+        """
+        self._similarity_source_path = None
+        if self.similarity_filter_dialog and self.similarity_filter_dialog.isVisible():
+            # Block filter_cleared so _on_similarity_filter_cleared doesn't
+            # call clear_similarity_filter() a second time — model is already
+            # clean from FilterController's CLEAR_FILTERS handler.
+            self.similarity_filter_dialog.blockSignals(True)
+            self.similarity_filter_dialog.close()
+            self.similarity_filter_dialog.blockSignals(False)
+
     def _warm_clip_session(self):
         from core import onnx_runtime
         from core.model_manager import get_model_path
@@ -793,6 +879,8 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_RATING_FILTER, lambda _: self.open_rating_filter_dialog())
         event_system.subscribe(EventType.OPEN_NAME_FILTER, lambda _: self.open_name_filter_dialog())
         event_system.subscribe(EventType.OPEN_CLIP_SEARCH, lambda _: self.open_clip_search_dialog())
+        event_system.subscribe(EventType.OPEN_SIMILARITY_FILTER, lambda _: self.open_similarity_filter_dialog())
+        event_system.subscribe(EventType.CLEAR_FILTERS, lambda _: self._on_clear_similarity_on_global_clear())
         event_system.subscribe(EventType.OPEN_TAG_EDITOR, lambda _: self.open_tag_editor())
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))

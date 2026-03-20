@@ -109,6 +109,14 @@ class FilterController(QObject):
         self.model.set_selection_filter_paths(None)
         self.reapply_filters()
 
+    def apply_similarity_filter(self, paths: set):
+        self.model.set_similarity_filter_paths(paths)
+        self._filter_update_timer.start()
+
+    def clear_similarity_filter(self):
+        self.model.set_similarity_filter_paths(None)
+        self.reapply_filters()
+
     # -- EventSystem handlers ------------------------------------------------
 
     def _on_face_person_filter(self, event_data):
@@ -191,6 +199,8 @@ class FilterController(QObject):
                 visible = visible & self.model.person_filter_paths
             if self.model.selection_filter_paths is not None:
                 visible = visible & self.model.selection_filter_paths
+            if self.model.similarity_filter_paths is not None:
+                visible = visible & self.model.similarity_filter_paths
             self._apply_filter_results(visible)
             return
 
@@ -247,6 +257,8 @@ class FilterController(QObject):
             visible_paths = visible_paths & self.model.person_filter_paths
         if self.model.selection_filter_paths is not None:
             visible_paths = visible_paths & self.model.selection_filter_paths
+        if self.model.similarity_filter_paths is not None:
+            visible_paths = visible_paths & self.model.similarity_filter_paths
 
         self._apply_filter_results(visible_paths)
 
@@ -292,6 +304,8 @@ class FilterController(QObject):
             active.append("faces")
         if self.model.selection_filter_paths is not None:
             active.append("selection")
+        if self.model.similarity_filter_paths is not None:
+            active.append("similarity")
         filter_desc = ", ".join(active) if active else "none"
         status_msg = f"Filter ({filter_desc}): {visible_count}/{total_count} shown"
         if hidden_count > 0:

@@ -61,6 +61,9 @@ class EventType(Enum):
     # AI / CLIP search
     OPEN_CLIP_SEARCH = "open_clip_search"
 
+    # Similarity filter
+    OPEN_SIMILARITY_FILTER = "open_similarity_filter"
+
     # Face recognition
     FACE_PERSON_FILTER = "face_person_filter"
 
