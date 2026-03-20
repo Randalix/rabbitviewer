@@ -144,6 +144,7 @@ def build_menus() -> dict:
         MenuNode("Duplicates", key="d", action=_publish(EventType.TOGGLE_DUPLICATES_FILTER)),
         MenuNode("Tags", key="t", action=_publish(EventType.OPEN_TAG_FILTER)),
         MenuNode("Selection", key="l", action=_publish(EventType.SELECTION_FILTER_CHANGED)),
+        MenuNode("Similarity", key="s", action=_publish(EventType.OPEN_SIMILARITY_FILTER)),
         MenuNode("Clear all", key="c", action=_publish(EventType.CLEAR_FILTERS)),
     ])
 

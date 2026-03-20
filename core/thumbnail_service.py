@@ -29,6 +29,7 @@ class ThumbnailService:
         self._counter_lock = threading.Lock()
         self._clip_cache = None       # (file_paths, matrix) tuple
         self._clip_cache_gen = -1     # db.embedding_generation when cache was built
+        self._clip_cache_lock = threading.Lock()
 
     def prepare_for_shutdown(self):
         self.rm.prepare_for_shutdown()
@@ -475,14 +476,15 @@ class ThumbnailService:
 
         # Reuse cached matrix if no embeddings were added/removed since last build
         gen = self.db.embeddings.generation
-        if self._clip_cache is not None and self._clip_cache_gen == gen:
-            file_paths, matrix = self._clip_cache
-        else:
-            rows = self.db.embeddings.get_all_embeddings()
-            file_paths, matrix = clip_search.build_embedding_matrix(rows)
-            if matrix is not None:
-                self._clip_cache = (file_paths, matrix)
-                self._clip_cache_gen = gen
+        with self._clip_cache_lock:
+            if self._clip_cache is not None and self._clip_cache_gen == gen:
+                file_paths, matrix = self._clip_cache
+            else:
+                rows = self.db.embeddings.get_all_embeddings()
+                file_paths, matrix = clip_search.build_embedding_matrix(rows)
+                if matrix is not None:
+                    self._clip_cache = (file_paths, matrix)
+                    self._clip_cache_gen = gen
 
         if matrix is None:
             return []
@@ -499,9 +501,59 @@ class ThumbnailService:
 
         return clip_search.search(query_embedding, file_paths, matrix, top_k=top_k)
 
+    def find_similar_images(self, source_path: str, threshold: float = 0.5, scope=None):
+        """Return images with cosine similarity >= threshold to source_path.
+
+        Returns [(file_path, score), ...] sorted descending, or None if source has no embedding.
+        scope: optional list of file_paths to restrict search to.
+        """
+        from core import clip_search
+
+        blob = self.db.embeddings.get_embedding(source_path)
+        if blob is None:
+            return None
+
+        np_mod = clip_search._get_numpy()
+        if np_mod is None:
+            return []
+
+        source_embedding = np_mod.frombuffer(blob, dtype=np_mod.float32).copy()
+
+        gen = self.db.embeddings.generation
+        with self._clip_cache_lock:
+            if self._clip_cache is not None and self._clip_cache_gen == gen:
+                file_paths, matrix = self._clip_cache
+            else:
+                rows = self.db.embeddings.get_all_embeddings()
+                file_paths, matrix = clip_search.build_embedding_matrix(rows)
+                if matrix is not None:
+                    self._clip_cache = (file_paths, matrix)
+                    self._clip_cache_gen = gen
+
+        if matrix is None or not file_paths:
+            return []
+
+        if scope is not None:
+            scope_set = set(scope)
+            mask = [i for i, fp in enumerate(file_paths) if fp in scope_set]
+            if not mask:
+                return []
+            file_paths = [file_paths[i] for i in mask]
+            matrix = matrix[np_mod.array(mask)]
+
+        scores = matrix @ source_embedding
+        results = [
+            (fp, float(scores[i]))
+            for i, fp in enumerate(file_paths)
+            if float(scores[i]) >= threshold
+        ]
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results
+
     def invalidate_clip_cache(self):
-        self._clip_cache = None
-        self._clip_cache_gen = -1
+        with self._clip_cache_lock:
+            self._clip_cache = None
+            self._clip_cache_gen = -1
 
     def clip_index_status(self):
         model = self.config_manager.get("ai.clip_search.model", "clip-vit-b-32")
