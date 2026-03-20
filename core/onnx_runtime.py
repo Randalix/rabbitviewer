@@ -10,8 +10,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_sessions = {}
-_lock = threading.Lock()
+_sessions: dict = {}
+_model_locks: dict = {}
+# Guards _sessions and _model_locks dicts only — not held during model creation.
+_registry_lock = threading.Lock()
 
 
 def is_available() -> bool:
@@ -39,10 +41,25 @@ def get_session(model_path: str) -> Optional[object]:
         logger.warning("ONNX model not found: %s", model_path)
         return None
 
-    with _lock:
+    # Fast path: session already cached.
+    with _registry_lock:
         if model_path in _sessions:
             logger.debug("ONNX session cache hit: %s", model_path)
             return _sessions[model_path]
+        # Acquire (or create) the per-model lock while holding the registry
+        # lock, so two threads racing on the same model both get the same lock
+        # object and one waits while the other loads.
+        if model_path not in _model_locks:
+            _model_locks[model_path] = threading.Lock()
+        model_lock = _model_locks[model_path]
+
+    # Per-model lock: only one thread loads a given model; other models load concurrently.
+    with model_lock:
+        # Re-check: another thread may have loaded while we waited.
+        with _registry_lock:
+            if model_path in _sessions:
+                logger.debug("ONNX session cache hit: %s", model_path)
+                return _sessions[model_path]
 
         import onnxruntime as ort
 
@@ -64,7 +81,8 @@ def get_session(model_path: str) -> Optional[object]:
             logger.error("Failed to load ONNX model: %s", model_path, exc_info=True)
             return None
 
-        _sessions[model_path] = session
+        with _registry_lock:
+            _sessions[model_path] = session
         return session
 
 
@@ -85,5 +103,6 @@ def prewarm_session(model_path: str) -> None:
 
 
 def release_all():
-    with _lock:
+    with _registry_lock:
         _sessions.clear()
+        _model_locks.clear()
