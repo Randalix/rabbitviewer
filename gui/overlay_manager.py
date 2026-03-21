@@ -55,6 +55,7 @@ class OverlayManager:
         self._request_update = request_update
 
     def register_renderer(self, name: str, fn: RendererFn) -> None:
+        # Intentional overwrite: re-registration replaces the renderer (e.g. hot-reload, test override).
         self._renderers[name] = fn
 
     def show(self, idx: int, descriptor: OverlayDescriptor) -> None:

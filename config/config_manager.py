@@ -81,9 +81,9 @@ DEFAULT_CONFIG = {
             "sequence": "S",
             "description": "Open sort menu"
         },
-        "menu:compare": {
+        "menu:viewport": {
             "sequence": "V",
-            "description": "Compare selected images"
+            "description": "Viewport & Compare options"
         },
         "show_hotkey_help": {
             "sequence": "?",

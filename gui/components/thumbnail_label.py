@@ -3,12 +3,13 @@ import time
 import logging
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, QPointF
+from PySide6.QtCore import Qt, QTimer, QPointF, QRect
 from PySide6.QtGui import QPixmap, QColor, QPainter
 
 from gui.components.item_card import ItemCard
 from core.event_system import event_system, EventType, InspectorEventData
 from gui.overlay_manager import OverlayManager
+from gui.overlay_renderers import render_stars
 from core.folder_node import FolderNode
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class ThumbnailLabel(ItemCard):
 
         self._original_idx: int = -1
         self._overlay_manager: OverlayManager | None = None
+        self._display_rating: Optional[int] = None  # set by ThumbnailViewWidget in ratings mode
 
         # Folder card state
         self.is_folder: bool = False
@@ -133,10 +135,18 @@ class ThumbnailLabel(ItemCard):
             self._paint_folder_card(event)
             return
         super().paintEvent(event)
-        if self._overlay_manager and self._overlay_manager.has_overlays(self._original_idx):
+        has_overlay = self._overlay_manager and self._overlay_manager.has_overlays(self._original_idx)
+        show_rating = self._display_rating is not None and self._display_rating > 0
+        if has_overlay or show_rating:
             try:
                 painter = QPainter(self)
-                self._overlay_manager.paint(painter, self.rect(), self._original_idx)
+                if has_overlay:
+                    self._overlay_manager.paint(painter, self.rect(), self._original_idx)
+                if show_rating:
+                    r = self.rect()
+                    strip_h = max(r.height() // 3, 24)
+                    rating_rect = QRect(r.x(), r.y() + r.height() - strip_h, r.width(), strip_h)
+                    render_stars(painter, rating_rect, {"count": self._display_rating})
                 painter.end()
             except Exception:
                 # why: renderer crash must not leave QPainter open or break label rendering

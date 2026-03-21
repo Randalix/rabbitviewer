@@ -119,11 +119,14 @@ def build_menus() -> dict:
         MenuNode("Auto-rotate (AI)", key="a", script="auto_rotate"),
     ])
     open_with_menu = MenuNode("Open with", children=[
+        MenuNode("Default app", key="d", script="open_with_default"),
+        MenuNode("Open folder", key="f", script="open_folder"),
         MenuNode("vkdt", key="v", script="open_in_vkdt"),
     ])
-    compare_menu = MenuNode("Compare", children=[
-        MenuNode("Grid", key="g", action=_publish(EventType.OPEN_COMPARE_GRID)),
-        MenuNode("Split line", key="s", action=_publish(EventType.OPEN_COMPARE_SPLIT)),
+    viewport_menu = MenuNode("Viewport & Compare", children=[
+        MenuNode("Compare grid", key="g", action=_publish(EventType.OPEN_COMPARE_GRID)),
+        MenuNode("Compare split", key="s", action=_publish(EventType.OPEN_COMPARE_SPLIT)),
+        MenuNode("Toggle ratings", key="r", script="toggle_ratings_display"),
     ])
 
     # Bookmark menu — children are rebuilt from YAML each time it opens.
@@ -169,6 +172,6 @@ def build_menus() -> dict:
     return {
         "sort": sort_menu, "tags": tag_menu, "export": export_menu,
         "rotate": rotate_menu, "open_with": open_with_menu,
-        "compare": compare_menu, "bookmark": bookmark_menu,
+        "viewport": viewport_menu, "bookmark": bookmark_menu,
         "recent": recent_menu, "filter": filter_menu, "goto": goto_menu,
     }

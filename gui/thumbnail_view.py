@@ -65,6 +65,8 @@ class ThumbnailViewWidget(QFrame):
 
         self.labels: Dict[int, ThumbnailLabel] = {}  # original_idx → materialized label (viewport only)
         self.pending_thumbnails = set()
+        self._ratings_mode: bool = False
+        self._rating_cache: Dict[str, int] = {}  # path → star count, populated when ratings mode is on
         self.middle_mouse_pressed = False
         self.middle_mouse_press_pos = None
         self._benchmark_timer = QElapsedTimer()
@@ -268,6 +270,7 @@ class ThumbnailViewWidget(QFrame):
             label.setPixmap(QPixmap())
             label.loaded = False
             label.setSelected(False)
+            label._display_rating = None
             self.overlay_manager.remove_all_for_idx(label._original_idx)
             label._original_idx = -1
             # why: cancel any pending inspector-throttle tick so the recycled label
@@ -306,6 +309,8 @@ class ThumbnailViewWidget(QFrame):
 
         label._original_idx = original_idx
         label._overlay_manager = self.overlay_manager
+        if self._ratings_mode:
+            label._display_rating = self._rating_cache.get(label.file_path)
         label.setParent(self._grid_container)
         # why: ThumbnailViewWidget must be the event filter so Enter/Leave events
         # reach _set_hovered_label / _clear_hovered_label on the parent widget.
@@ -586,6 +591,17 @@ class ThumbnailViewWidget(QFrame):
                         matched += 1
             logger.debug("[overlay] show: %d/%d paths matched to labels", matched, len(paths))
 
+            # Keep rating cache and persistent display in sync when a rating overlay fires.
+            if self._ratings_mode and event_data.renderer_name == "stars":
+                count = event_data.params.get("count", 0)
+                for path in paths:
+                    self._rating_cache[path] = count
+                    idx = self.model.path_to_idx.get(path)
+                    if idx is not None:
+                        label = self.labels.get(idx)
+                        if label:
+                            label._display_rating = count
+
         elif action == "remove":
             for path in paths:
                 idx = self.model.path_to_idx.get(path)
@@ -597,6 +613,55 @@ class ThumbnailViewWidget(QFrame):
 
     def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
         self._notifications.set_daemon_signals(daemon_signals)
+
+    # -- Ratings display mode -----------------------------------------------
+
+    def toggle_ratings_mode(self) -> None:
+        self._ratings_mode = not self._ratings_mode
+        if self._ratings_mode:
+            self._fetch_and_apply_ratings()
+        else:
+            self._rating_cache.clear()
+            for label in self.labels.values():
+                label._display_rating = None
+                label.update()
+
+    def _fetch_and_apply_ratings(self) -> None:
+        if not self.service:
+            return
+        # Phase 1: fetch only visible labels immediately so stars appear without delay.
+        visible_paths = [label.file_path for label in self.labels.values()]
+        all_paths = list(self.model.all_files)
+
+        def _fetch():
+            try:
+                # Visible first — small batch, fast round-trip.
+                if visible_paths:
+                    result = self.service.get_metadata_batch(visible_paths)
+                    if result:
+                        for path, meta in result.items():
+                            self._rating_cache[path] = int(meta.get("rating", 0) or 0)
+                    QTimer.singleShot(0, self._apply_cached_ratings_to_labels)
+                # Phase 2: remaining paths (background, populates cache for scroll-in).
+                remaining = [p for p in all_paths if p not in self._rating_cache]
+                if remaining:
+                    result = self.service.get_metadata_batch(remaining)
+                    if result:
+                        for path, meta in result.items():
+                            self._rating_cache[path] = int(meta.get("rating", 0) or 0)
+            except Exception:
+                logger.exception("[ratings] failed to fetch ratings for ratings mode")
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply_cached_ratings_to_labels(self) -> None:
+        if not self._ratings_mode:
+            return
+        for original_idx, label in self.labels.items():
+            rating = self._rating_cache.get(label.file_path)
+            if rating is not None:
+                label._display_rating = rating
+                label.update()
 
     def path_belongs_to_current_directory(self, path: str) -> bool:
         """Return True if *path* is (or is under) the currently browsed directory."""

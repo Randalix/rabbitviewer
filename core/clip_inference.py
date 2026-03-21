@@ -13,7 +13,7 @@ from core.model_manager import get_model_path, ensure_model
 
 logger = logging.getLogger(__name__)
 
-# CLIP ViT-B-32 image preprocessing constants
+# CLIP ViT-B-32 image preprocessing constants — values from OpenAI CLIP spec (ViT-B/32)
 _CLIP_IMAGE_SIZE = 224
 _CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
 _CLIP_STD = (0.26862954, 0.26130258, 0.27577711)

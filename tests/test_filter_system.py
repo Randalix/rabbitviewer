@@ -738,19 +738,13 @@ class TestDirectoryScopedFiltering:
 class TestFilterDialogClear:
 
     def test_clear_filter_calls_set_state_on_all_buttons(self):
-        """clear_filter() calls set_state(True) on every star button."""
+        """clear_filter() calls set_state_silent(True) on every star button."""
         from gui.filter_dialog import FilterDialog
 
         with patch("gui.filter_dialog.StarButton") as MockBtn, \
              patch("gui.filter_dialog.StarDragContext"):
             def make_btn(**kw):
                 btn = MagicMock()
-                # Closure captures `dialog` by name — safe because side_effect
-                # is called after dialog is assigned on the line below MockBtn.
-                def side_effect(state, b=btn, idx=kw.get("index", 0)):
-                    b._current_state = state
-                    dialog._on_star_button_toggled(idx, state)
-                btn.set_state.side_effect = side_effect
                 btn._current_state = kw.get("initial_state", True)
                 return btn
             MockBtn.side_effect = make_btn
@@ -762,4 +756,4 @@ class TestFilterDialogClear:
 
         assert dialog.star_states == [True, True, True, True, True, True]
         for btn in dialog.star_buttons:
-            btn.set_state.assert_called_with(True)
+            btn.set_state_silent.assert_called_with(True)

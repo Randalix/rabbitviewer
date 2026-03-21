@@ -21,5 +21,5 @@ def run_script(api: ScriptAPI, selected_images: list[str] = None):
 
     logger.info(f"Setting rating to 0 stars for {len(selected_images)} images.")
     api.set_rating_for_images(selected_images, 0)
-    api.show_overlay(selected_images, "stars", {"count": 0}, duration=1200, overlay_id="rating")
+    api.show_overlay(selected_images, "stars", {"count": 0}, duration=2000, overlay_id="rating")
     logger.info("Rating set to 0 stars.")

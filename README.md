@@ -7,7 +7,7 @@ It orchestrates them.
 
 Rendering, metadata extraction, hashing, and file watching run in-process on background worker threads — no IPC overhead. A companion daemon continues indexing when the GUI is closed. The interface stays fluid — even when you point it at a massive RAW archive.
 
-[![RabbitViewer Demo](https://img.youtube.com/vi/1OTcSATjnmw/maxresdefault.jpg)](https://youtu.be/1OTcSATjnmw)
+[![RabbitViewer Demo](https://img.youtube.com/vi/DWp1fDad7Sg/maxresdefault.jpg)](https://youtu.be/DWp1fDad7Sg)
 
 ---
 
@@ -83,6 +83,42 @@ Switch seamlessly between stills and motion.
 ### Tagging
 
 Assign free-form tags to any selection via the tag editor (`T`). Tags are written to XMP sidecars alongside ratings. Filter the grid by tag to narrow large sets instantly.
+
+### Advanced Filtering
+
+Filter the grid by any combination of metadata — name, rating, date, tags, duplicates, or visual similarity. All active filters compose: criteria intersect, so narrowing is always additive.
+
+Open the filter menu with `F`:
+
+* **Name** (`N`) — filename pattern matching with multi-term support (`sunset ocean` matches `Beautiful_Sunset_Over_Ocean.jpg`)
+* **Rating** (`R`) — show any combination of star levels, including unrated
+* **Date** (`A`) — drag a range slider across the capture-date span of your library
+* **Tags** (`T`) — filter to images carrying any of the specified tags
+* **Duplicates** (`D`) — surface near-duplicate images by perceptual hash
+* **Similarity** (`S`) — show images visually similar to a selected source, by CLIP embedding or perceptual hash
+* **Clear all** (`C`) — reset all active filters in one keystroke
+
+Filters run asynchronously. The grid updates while you drag sliders or type — never blocking the UI.
+
+### Semantic Search
+
+Search by natural language description using a local CLIP model — no cloud, no API keys.
+
+Press `/` (or `F → V`) to open the search bar. Type a description:
+
+```
+sunset over ocean
+red vintage car
+portrait with soft bokeh
+```
+
+RabbitViewer encodes the query and scores every indexed image by cosine similarity. Adjust the threshold slider to tighten or loosen the match — slider changes filter cached results instantly with no re-inference.
+
+The CLIP encoder runs entirely in-process via ONNX Runtime. Embeddings are indexed once and stored in the local SQLite database. Subsequent searches are fast, even across large libraries.
+
+Bundled script `scripts/sort_by_clip.py` reorders the grid by visual similarity using a greedy nearest-neighbor chain — useful for grouping thematically related images without any text query.
+
+Image preprocessing follows the [OpenAI CLIP spec](https://github.com/openai/CLIP) (ViT-B/32).
 
 ### Info Panel
 
@@ -201,6 +237,7 @@ Bundled scripts include:
 * invert_selection
 * delete_selected
 * sort_by_name
+* sort_by_clip (reorder grid by visual similarity using cached CLIP embeddings)
 
 Automation is a first-class feature — not an afterthought.
 
@@ -356,6 +393,7 @@ Startup delay avoids race conditions during large initial scans.
 * ExifTool
 * ffmpeg / mpv
 * ComfyUI (optional, for AI image generation)
+* ONNX Runtime + numpy (optional, for CLIP semantic search)
 
 ---
 

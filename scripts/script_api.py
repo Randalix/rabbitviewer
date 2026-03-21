@@ -409,7 +409,7 @@ class ScriptAPI:
                      duration: int = 1500, overlay_id: str = None) -> None:
         """duration=None for permanent overlays."""
         overlay_id = overlay_id or f"{renderer}_{next(_overlay_id_counter)}"
-        event_system.publish(ThumbnailOverlayEventData(
+        event = ThumbnailOverlayEventData(
             event_type=EventType.THUMBNAIL_OVERLAY,
             source="script_api",
             timestamp=time.time(),
@@ -420,17 +420,29 @@ class ScriptAPI:
             params=params or {},
             position=position,
             duration=duration,
-        ))
+        )
+        # why: scripts run on a background thread; QTimer created off the main thread
+        # has no event loop and never fires, so the overlay would stay visible forever.
+        self._on_main_thread(lambda: event_system.publish(event))
 
     def remove_overlay(self, image_paths: List[str], overlay_id: str) -> None:
-        event_system.publish(ThumbnailOverlayEventData(
+        event = ThumbnailOverlayEventData(
             event_type=EventType.THUMBNAIL_OVERLAY,
             source="script_api",
             timestamp=time.time(),
             action="remove",
             paths=list(image_paths),
             overlay_id=overlay_id,
-        ))
+        )
+        self._on_main_thread(lambda: event_system.publish(event))
+
+    def toggle_ratings_display(self) -> None:
+        """Toggle permanent star rating visibility on all thumbnails."""
+        def _toggle():
+            view = self.main_window.thumbnail_view
+            if view:
+                view.toggle_ratings_mode()
+        self._on_main_thread(_toggle)
 
     def show_message(self, message: str, timeout: int = 5000) -> None:
         """Displays a message in the status bar."""

@@ -8,8 +8,6 @@ from gui.components.star_button import StarButton, StarDragContext
 
 
 class RatingFilterDialog(QDialog):
-    """Filter by star rating."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Filter by Rating")
@@ -44,12 +42,11 @@ class RatingFilterDialog(QDialog):
                 timestamp=time.time(), star_states=list(self.star_states)))
 
     def sync_state(self, star_states: list) -> None:
-        """Sync button UI to match an externally-set star_states list."""
         self.star_states = list(star_states)
         for i, btn in enumerate(self.star_buttons):
-            btn.set_state(bool(self.star_states[i]))
+            btn.set_state_silent(bool(self.star_states[i]))
 
     def clear_filter(self):
         self.star_states = [True] * 6
         for btn in self.star_buttons:
-            btn.set_state(True)
+            btn.set_state_silent(True)

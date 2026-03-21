@@ -93,8 +93,9 @@ class FilterDialog(QDialog):
 
     def clear_filter(self):
         self.filter_input.clear()
+        self.star_states = [True] * 6
         for button in self.star_buttons:
-            button.set_state(True)
+            button.set_state_silent(True)
         self.duplicates_checkbox.setChecked(False)
 
     def _on_star_button_toggled(self, index: int, new_state: bool):
