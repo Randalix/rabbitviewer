@@ -230,6 +230,11 @@ class SelectionInteraction:
         return self._current_selection
 
     @property
+    def selected_indices(self) -> Set[int]:
+        """Committed selection as orig_idx set (excludes drag preview)."""
+        return self._selected_indices
+
+    @property
     def is_in_drag(self) -> bool:
         return self._drag_start_index != -1
 

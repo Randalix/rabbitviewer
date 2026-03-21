@@ -260,6 +260,9 @@ class ThumbnailViewWidget(QFrame):
     def _recycle_label(self, label: ThumbnailLabel):
         if not isValid(label):
             return
+        # why: recycle clears hover before hide so thumbnailLeft fires and
+        # _hovered_label never points to a hidden/reused widget.
+        self._clear_hovered_label(label)
         if len(self._widget_pool) < self._pool_size:
             label.hide()
             label.setPixmap(QPixmap())
@@ -652,6 +655,7 @@ class ThumbnailViewWidget(QFrame):
             self._virtual_grid.reindex_labels(
                 len(self.model.current_files),
                 lambda label: mapping.get(label._original_idx),
+                self._recycle_virtual_label,
             )
             self._sync_virtual_viewport()
 
@@ -723,6 +727,10 @@ class ThumbnailViewWidget(QFrame):
                 cmd = ReplaceSelectionCommand(paths=surviving_selection, source="thumbnail_view", timestamp=time.time())
                 event_system.publish(cmd)
             self._sync_virtual_viewport()
+            # why: _recompute_selected_indices() runs before ReplaceSelectionCommand
+            # so on_selection_changed always sees an empty delta and never fires
+            # _update_label_selection.  Reconcile directly against committed state.
+            self._reconcile_selection_visuals()
             QTimer.singleShot(100, self._prioritize_visible_thumbnails)
 
             self._last_redraw_time = self._benchmark_timer.elapsed() / 1000.0
@@ -1049,14 +1057,9 @@ class ThumbnailViewWidget(QFrame):
         if not self._virtual_grid:
             return
 
-        # Clear hover if the hovered label is now hidden
-        if self._hovered_label is not None:
-            hovered_orig_idx = self._label_to_original_idx(self._hovered_label)
-            if hovered_orig_idx is not None and hovered_orig_idx in self.model.hidden_indices:
-                self._hovered_label = None
-                self.thumbnailLeft.emit()
-
         # Recycle all materialized labels then re-materialize for the new mapping
+        # why: hover is cleared inside _recycle_label so thumbnailLeft fires
+        # correctly regardless of whether the hovered item was filtered or not.
         self._virtual_grid.clear(self._recycle_label)
         self.labels.clear()
         self._virtual_grid.set_total_items(len(self.model.current_files))
@@ -1135,6 +1138,21 @@ class ThumbnailViewWidget(QFrame):
 
         self.labels[original_idx] = label
         return label
+
+    def _reconcile_selection_visuals(self) -> None:
+        """Reset every materialized label's selection border to match committed state.
+
+        why: after remove_images, _recompute_selected_indices() runs before
+        ReplaceSelectionCommand is published, so on_selection_changed always
+        sees an empty delta and never calls _update_label_selection.  Any label
+        that still has selected=True from a drag preview is never cleared.
+        Iterating the (small) materialized set and comparing against the
+        authoritative _selected_indices is the only reliable fix.
+        """
+        selected = self.selection.selected_indices
+        for orig_idx, label in list(self.labels.items()):
+            if isValid(label):
+                label.setSelected(orig_idx in selected)
 
     def _recycle_virtual_label(self, label: ThumbnailLabel):
         orig_idx = label._original_idx

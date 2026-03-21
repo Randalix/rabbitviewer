@@ -99,8 +99,9 @@ class VirtualGridManager(QObject):
     def set_total_items_chunked(self, count: int) -> None:
         """Set logical item count; grow container height only at chunk boundaries.
 
-        Height uses a power-of-2 row count so the scrollbar thumb stays stable
-        between milestones during incremental scan loading.
+        Height rounds up to the nearest 16-row multiple so the scrollbar thumb
+        changes infrequently (~every 16 rows of new content) without the large
+        jumps that power-of-2 chunking produces when row count crosses a boundary.
         """
         self._total_items = count
         real_rows = self._total_rows
@@ -108,9 +109,8 @@ class VirtualGridManager(QObject):
             self._height_rows_override = 0
             self._update_container_height()
             return
-        chunk = 8
-        while chunk < real_rows:
-            chunk <<= 1
+        # Round up to next 16-row multiple; minimum 16.
+        chunk = max(16, ((real_rows + 15) // 16) * 16)
         if chunk != self._height_rows_override:
             self._height_rows_override = chunk
             self._update_container_height()
@@ -299,11 +299,13 @@ class VirtualGridManager(QObject):
         self,
         new_total: int,
         map_label: Callable[[ThumbnailLabel], Optional[int]],
+        recycle_label: Optional[Callable[[ThumbnailLabel], None]] = None,
     ) -> None:
         """Re-key materialized labels after an insertion or reorder.
 
         *map_label(label)* returns the new vis_idx for a surviving label,
-        or ``None`` to drop it (caller should recycle separately if needed).
+        or ``None`` to drop it.  *recycle_label* is called for dropped labels;
+        without it, dropped labels would remain visible as ghost widgets.
         """
         new_mat: Dict[int, ThumbnailLabel] = {}
         for label in self._mat_labels.values():
@@ -311,6 +313,8 @@ class VirtualGridManager(QObject):
             if new_idx is not None:
                 new_mat[new_idx] = label
                 label.move(self._pos_x(new_idx), self._pos_y(new_idx))
+            elif recycle_label is not None:
+                recycle_label(label)
 
         self._mat_labels = new_mat
         self._total_items = new_total

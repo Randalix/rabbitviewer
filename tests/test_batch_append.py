@@ -226,7 +226,9 @@ class TestAppendFastPath:
 
         # First batch flushes immediately via _flush_scan_layout
         view._virtual_grid.set_total_items_chunked.assert_called_with(2)
-        view._virtual_grid.update_layout.assert_called()
+        # update_layout is intentionally skipped in _flush_scan_layout —
+        # column recalculation is handled by the resize timer, not scan flushes.
+        view._virtual_grid.update_layout.assert_not_called()
 
     def test_fast_path_does_not_clear_labels(self):
         """Scan fast path preserves existing materialized labels (hover state)."""

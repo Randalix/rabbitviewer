@@ -165,7 +165,9 @@ class NotificationHandler(QObject):
             len(self.model.current_files), len(self.model.all_files),
         )
         self._widget._virtual_grid.set_total_items_chunked(len(self.model.current_files))
-        self._widget._virtual_grid.update_layout()
+        # why: skip update_layout() here — column recalculation only matters
+        # on resize, which is handled by the dedicated resize timer.  Calling
+        # it every 250ms during a scan triggers O(n) label.move() no-ops.
         self._widget._sync_virtual_viewport()
         self.model.last_layout_file_count = len(self.model.all_files)
 

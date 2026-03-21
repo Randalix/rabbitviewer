@@ -298,41 +298,41 @@ class TestSyncViewport:
 class TestChunkedHeight:
     """Tests for set_total_items_chunked and snap_height_to_exact."""
 
-    def test_chunk_rounds_up_to_power_of_2(self):
+    def test_chunk_rounds_up_to_16_row_multiple(self):
         mgr = _make_manager(thumb_size=128, spacing=5)
         mgr._columns = 6
-        # 12 items / 6 cols = 2 rows → chunk = 8
+        # 12 items / 6 cols = 2 rows → chunk = max(16, ceil(2/16)*16) = 16
         mgr.set_total_items_chunked(12)
         cell = 128 + 5
-        expected_height = 5 + 8 * cell  # 8 chunked rows
+        expected_height = 5 + 16 * cell  # 16-row chunk
         mgr._container.setFixedHeight.assert_called_with(expected_height)
         assert mgr._total_items == 12
 
     def test_chunk_no_change_skips_height_update(self):
         mgr = _make_manager(thumb_size=128, spacing=5)
         mgr._columns = 6
-        # 12 items → 2 rows → chunk = 8
+        # 12 items → 2 rows → chunk = 16
         mgr.set_total_items_chunked(12)
         mgr._container.setFixedHeight.reset_mock()
-        # 30 items → 5 rows → still chunk = 8
-        mgr.set_total_items_chunked(30)
+        # 90 items → 15 rows → still chunk = 16
+        mgr.set_total_items_chunked(90)
         mgr._container.setFixedHeight.assert_not_called()
-        assert mgr._total_items == 30
+        assert mgr._total_items == 90
 
     def test_chunk_grows_at_boundary(self):
         mgr = _make_manager(thumb_size=128, spacing=5)
         mgr._columns = 6
-        mgr.set_total_items_chunked(12)  # 2 rows → chunk 8
+        mgr.set_total_items_chunked(96)  # 16 rows → chunk 16
         mgr._container.setFixedHeight.reset_mock()
-        # 54 items → 9 rows → chunk = 16
-        mgr.set_total_items_chunked(54)
+        # 102 items → 17 rows → chunk grows to 32
+        mgr.set_total_items_chunked(102)
         cell = 128 + 5
-        mgr._container.setFixedHeight.assert_called_with(5 + 16 * cell)
+        mgr._container.setFixedHeight.assert_called_with(5 + 32 * cell)
 
     def test_snap_height_to_exact(self):
         mgr = _make_manager(thumb_size=128, spacing=5)
         mgr._columns = 6
-        mgr.set_total_items_chunked(12)  # 2 rows, chunked to 8
+        mgr.set_total_items_chunked(12)  # 2 rows, chunked to 16
         mgr._container.setFixedHeight.reset_mock()
         mgr.snap_height_to_exact()
         cell = 128 + 5
@@ -341,7 +341,7 @@ class TestChunkedHeight:
     def test_set_total_items_clears_override(self):
         mgr = _make_manager(thumb_size=128, spacing=5)
         mgr._columns = 6
-        mgr.set_total_items_chunked(12)  # sets override to 8
+        mgr.set_total_items_chunked(12)  # sets override to 16
         mgr.set_total_items(12)  # should use exact height
         cell = 128 + 5
         mgr._container.setFixedHeight.assert_called_with(5 + 2 * cell)
