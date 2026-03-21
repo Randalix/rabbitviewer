@@ -20,6 +20,6 @@ def run_script(api):
         except OSError:
             return 0.0
 
-    sorted_paths = sorted(paths, key=date_key)
+    sorted_paths = sorted(paths, key=date_key, reverse=True)
     if sorted_paths != paths:
         api.set_image_order(sorted_paths)

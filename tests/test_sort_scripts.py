@@ -30,44 +30,44 @@ class TestSortByDate:
         }
         api = _make_api(paths, metadata)
         sort_by_date(api)
-        api.set_image_order.assert_called_once_with(["/a.jpg", "/b.jpg", "/c.jpg"])
+        api.set_image_order.assert_called_once_with(["/c.jpg", "/b.jpg", "/a.jpg"])
 
     def test_falls_back_to_birthtime(self):
-        paths = ["/b.jpg", "/a.jpg"]
+        paths = ["/a.jpg", "/b.jpg"]
         metadata = {
             "/b.jpg": {"date_taken": None, "birthtime": 200.0, "mtime": 50.0},
             "/a.jpg": {"date_taken": None, "birthtime": 100.0, "mtime": 300.0},
         }
         api = _make_api(paths, metadata)
         sort_by_date(api)
-        api.set_image_order.assert_called_once_with(["/a.jpg", "/b.jpg"])
+        api.set_image_order.assert_called_once_with(["/b.jpg", "/a.jpg"])
 
     def test_falls_back_to_mtime(self):
-        paths = ["/b.jpg", "/a.jpg"]
+        paths = ["/a.jpg", "/b.jpg"]
         metadata = {
             "/b.jpg": {"date_taken": None, "birthtime": None, "mtime": 200.0},
             "/a.jpg": {"date_taken": None, "birthtime": None, "mtime": 100.0},
         }
         api = _make_api(paths, metadata)
         sort_by_date(api)
-        api.set_image_order.assert_called_once_with(["/a.jpg", "/b.jpg"])
+        api.set_image_order.assert_called_once_with(["/b.jpg", "/a.jpg"])
 
     def test_mixed_date_taken_and_birthtime(self):
         """date_taken and birthtime (both float) must be comparable."""
-        paths = ["/b.jpg", "/a.jpg"]
+        paths = ["/a.jpg", "/b.jpg"]
         metadata = {
             "/b.jpg": {"date_taken": 5000.0, "birthtime": 1.0, "mtime": 1.0},
             "/a.jpg": {"date_taken": None, "birthtime": 3000.0, "mtime": 1.0},
         }
         api = _make_api(paths, metadata)
         sort_by_date(api)
-        api.set_image_order.assert_called_once_with(["/a.jpg", "/b.jpg"])
+        api.set_image_order.assert_called_once_with(["/b.jpg", "/a.jpg"])
 
     def test_already_sorted_no_call(self):
-        paths = ["/a.jpg", "/b.jpg"]
+        paths = ["/b.jpg", "/a.jpg"]
         metadata = {
-            "/a.jpg": {"date_taken": 1000.0},
             "/b.jpg": {"date_taken": 2000.0},
+            "/a.jpg": {"date_taken": 1000.0},
         }
         api = _make_api(paths, metadata)
         sort_by_date(api)
