@@ -19,7 +19,7 @@ class TilingManager(QWidget):
     """
 
     _SETTINGS_GROUP = "TilingManager"
-    _DEFAULT_RATIO = 0.75
+    _DEFAULT_RATIO = 0.55
 
     def __init__(self, parent=None):
         super().__init__(parent)
