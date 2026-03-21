@@ -456,6 +456,9 @@ class MainWindow(QMainWindow):
             self.rating_filter_dialog.hide()
             self.rating_filter_dialog.clear_filter()
         else:
+            tv = self.thumbnail_view
+            if tv:
+                self.rating_filter_dialog.sync_state(tv.model.current_star_filter)
             self.rating_filter_dialog.show()
             self.rating_filter_dialog.raise_()
             self.rating_filter_dialog.activateWindow()

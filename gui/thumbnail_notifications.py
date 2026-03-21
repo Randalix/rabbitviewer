@@ -135,13 +135,16 @@ class NotificationHandler(QObject):
             # No filter active: data structures are fully populated by the
             # append-only fast path.  Do one final sorted reorder (no-op if
             # all_files is already sorted) and snap the container height.
+            # Skip if a script has applied a custom sort — resorting would undo it.
             top_file = self._widget._get_first_visible_file()
             logger.info(
-                "[virtual] scan_complete: final sort, top_file=%s, all_files=%d",
+                "[virtual] scan_complete: final sort, top_file=%s, all_files=%d, custom_sort=%s",
                 os.path.basename(top_file) if top_file else None, len(self.model.all_files),
+                self._widget._custom_sort_active,
             )
             self._widget._virtual_grid.snap_height_to_exact()
-            self._widget.reorder_files(sorted(self.model.all_files))
+            if not self._widget._custom_sort_active:
+                self._widget.reorder_files(sorted(self.model.all_files))
             if top_file:
                 self._widget.scroll_to_top(top_file)
                 self._widget._sync_virtual_viewport()

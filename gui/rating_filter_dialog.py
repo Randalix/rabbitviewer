@@ -43,6 +43,12 @@ class RatingFilterDialog(QDialog):
                 event_type=EventType.STAR_FILTER_CHANGED, source="rating_filter_dialog",
                 timestamp=time.time(), star_states=list(self.star_states)))
 
+    def sync_state(self, star_states: list) -> None:
+        """Sync button UI to match an externally-set star_states list."""
+        self.star_states = list(star_states)
+        for i, btn in enumerate(self.star_buttons):
+            btn.set_state(bool(self.star_states[i]))
+
     def clear_filter(self):
         self.star_states = [True] * 6
         for btn in self.star_buttons:

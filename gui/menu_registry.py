@@ -95,6 +95,8 @@ def _edit_bookmarks():
 
 def build_menus() -> dict:
     sort_menu = MenuNode("Sort", children=[
+        MenuNode("AI", key="a", script="sort_by_clip", visible=_thumbnail_only),
+        MenuNode("Color", key="c", script="sort_by_color", visible=_thumbnail_only),
         MenuNode("Date", key="d", script="sort_by_date", visible=_thumbnail_only),
         MenuNode("Name", key="n", script="sort_by_name", visible=_thumbnail_only),
         MenuNode("pHash", key="p", script="sort_by_phash", visible=_thumbnail_only),

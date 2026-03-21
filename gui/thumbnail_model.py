@@ -200,18 +200,40 @@ class ThumbnailModel:
     # -- Reordering ----------------------------------------------------------
 
     def reorder(self, ordered_paths: List[str]) -> bool:
-        """Returns True if the order actually changed. Unknown paths silently dropped."""
-        old_idx_map = {path: idx for idx, path in enumerate(self.all_files)}
-        new_all_files = [p for p in ordered_paths if p in old_idx_map]
+        """Reorder the slots occupied by *ordered_paths*; all other files stay in place.
 
-        if not new_all_files or new_all_files == self.all_files:
+        *ordered_paths* is the sorted sequence of visible non-folder images (as
+        returned by ScriptAPI.get_all_images()).  Each path in *ordered_paths* is
+        assigned to the same set of index slots those paths currently occupy — only
+        their relative order within those slots changes.  Hidden files and any paths
+        not listed in *ordered_paths* are completely unaffected, so clearing a filter
+        after sorting always restores the full file list.  Unknown paths are silently
+        ignored.  Returns True if the order actually changed.
+        """
+        old_idx_map = {path: idx for idx, path in enumerate(self.all_files)}
+        valid_ordered = list(dict.fromkeys(p for p in ordered_paths if p in old_idx_map))
+
+        if not valid_ordered:
+            return False
+
+        # Collect the current positions of the listed paths (sorted ascending so
+        # the lowest existing slot gets the first element of valid_ordered), then
+        # reassign those slots to the new order.
+        slots_to_fill = sorted(old_idx_map[p] for p in set(valid_ordered))
+        new_all_files = list(self.all_files)
+        for slot, new_path in zip(slots_to_fill, valid_ordered):
+            new_all_files[slot] = new_path
+
+        if new_all_files == self.all_files:
             return False
 
         new_image_states: Dict[int, ImageState] = {}
         new_pixmap_cache: Dict[int, object] = {}
         new_thumb_path_cache: Dict[int, str] = {}
         for new_idx, path in enumerate(new_all_files):
-            old_idx = old_idx_map[path]
+            old_idx = old_idx_map.get(path)
+            if old_idx is None:
+                continue
             if old_idx in self.image_states:
                 new_image_states[new_idx] = self.image_states[old_idx]
             if old_idx in self.pixmap_cache:
@@ -225,6 +247,8 @@ class ThumbnailModel:
         self.image_states = new_image_states
         self.pixmap_cache = new_pixmap_cache
         self.thumb_path_cache = new_thumb_path_cache
+        # hidden_indices unchanged — positions of hidden files were not touched
+        self.rebuild_visible_mappings()
         return True
 
     # -- Visible mapping management ------------------------------------------

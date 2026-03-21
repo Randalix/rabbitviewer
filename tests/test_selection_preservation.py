@@ -288,17 +288,17 @@ class TestReorderFilesSelection:
         assert view.selection._selected_indices == {1}
 
     def test_reorder_with_subset(self):
-        """reorder_files with fewer paths drops unknown paths but preserves selection."""
+        """reorder_files with fewer paths reorders specified paths; unspecified stay in place."""
         files = ["/a.jpg", "/b.jpg", "/c.jpg"]
         view = _make_view(files, selected_paths=["/a.jpg", "/c.jpg"])
 
         with patch("gui.thumbnail_view.event_system"):
-            # /b.jpg dropped from ordered list
+            # /b.jpg not in ordered list — it stays at position 1
             ThumbnailViewWidget.reorder_files(view, ["/c.jpg", "/a.jpg"])
 
         assert view.selection._current_selection == {"/a.jpg", "/c.jpg"}
-        # After reorder: /c.jpg=0, /a.jpg=1
-        assert view.selection._selected_indices == {0, 1}
+        # After reorder: /c.jpg occupies slot 0, /b.jpg stays at slot 1, /a.jpg at slot 2
+        assert view.selection._selected_indices == {0, 2}
 
 
 # ===================================================================

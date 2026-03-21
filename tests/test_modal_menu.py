@@ -563,7 +563,7 @@ class TestMenuRegistry:
         sort_root = menus["sort"]
         assert sort_root.label == "Sort"
         keys = {child.key for child in sort_root.children}
-        assert keys == {"d", "n", "p", "r", "s", "t"}
+        assert keys == {"a", "c", "d", "n", "p", "r", "s", "t"}
 
     def test_sort_items_have_scripts(self):
         menus = build_menus()
@@ -587,6 +587,8 @@ class TestMenuRegistry:
     def test_sort_scripts_match_keys(self):
         menus = build_menus()
         expected = {
+            "a": "sort_by_clip",
+            "c": "sort_by_color",
             "d": "sort_by_date",
             "n": "sort_by_name",
             "p": "sort_by_phash",

@@ -138,6 +138,9 @@ class ThumbnailViewWidget(QFrame):
         # why: separate from _is_loading — cached folders clear _is_loading in
         # _on_initial_files_received (immediate), uncached folders wait for scan_complete.
         self._folder_is_cached = False
+        # Set by ScriptAPI.set_image_order() to prevent scan_complete from
+        # overriding the script-applied sort with a default alphabetical resort.
+        self._custom_sort_active = False
 
 
     def _initializeLayout(self):
@@ -430,6 +433,7 @@ class ThumbnailViewWidget(QFrame):
         self._notifications.reset_startup(time.perf_counter())
         self._startup_thumbnails_emitted = False
         self._startup_inline_thumb_count = 0
+        self._custom_sort_active = False
         logger.info("[startup] load_directory called for %s", directory_path)
         self.clear_layout()
         # Set scan state AFTER clear_layout() which resets _scan_active to False
@@ -691,6 +695,18 @@ class ThumbnailViewWidget(QFrame):
             elif self._virtual_grid:
                 # Nothing visible was removed (all removed items were hidden).
                 self._virtual_grid.set_total_items(len(self.model.current_files))
+                # Re-key self.labels — hidden-file removal can shift orig_idx of
+                # surviving visible files, leaving labels under stale keys.  Without
+                # this, _label_updater calls for the new orig_idx find None and skip
+                # the visual update, leaving selected=True highlights on deselected
+                # labels (the "zombie selection" bug).
+                new_labels = {}
+                for label in self._virtual_grid.materialized_labels():
+                    new_orig = self.model.path_to_idx.get(label.file_path)
+                    if new_orig is not None:
+                        label._original_idx = new_orig
+                        new_labels[new_orig] = label
+                self.labels = new_labels
 
             # -- Clear hover if the hovered label was deleted ----------------
             if self._hovered_label is not None:
@@ -699,11 +715,13 @@ class ThumbnailViewWidget(QFrame):
                     self.thumbnailLeft.emit()
 
             # -- Preserve selection of surviving files -----------------------
+            # Recompute _selected_indices to new orig_idx values BEFORE publishing
+            # SELECTION_CHANGED so on_selection_changed sees a correct delta.
             surviving_selection = self.selection.current_selection - result.removed_paths
+            self._recompute_selected_indices()
             if surviving_selection != self.selection.current_selection:
                 cmd = ReplaceSelectionCommand(paths=surviving_selection, source="thumbnail_view", timestamp=time.time())
                 event_system.publish(cmd)
-            self._recompute_selected_indices()
             self._sync_virtual_viewport()
             QTimer.singleShot(100, self._prioritize_visible_thumbnails)
 

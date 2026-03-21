@@ -198,16 +198,58 @@ class ScriptAPI:
             return []
 
     def set_image_order(self, ordered_paths: List[str]) -> None:
-        """Reorder images in the thumbnail view to match *ordered_paths*."""
+        """Reorder images in the thumbnail view to match *ordered_paths*.
+
+        Marks the view's sort as custom so a background scan_complete does not
+        override the script-applied order with a default alphabetical resort.
+        """
         try:
             def _do():
                 view = self.main_window.thumbnail_view
                 if not view:
                     return
+                view._custom_sort_active = True
                 view.reorder_files(ordered_paths)
             self._on_main_thread(_do)
         except Exception as e:  # why: user scripts may pass invalid paths or thumbnail_view may be mid-teardown
             logger.error(f"Error in set_image_order: {e}", exc_info=True)
+
+    def get_clip_embeddings(self, image_paths: List[str]) -> Dict[str, bytes]:
+        """Return cached CLIP embedding blobs for *image_paths*.
+
+        Queries only the DB — no model inference.  Returns a dict mapping
+        file_path → raw float32 blob (L2-normalised, 512-dim for clip-vit-b-32).
+        Paths with no stored embedding are omitted from the result.
+        """
+        try:
+            rows = self.main_window.service.db.embeddings.get_embeddings_for_files(image_paths)
+            return {fp: blob for fp, blob in rows}
+        except Exception as e:  # why: service or db may not be ready
+            logger.error(f"Error in get_clip_embeddings: {e}", exc_info=True)
+            return {}
+
+    def clear_filter(self) -> None:
+        """Clear all active filters (star, text, tag, date, duplicates, CLIP, face)."""
+        def _do():
+            view = self.main_window.thumbnail_view
+            if view:
+                view.filter_controller.clear_filter()
+        self._on_main_thread(_do)
+
+    def apply_star_filter(self, star_states: List[bool]) -> None:
+        """Apply a star-rating filter.
+
+        *star_states* is a 6-element list of booleans for ratings 0–5.
+        True means that rating is visible; False hides it.
+        """
+        if len(star_states) != 6:
+            logger.error("apply_star_filter: star_states must have exactly 6 elements (ratings 0-5)")
+            return
+        def _do():
+            view = self.main_window.thumbnail_view
+            if view:
+                view.filter_controller.apply_star_filter(list(star_states))
+        self._on_main_thread(_do)
 
     def get_metadata_batch(self, image_paths: List[str]) -> dict:
         """Fetch metadata for a batch of images from the daemon.
