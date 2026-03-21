@@ -128,7 +128,8 @@ class EdgeBar(QWidget):
         if self._edge != "top":
             shape = QTransform.fromScale(1, -1).map(shape)
             shape.translate(0, float(total_h))
-        self.setMask(QRegion(shape.toFillPolygon(QTransform()).toPolygon()))
+        mask = QRegion(shape.toFillPolygon(QTransform()).toPolygon())
+        self.setMask(mask.intersected(QRegion(self.rect())))
         self.raise_()
 
     def schedule_repaint(self) -> None:
