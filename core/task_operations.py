@@ -77,7 +77,7 @@ class TaskOperationRegistry:
         names = ", ".join(os.path.basename(p) for p in paths[:3])
         if len(paths) > 3:
             names += f" (+{len(paths) - 3} more)"
-        self._event_system.emit(StatusMessageEventData(
+        self._event_system.publish(StatusMessageEventData(
             event_type=EventType.STATUS_MESSAGE,
             source="task_operations",
             timestamp=time.time(),
