@@ -382,8 +382,9 @@ def _run_gui(args, config_manager):
             if path and os.path.isfile(path):
                 svc = window.service
                 if not svc:
-                    logger.debug("QFileOpenEvent: service not ready, ignoring %s", path)
-                    return False
+                    logger.debug("QFileOpenEvent: service not ready, queuing %s", path)
+                    window._pending_file_open = path
+                    return True
                 _, ext = os.path.splitext(path)
                 if not ext or ext.lower() not in svc.tm.supported_formats:
                     logger.debug("QFileOpenEvent: ignoring unsupported file %s", path)

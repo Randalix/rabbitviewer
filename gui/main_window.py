@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
         self.similarity_filter_dialog = None
         self._similarity_source_path = None
         self._removed_images = []
+        self._pending_file_open: str | None = None
 
         self._startup_task_done.connect(self._handle_startup_task)
         QTimer.singleShot(0, self._deferred_init)
@@ -157,12 +158,19 @@ class MainWindow(QMainWindow):
             target_dir = result.get("target_dir")
             target_file = result.get("target_file")
             recursive = result.get("recursive", True)
+            pending = self._pending_file_open
+            self._pending_file_open = None
             if target_dir:
                 def _load():
                     self.load_directory(target_dir, recursive)
                     if target_file:
                         self.open_media_view(target_file)
                 QTimer.singleShot(0, _load)
+            elif pending:
+                def _load_pending(p=pending):
+                    self.load_directory(os.path.dirname(p), recursive=False)
+                    self.open_media_view(p)
+                QTimer.singleShot(0, _load_pending)
             logger.info("[startup] services injected, UI ready")
 
         elif name == "recover":
