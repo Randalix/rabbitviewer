@@ -369,6 +369,19 @@ class LedgerTable(BaseTable):
         except sqlite3.Error as e:
             logger.error("file_transfer_mark_complete failed: %s", e)
 
+    def file_transfer_get_all_pending(self) -> list:
+        """Return all (source_path, dest_dir, operation) rows with status='pending'."""
+        try:
+            conn = self._read_conn()
+            cursor = conn.execute(
+                "SELECT source_path, dest_dir, operation FROM file_transfers "
+                "WHERE status = 'pending'"
+            )
+            return list(cursor.fetchall())
+        except sqlite3.Error as e:
+            logger.error("file_transfer_get_all_pending failed: %s", e)
+            return []
+
     def file_transfer_get_pending(self, dest_dir: str,
                                   operation: str) -> List[str]:
         try:

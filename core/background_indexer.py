@@ -140,6 +140,59 @@ class BackgroundIndexer:
         if batch:
             yield batch
 
+    def recover_pending_transfers(self) -> None:
+        """Recover pending file transfers from a prior GUI session."""
+        pending_transfers = self.metadata_db.ledgers.file_transfer_get_all_pending()
+        if not pending_transfers:
+            return
+
+        logger.info("BackgroundIndexer: recovering %d pending file transfers", len(pending_transfers))
+
+        # Group by operation type and destination directory
+        deletes: List[str] = []
+        copies_by_dest: Dict[str, List[str]] = {}
+        moves_by_dest: Dict[str, List[str]] = {}
+
+        for source_path, dest_dir, operation in pending_transfers:
+            if operation == 'delete':
+                deletes.append(source_path)
+            elif operation == 'copy':
+                copies_by_dest.setdefault(dest_dir, []).append(source_path)
+            elif operation == 'move':
+                moves_by_dest.setdefault(dest_dir, []).append(source_path)
+
+        rm = self.thumbnail_manager.render_manager
+
+        # Submit tasks for deletes
+        if deletes:
+            ops = [("send2trash", deletes), ("remove_records", deletes)]
+            rm.submit_task(
+                "recover_deletes",
+                Priority.ORPHAN_SCAN,
+                self.thumbnail_manager.task_ops.execute_compound,
+                ops,
+            )
+
+        # Submit tasks for copies
+        for dest_dir, paths in copies_by_dest.items():
+            ops = [("bookmark_copy", paths, {"dest_dir": dest_dir})]
+            rm.submit_task(
+                f"recover_copies::{dest_dir}",
+                Priority.ORPHAN_SCAN,
+                self.thumbnail_manager.task_ops.execute_compound,
+                ops,
+            )
+
+        # Submit tasks for moves
+        for dest_dir, paths in moves_by_dest.items():
+            ops = [("bookmark_move", paths, {"dest_dir": dest_dir})]
+            rm.submit_task(
+                f"recover_moves::{dest_dir}",
+                Priority.ORPHAN_SCAN,
+                self.thumbnail_manager.task_ops.execute_compound,
+                ops,
+            )
+
     # ------------------------------------------------------------------
     #  Phase 1.75: recover files in DB with no thumbnail
     # ------------------------------------------------------------------
@@ -171,10 +224,16 @@ class BackgroundIndexer:
     # ------------------------------------------------------------------
 
     def start_indexing(self):
+        # Clean up old completed file transfer entries
+        self.metadata_db.ledgers.file_transfer_cleanup_completed()
+
         # Phase 0: recover pending file writes (rating, orientation, tags).
         recovered = self.thumbnail_manager.recover_pending_writes()
         if recovered:
             logger.info(f"BackgroundIndexer: recovered {recovered} pending file writes")
+
+        # Phase 0.5: complete deletions/moves/copies the GUI queued but didn't finish.
+        self.recover_pending_transfers()
 
         # Phase 1: recover orphaned files at ORPHAN_SCAN(15).
         self.recover_orphans()

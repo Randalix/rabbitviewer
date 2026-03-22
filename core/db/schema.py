@@ -187,6 +187,17 @@ def init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_face_file ON face_detections(file_path)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_face_person ON face_detections(person_id)')
 
+        # Migration: collapse pending_deletions into file_transfers (operation='delete', dest_dir='')
+        try:
+            cursor.execute(
+                "INSERT OR IGNORE INTO file_transfers "
+                "(source_path, dest_dir, operation, status, created_at) "
+                "SELECT file_path, '', 'delete', 'pending', created_at FROM pending_deletions"
+            )
+            cursor.execute("DROP TABLE IF EXISTS pending_deletions")
+        except sqlite3.OperationalError:
+            pass  # pending_deletions never existed (fresh install)
+
         # ── ai_scanned ────────────────────────────────────────────────
         # Tracks files that have been processed by an AI model regardless of
         # whether a positive result was found. Prevents re-scanning files that

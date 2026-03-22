@@ -20,10 +20,11 @@ def run_script(api: ScriptAPI):
     for path in all_paths:
         logger.info(f"  - {path}")
 
-    # 1. Remove from view for immediate UI feedback.
+    # 2. Remove from view for immediate UI feedback.
     api.remove_images(all_paths)
 
-    # 2. Delegate filesystem + DB cleanup to the daemon (non-blocking).
+    # 3. Delegate filesystem + DB cleanup to the daemon (non-blocking).
+    #    DB records are removed only after send2trash confirms the file is gone.
     if not api.daemon_tasks([
         ("send2trash", all_paths),
         ("remove_records", all_paths),

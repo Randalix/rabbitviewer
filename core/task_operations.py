@@ -49,7 +49,15 @@ class TaskOperationRegistry:
 
     def _op_send2trash(self, file_paths: List[str]) -> Dict[str, Any]:
         from core.file_ops import trash_with_sidecars
+        # Mark intent before any destructive action — cleared by _op_remove_records
+        # after DB records are confirmed removed. Survives GUI crash mid-operation.
+        self._db.ledgers.file_transfer_batch_insert(file_paths, '', 'delete')
         result = trash_with_sidecars(file_paths)
+
+        # Mark files that were successfully trashed
+        for path in file_paths:
+            if not os.path.exists(path):  # disk-io: check if file still exists
+                self._db.ledgers.file_transfer_mark_complete(path, '', 'delete', 'deleted')
 
         # For files still on disk (trash failed), try hard-delete as fallback.
         still_present = [p for p in file_paths if os.path.exists(p)]  # disk-io: check which files trash failed to remove
@@ -57,8 +65,7 @@ class TaskOperationRegistry:
         for path in still_present:
             try:
                 os.remove(path)
-                result["succeeded"] += 1
-                result["failed"] -= 1
+                self._db.ledgers.file_transfer_mark_complete(path, '', 'delete', 'deleted')
                 logger.info("send2trash fallback: hard-deleted %s", os.path.basename(path))
             except OSError as e:
                 logger.warning("send2trash fallback: os.remove failed for %s: %s", path, e)
@@ -95,6 +102,9 @@ class TaskOperationRegistry:
                 skipped, [os.path.basename(p) for p in file_paths if os.path.exists(p)][:5],  # disk-io: log which files were skipped
             )
         success = self._db.remove_records(gone)
+        if success and gone:
+            for path in gone:
+                self._db.ledgers.file_transfer_mark_complete(path, '', 'delete', 'deleted')
         return {"success": success, "count": len(gone), "skipped": skipped}
 
     def _op_bookmark_copy(self, file_paths: List[str], *,
