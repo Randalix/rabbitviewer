@@ -54,18 +54,16 @@ class TaskOperationRegistry:
         self._db.ledgers.file_transfer_batch_insert(file_paths, '', 'delete')
         result = trash_with_sidecars(file_paths)
 
-        # Mark files that were successfully trashed
-        for path in file_paths:
-            if not os.path.exists(path):  # disk-io: check if file still exists
-                self._db.ledgers.file_transfer_mark_complete(path, '', 'delete', 'deleted')
-
         # For files still on disk (trash failed), try hard-delete as fallback.
+        # If hard-delete succeeds, the file is gone, and the 'pending' record
+        # will be handled by the subsequent 'remove_records' operation.
+        # If hard-delete fails, the file is still on disk, and the 'pending'
+        # record will be retried by the daemon on restart.
         still_present = [p for p in file_paths if os.path.exists(p)]  # disk-io: check which files trash failed to remove
         hard_failed: List[str] = []
         for path in still_present:
             try:
                 os.remove(path)
-                self._db.ledgers.file_transfer_mark_complete(path, '', 'delete', 'deleted')
                 logger.info("send2trash fallback: hard-deleted %s", os.path.basename(path))
             except OSError as e:
                 logger.warning("send2trash fallback: os.remove failed for %s: %s", path, e)
