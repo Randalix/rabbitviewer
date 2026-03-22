@@ -853,29 +853,35 @@ class ImageTable(BaseTable):
             conn = self._read_conn()
             cursor = conn.cursor()
 
-            query = "SELECT file_path FROM image_metadata WHERE 1=1"
+            query = """
+                SELECT im.file_path
+                FROM image_metadata im
+                LEFT JOIN file_transfers ft ON im.file_path = ft.source_path
+                    AND ft.operation IN ('delete', 'move') AND ft.status = 'pending'
+                WHERE ft.source_path IS NULL
+            """
             params: list = []
 
             # Add directory scope
             if directory is not None:
                 search_path = os.path.join(directory, '')
                 if recursive:
-                    query += " AND file_path LIKE ?"
+                    query += " AND im.file_path LIKE ?"
                     params.append(search_path + '%')
                 else:
-                    query += " AND file_path LIKE ? AND SUBSTR(file_path, LENGTH(?) + 1) NOT LIKE '%/%'"
+                    query += " AND im.file_path LIKE ? AND SUBSTR(im.file_path, LENGTH(?) + 1) NOT LIKE '%/%'"
                     params.extend([search_path + '%', search_path])
 
             # Add text filter
             if text_filter:
-                query += " AND file_path LIKE ?"
+                query += " AND im.file_path LIKE ?"
                 params.append(f"%{text_filter}%")
 
             # Add star filter
             enabled_ratings = [i for i, state in enumerate(star_states) if state]
             if len(enabled_ratings) < len(star_states) and enabled_ratings:
                 placeholders = ", ".join("?" for _ in enabled_ratings)
-                query += f" AND rating IN ({placeholders})"
+                query += f" AND im.rating IN ({placeholders})"
                 params.extend(enabled_ratings)
             elif not enabled_ratings:
                 # If no ratings are selected, match no files
@@ -884,7 +890,7 @@ class ImageTable(BaseTable):
             # Add tag filter
             if tag_names:
                 tag_placeholders = ", ".join("?" for _ in tag_names)
-                query += f""" AND file_path IN (
+                query += f""" AND im.file_path IN (
                     SELECT it.file_path FROM image_tags it
                     JOIN tags t ON t.id = it.tag_id
                     WHERE t.name IN ({tag_placeholders})
@@ -893,7 +899,7 @@ class ImageTable(BaseTable):
 
             # Add duplicates filter
             if duplicates_only:
-                query += """ AND content_hash IN (
+                query += """ AND im.content_hash IN (
                     SELECT content_hash FROM image_metadata
                     WHERE content_hash IS NOT NULL
                     GROUP BY content_hash HAVING COUNT(*) > 1
@@ -902,7 +908,7 @@ class ImageTable(BaseTable):
             # Add date range filter (date_taken with mtime fallback; no-date images excluded)
             if date_range is not None:
                 min_ts, max_ts = date_range
-                query += """ AND COALESCE(CAST(date_taken AS REAL), mtime) BETWEEN ? AND ?"""
+                query += """ AND COALESCE(CAST(im.date_taken AS REAL), im.mtime) BETWEEN ? AND ?"""
                 params.extend([min_ts, max_ts])
 
             cursor.execute(query, params)
@@ -921,7 +927,13 @@ class ImageTable(BaseTable):
         try:
             conn = self._read_conn()
             cursor = conn.cursor()
-            cursor.execute('SELECT file_path FROM image_metadata')
+            cursor.execute("""
+                SELECT im.file_path
+                FROM image_metadata im
+                LEFT JOIN file_transfers ft ON im.file_path = ft.source_path
+                    AND ft.operation IN ('delete', 'move') AND ft.status = 'pending'
+                WHERE ft.source_path IS NULL
+            """)
             return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error(f"Error getting all file paths from database: {e}")
@@ -937,16 +949,25 @@ class ImageTable(BaseTable):
             conn = self._read_conn()
             cursor = conn.cursor()
             search_path = os.path.join(directory_path, '')
+            
+            base_query = """
+                SELECT im.file_path
+                FROM image_metadata im
+                LEFT JOIN file_transfers ft ON im.file_path = ft.source_path
+                    AND ft.operation IN ('delete', 'move') AND ft.status = 'pending'
+                WHERE ft.source_path IS NULL
+            """
+
             if recursive:
                 cursor.execute(
-                    "SELECT file_path FROM image_metadata WHERE file_path LIKE ?",
+                    base_query + " AND im.file_path LIKE ?",
                     (search_path + '%',),
                 )
             else:
-                cursor.execute("""
-                    SELECT file_path FROM image_metadata
-                    WHERE file_path LIKE ? AND SUBSTR(file_path, LENGTH(?) + 1) NOT LIKE '%/%'
-                """, (search_path + '%', search_path))
+                cursor.execute(
+                    base_query + " AND im.file_path LIKE ? AND SUBSTR(im.file_path, LENGTH(?) + 1) NOT LIKE '%/%'",
+                    (search_path + '%', search_path)
+                )
             return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
             logger.error(f"Failed to get directory files for {directory_path} from DB: {e}")

@@ -5,6 +5,8 @@ import shutil
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
+from core.enums import FileOperation
+
 if TYPE_CHECKING:
     from core.metadata_database import MetadataDatabase
 
@@ -87,7 +89,7 @@ def execute_bookmark_transfer(
 ) -> dict:
     """DB records survive GUI closure so the daemon can retry incomplete transfers."""
     dest_dir = os.path.expanduser(dest_dir)
-    op = "move" if move else "copy"
+    op = FileOperation.MOVE.value if move else FileOperation.COPY.value
     results = {"copied": 0, "moved": 0, "skipped": 0, "errors": []}
 
     if db:

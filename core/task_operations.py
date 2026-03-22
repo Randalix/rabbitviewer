@@ -5,6 +5,8 @@ import os
 import time
 from typing import Optional, Dict, List, Any, Callable
 
+from core.enums import FileOperation
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +53,7 @@ class TaskOperationRegistry:
         from core.file_ops import trash_with_sidecars
         # Mark intent before any destructive action — cleared by _op_remove_records
         # after DB records are confirmed removed. Survives GUI crash mid-operation.
-        self._db.ledgers.file_transfer_batch_insert(file_paths, '', 'delete')
+        self._db.ledgers.file_transfer_batch_insert(file_paths, '', FileOperation.DELETE.value)
         result = trash_with_sidecars(file_paths)
 
         # For files still on disk (trash failed), try hard-delete as fallback.
@@ -102,7 +104,7 @@ class TaskOperationRegistry:
         success = self._db.remove_records(gone)
         if success and gone:
             for path in gone:
-                self._db.ledgers.file_transfer_mark_complete(path, '', 'delete', 'deleted')
+                self._db.ledgers.file_transfer_mark_complete(path, '', FileOperation.DELETE.value, 'deleted')
         return {"success": success, "count": len(gone), "skipped": skipped}
 
     def _op_bookmark_copy(self, file_paths: List[str], *,

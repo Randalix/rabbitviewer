@@ -7,6 +7,8 @@ Called once at startup via init_schema().
 import logging
 import sqlite3
 
+from core.enums import FileOperation
+
 logger = logging.getLogger(__name__)
 
 
@@ -192,7 +194,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             cursor.execute(
                 "INSERT OR IGNORE INTO file_transfers "
                 "(source_path, dest_dir, operation, status, created_at) "
-                "SELECT file_path, '', 'delete', 'pending', created_at FROM pending_deletions"
+                "SELECT file_path, '', ?, 'pending', created_at FROM pending_deletions",
+                (FileOperation.DELETE.value,)
             )
             cursor.execute("DROP TABLE IF EXISTS pending_deletions")
         except sqlite3.OperationalError:

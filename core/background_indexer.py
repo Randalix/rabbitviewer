@@ -1,7 +1,8 @@
 import os
 import logging
-from typing import List
+from typing import Dict, List
 
+from core.enums import FileOperation
 from core.rendermanager import Priority, SourceJob
 
 logger = logging.getLogger(__name__)
@@ -154,11 +155,11 @@ class BackgroundIndexer:
         moves_by_dest: Dict[str, List[str]] = {}
 
         for source_path, dest_dir, operation in pending_transfers:
-            if operation == 'delete':
+            if operation == FileOperation.DELETE.value:
                 deletes.append(source_path)
-            elif operation == 'copy':
+            elif operation == FileOperation.COPY.value:
                 copies_by_dest.setdefault(dest_dir, []).append(source_path)
-            elif operation == 'move':
+            elif operation == FileOperation.MOVE.value:
                 moves_by_dest.setdefault(dest_dir, []).append(source_path)
 
         rm = self.thumbnail_manager.render_manager
