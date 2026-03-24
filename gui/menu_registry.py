@@ -120,6 +120,7 @@ def build_menus() -> dict:
     ])
     open_with_menu = MenuNode("Open with", children=[
         MenuNode("Default app", key="d", script="open_with_default"),
+        MenuNode("mpv", key="m", script="open_with_mpv"),
         MenuNode("Open folder", key="f", script="open_folder"),
         MenuNode("vkdt", key="v", script="open_in_vkdt"),
     ])
