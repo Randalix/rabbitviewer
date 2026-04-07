@@ -245,25 +245,30 @@ yellow "Installing RabbitViewer (editable) …"
 "$VENV_PIP" install -e "$REPO_DIR"
 green "Package installed."
 
-# 4b. Check optional dependencies.
+# 4b. Check for libmpv system library (required by python-mpv at runtime).
 echo
-yellow "Checking optional dependencies …"
-MISSING_OPTIONAL=0
-
-# Video support: python-mpv
 if ! "$VENV_PYTHON" -c "import mpv" &>/dev/null; then
-    yellow "  [optional] Video playback support not installed."
-    yellow "             Install with: $VENV_PIP install python-mpv"
+    yellow "  [!] libmpv not found — video playback will not work."
     if [[ "$(uname)" == "Darwin" ]]; then
-        yellow "             Also requires mpv: brew install mpv"
+        yellow "      Install with: brew install mpv"
     else
-        yellow "             Also requires libmpv: sudo apt install libmpv-dev"
+        yellow "      libmpv-dev is required (the mpv CLI alone is not enough)."
+        printf '      Install now? Runs: sudo apt install libmpv-dev [y/N] '
+        read -r INSTALL_LIBMPV </dev/tty
+        echo
+        if [[ "${INSTALL_LIBMPV:-}" =~ ^[Yy]$ ]]; then
+            sudo apt install -y libmpv-dev
+            if "$VENV_PYTHON" -c "import mpv" &>/dev/null; then
+                green "  libmpv installed successfully."
+            else
+                red "  libmpv still not found after install — check your package manager."
+            fi
+        else
+            yellow "      Skipping. Install manually with: sudo apt install libmpv-dev"
+        fi
     fi
-    MISSING_OPTIONAL=1
-fi
-
-if [[ "$MISSING_OPTIONAL" -eq 0 ]]; then
-    green "  All optional dependencies are installed."
+else
+    green "  libmpv found — video playback ready."
 fi
 echo
 

@@ -80,6 +80,16 @@ Scrub the timeline directly from the inspector using mouse position.
 
 Switch seamlessly between stills and motion.
 
+### Folder Tree Panel
+
+A resizable left-side panel for navigating the filesystem without leaving the viewer (`Tab` to toggle).
+
+* Lazy-loads subdirectories on expand — no full tree scan on open
+* Tracks the current directory automatically as you navigate
+* Type any character to open an inline search bar; matches are highlighted and the best result is auto-selected
+* `Enter` or double-click to navigate into a folder
+* `Esc` clears the search and returns focus to the tree
+
 ### Tagging
 
 Assign free-form tags to any selection via the tag editor (`T`). Tags are written to XMP sidecars alongside ratings. Filter the grid by tag to narrow large sets instantly.

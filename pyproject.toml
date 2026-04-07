@@ -8,17 +8,16 @@ version = "0.1.0"
 description = "A daemon + GUI image viewer"
 requires-python = ">=3.10"
 dependencies = [
-    "PySide6>=6.8.2,<7",
+    "PySide6>=6.10.2,<7",
     "PyYAML>=6.0",
     "Pillow",
-    "watchdog>=2.1.9",
+    "watchdog>=6.0.0",
     "send2trash",
-    "pydantic>=2.0",
+    "python-mpv",
 ]
 
 [project.optional-dependencies]
 cr3 = []
-video = ["python-mpv"]
 dev = ["pytest==7.2.1", "pytest-qt==4.0.2"]
 
 [project.scripts]
