@@ -10,6 +10,12 @@ from core.event_system import event_system, EventType, EventData, RunScriptEvent
 
 _TEXT_INPUT_TYPES = (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox)
 
+# Shortcuts that remain active even when a focus-sink panel has keyboard focus.
+_PANEL_PASS_THROUGH = frozenset({
+    "navigate_parent",  # Alt+Up — useful from tree context
+    "close_or_quit",    # always allow quit
+})
+
 
 class HotkeyManager(QObject):
 	def __init__(self, parent_widget, hotkeys_config: dict):
@@ -19,8 +25,10 @@ class HotkeyManager(QObject):
 		self.shortcuts: Dict[str, List[QShortcut]] = {}
 		self.definitions: Dict[str, HotkeyDefinition] = {}
 		self.actions: Dict[str, Callable] = {}
-		
-		self._shortcuts_suppressed = False
+
+		self._shortcuts_suppressed = False  # text-input context
+		self._in_panel_context = False       # focus-sink panel has focus
+		self._focus_sinks: list = []         # registered non-content panels
 		self._setup_built_in_action_handlers()
 		self.load_config(hotkeys_config)
 		app = QApplication.instance()
@@ -47,20 +55,54 @@ class HotkeyManager(QObject):
 		self.add_action("open_breadcrumb", lambda: event_system.publish(EventData(event_type=EventType.OPEN_BREADCRUMB, source="hotkey_manager", timestamp=time.time())))
 
 
+	def register_focus_sink(self, widget) -> None:
+		"""Register *widget* as a focus sink.
+
+		While *widget* or any descendant has keyboard focus, all shortcuts except
+		those in _PANEL_PASS_THROUGH are disabled so the panel can receive keys
+		uncontested.  Uses a parent-chain walk rather than isAncestorOf so that
+		QAbstractScrollArea viewport children are handled correctly.
+		"""
+		self._focus_sinks.append(widget)
+
+	def _is_in_focus_sink(self, widget) -> bool:
+		"""Return True if *widget* is inside any registered focus sink."""
+		w = widget
+		while w is not None:
+			if w in self._focus_sinks:
+				return True
+			w = w.parent()
+		return False
+
 	def _on_focus_changed(self, old, new):
-		should_suppress = isinstance(new, _TEXT_INPUT_TYPES)
-		if should_suppress == self._shortcuts_suppressed:
+		is_text = isinstance(new, _TEXT_INPUT_TYPES)
+		in_panel = new is not None and self._is_in_focus_sink(new)
+		if is_text == self._shortcuts_suppressed and in_panel == self._in_panel_context:
 			return
-		self._shortcuts_suppressed = should_suppress
-		for shortcut_list in self.shortcuts.values():
-			for shortcut in shortcut_list:
-				shortcut.setEnabled(not should_suppress)
-		logger.debug(f"HotkeyManager: shortcuts {'suppressed' if should_suppress else 'restored'} (focus → {type(new).__name__})")
+		self._shortcuts_suppressed = is_text
+		self._in_panel_context = in_panel
+		self._update_shortcut_states()
+		logger.debug(
+			"HotkeyManager: focus→%s  text=%s  panel=%s",
+			type(new).__name__, is_text, in_panel)
+
+	def _update_shortcut_states(self) -> None:
+		"""Enable or disable each shortcut based on the current focus context."""
+		for action_name, shortcut_list in self.shortcuts.items():
+			enabled = (
+				not self._shortcuts_suppressed
+				and (not self._in_panel_context or action_name in _PANEL_PASS_THROUGH)
+			)
+			for sc in shortcut_list:
+				sc.setEnabled(enabled)
 
 	def eventFilter(self, obj, event):
 		if not isinstance(event, QKeyEvent):
 			return super().eventFilter(obj, event)
 
+		# Shift and Tab are intercepted manually here; honour text-input suppression
+		# for Shift (no shortcuts should fire), but Tab must always reach toggle_tree_panel
+		# so it still works to close the panel from panel-context.
 		if self._shortcuts_suppressed:
 			return super().eventFilter(obj, event)
 
@@ -70,6 +112,16 @@ class HotkeyManager(QObject):
 				event_system.publish(EventData(event_type=EventType.SHIFT_PRESSED, source="hotkey_manager", timestamp=time.time()))
 			elif event.type() == QKeyEvent.Type.KeyRelease:
 				event_system.publish(EventData(event_type=EventType.SHIFT_RELEASED, source="hotkey_manager", timestamp=time.time()))
+
+		# Tab is intercepted here because QShortcut cannot reliably capture it
+		# before Qt's focus-traversal machinery consumes it.
+		if (event.type() == QKeyEvent.Type.KeyPress
+				and event.key() == Qt.Key_Tab
+				and not event.isAutoRepeat()):
+			handler = self.actions.get("toggle_tree_panel")
+			if handler:
+				handler()
+				return True
 
 		return super().eventFilter(obj, event)
 						

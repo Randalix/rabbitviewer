@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Optional, Set, List, TYPE_CHECKING
 import threading
-from PySide6.QtWidgets import QMainWindow, QStackedWidget, QApplication
-from PySide6.QtCore import Slot, QPointF, QTimer, Signal, QSettings
+from PySide6.QtWidgets import QMainWindow, QStackedWidget, QApplication, QSplitter
+from PySide6.QtCore import Slot, QPointF, QTimer, Signal, QSettings, Qt
 import logging
 logger = logging.getLogger(__name__)
 import os
@@ -24,7 +24,7 @@ from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
 from scripts.script_manager import ScriptManager, ScriptAPI
 from core.event_system import (event_system, EventType, EventData, InspectorEventData,
-    StatusMessageEventData, StatusSection)
+    StatusMessageEventData, StatusSection, DirectoryEventData)
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
 from network.gui_server import GuiServer
 from network.daemon_signals import DaemonSignals
@@ -61,12 +61,25 @@ class MainWindow(QMainWindow):
         self.daemon_signals = daemon_signals
 
         from .tiling_manager import TilingManager
+        from .folder_tree_panel import FolderTreePanel
 
         self._tiling = TilingManager()
-        self.setCentralWidget(self._tiling)
-
         self.stacked_widget = QStackedWidget()
         self._tiling.set_main_content(self.stacked_widget)
+
+        self._tree_panel = FolderTreePanel()
+        self._tree_panel.navigate_to.connect(
+            lambda path: self.load_directory(path, recursive=False))
+        self._tree_panel.setMinimumWidth(150)
+        self._tree_panel_width = 250  # restored width when re-shown
+
+        self._outer_splitter = QSplitter(Qt.Horizontal)
+        self._outer_splitter.setChildrenCollapsible(False)
+        self._outer_splitter.addWidget(self._tree_panel)
+        self._outer_splitter.addWidget(self._tiling)
+        self._tree_panel.hide()
+
+        self.setCentralWidget(self._outer_splitter)
 
         self.status_bar = None
 
@@ -95,6 +108,9 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         else:
             self.resize(800, 600)
+
+        tree_settings = QSettings("RabbitViewer", "TreePanel")
+        self._tree_panel_width = tree_settings.value("width", 250, type=int)
 
         if debug_ui:
             self.setStyleSheet("QWidget { border: 1px solid red; }")
@@ -136,6 +152,7 @@ class MainWindow(QMainWindow):
         self.script_manager.load_scripts(scripts_dir)
 
         self._setup_hotkeys()
+        self.hotkey_manager.register_focus_sink(self._tree_panel)
         self.modal_menu = ModalMenu(self, build_menus(), self.script_manager)
         self._setup_event_subscriptions()
 
@@ -942,6 +959,11 @@ class MainWindow(QMainWindow):
             self.comfyui_dialog.close()
             self.comfyui_dialog = None
         self._tiling.save_state()
+        tree_settings = QSettings("RabbitViewer", "TreePanel")
+        tree_settings.setValue("width",
+            self._outer_splitter.sizes()[0] if self._tree_panel.isVisible()
+            else self._tree_panel_width)
+        tree_settings.sync()
         settings = QSettings("RabbitViewer", "MainWindow")
         settings.setValue("geometry", self.saveGeometry())
         settings.sync()
@@ -965,12 +987,25 @@ class MainWindow(QMainWindow):
         event_system.subscribe(EventType.OPEN_TAG_FILTER, lambda _: self.open_tag_filter())
         event_system.subscribe(EventType.OPEN_COMPARE_GRID, lambda _: self._open_compare_view("grid"))
         event_system.subscribe(EventType.OPEN_COMPARE_SPLIT, lambda _: self._open_compare_view("split"))
-        event_system.subscribe(EventType.NAVIGATE_PARENT, lambda _: self.thumbnail_view.navigate_to_parent())
+        event_system.subscribe(EventType.NAVIGATE_PARENT, lambda _: self._navigate_parent())
         event_system.subscribe(EventType.OPEN_BREADCRUMB, lambda _: self._toggle_breadcrumb_bar())
         event_system.subscribe(EventType.NAVIGATE_TO_FOLDER, lambda e: self._handle_folder_navigation(e.path))
         event_system.subscribe(EventType.OPEN_RECENT_DIRECTORY, self._handle_open_recent)
         event_system.subscribe(EventType.SELECTION_FILTER_CHANGED, lambda _: self._toggle_selection_filter())
         event_system.subscribe(EventType.TOGGLE_FACE_PALETTE, lambda _: self._open_face_palette())
+        event_system.subscribe(EventType.DIRECTORY_CHANGED, self._on_directory_changed)
+
+    def _navigate_parent(self) -> None:
+        if not self.last_known_directory:
+            return
+        parent = os.path.dirname(self.last_known_directory)
+        if parent and parent != self.last_known_directory:
+            self.load_directory(parent, recursive=False)
+
+    def _on_directory_changed(self, event_data) -> None:
+        """Keep the tree panel in sync with every folder navigation."""
+        if self._tree_panel.isVisible():
+            self._tree_panel.set_current_path(event_data.path)
 
     def _handle_inspector_event(self, event_data):
         if event_data.image_path == self.current_hovered_image:
@@ -1000,6 +1035,7 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.add_action("copy_paths", self._copy_paths)
         self.hotkey_manager.add_action("copy_files", self._copy_files)
         self.hotkey_manager.add_action("copy_image", self._copy_image)
+        self.hotkey_manager.add_action("toggle_tree_panel", self._toggle_tree_panel)
 
     def _toggle_hotkey_help(self):
         if not hasattr(self, '_hotkey_help_overlay') or self._hotkey_help_overlay is None:
@@ -1012,6 +1048,29 @@ class MainWindow(QMainWindow):
     def _toggle_group_mode(self):
         if self.thumbnail_view:
             self.thumbnail_view.toggle_group_mode()
+
+    def _toggle_tree_panel(self):
+        if self._tree_panel.isVisible():
+            self._tree_panel_width = self._outer_splitter.sizes()[0]
+            self._tree_panel.hide()
+            if self.thumbnail_view:
+                self.thumbnail_view.setFocus()
+        else:
+            self._tree_panel.show()
+            total = self._outer_splitter.width()
+            self._outer_splitter.setSizes(
+                [self._tree_panel_width, max(0, total - self._tree_panel_width)])
+            if not self._tree_panel.has_roots():
+                watch_paths = self.config_manager.get("watch_paths", [])
+                self._tree_panel.set_roots(watch_paths)
+            if self.last_known_directory:
+                self._tree_panel.set_current_path(self.last_known_directory)
+            self._tree_panel.focus_tree()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        max_tree_w = max(150, int(self.width() * 0.4))
+        self._tree_panel.setMaximumWidth(max_tree_w)
 
     # ── Clipboard ────────────────────────────────────────────────
 
@@ -1067,6 +1126,12 @@ class MainWindow(QMainWindow):
         logger.debug("MainWindow: Directory loading completed, setting current widget...")
         self.stacked_widget.setCurrentWidget(self.thumbnail_view)
         logger.debug("MainWindow: ThumbnailView is now the current widget")
+        event_system.publish(DirectoryEventData(
+            event_type=EventType.DIRECTORY_CHANGED,
+            source="main_window",
+            timestamp=time.time(),
+            path=directory_path,
+        ))
 
     def _handle_open_recent(self, event_data):
         self.load_directory(event_data.path)
@@ -1116,6 +1181,12 @@ class MainWindow(QMainWindow):
         self.thumbnail_view.navigate_to_folder(folder_path)
         if self.breadcrumb_bar and self.breadcrumb_bar.isVisible():
             self.breadcrumb_bar.set_path(folder_path)
+        event_system.publish(DirectoryEventData(
+            event_type=EventType.DIRECTORY_CHANGED,
+            source="main_window",
+            timestamp=time.time(),
+            path=folder_path,
+        ))
 
     def open_media_view(self, file_path: str):
         if _is_video(file_path):

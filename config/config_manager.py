@@ -185,6 +185,10 @@ DEFAULT_CONFIG = {
         "script:invert_selection": {
             "sequence": "Ctrl+Shift+A",
             "description": "Invert selection"
+        },
+        "toggle_tree_panel": {
+            "sequence": "Tab",
+            "description": "Toggle folder tree panel"
         }
     },
     "color_management": {

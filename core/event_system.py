@@ -92,6 +92,7 @@ class EventType(Enum):
     # Directory events
     NAVIGATE_TO_FOLDER = "navigate_to_folder"
     OPEN_RECENT_DIRECTORY = "open_recent_directory"
+    DIRECTORY_CHANGED = "directory_changed"  # fired after the active directory actually changes
 
     # Status messages
     STATUS_MESSAGE = "status_message"
