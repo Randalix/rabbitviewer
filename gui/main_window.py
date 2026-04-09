@@ -77,6 +77,10 @@ class MainWindow(QMainWindow):
 
         self._outer_splitter = QSplitter(Qt.Horizontal)
         self._outer_splitter.setChildrenCollapsible(False)
+        self._outer_splitter.setHandleWidth(1)
+        self._outer_splitter.setStyleSheet(
+            "QSplitter::handle { background: #3c3c3c; }"
+        )
         self._outer_splitter.addWidget(self._tree_panel)
         self._outer_splitter.addWidget(self._tiling)
         self._tree_panel.hide()

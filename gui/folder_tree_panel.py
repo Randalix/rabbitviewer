@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QColor, QPainter, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QLineEdit,
     QMenu,
     QStyledItemDelegate,
@@ -113,6 +114,7 @@ class FolderTreePanel(QWidget):
         layout.addWidget(self._search_bar)
 
         self._tree = QTreeWidget()
+        self._tree.setFrameShape(QFrame.Shape.NoFrame)
         self._tree.setHeaderHidden(True)
         self._tree.setIndentation(16)
         self._tree.setAnimated(False)

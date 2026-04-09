@@ -50,6 +50,7 @@ class ThumbnailViewWidget(QFrame):
 
     def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.config_manager = config_manager
         self.gui_config = config_manager.get(
