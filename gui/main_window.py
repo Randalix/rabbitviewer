@@ -210,6 +210,7 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.thumbnail_view)
 
         self._hover_prefetch_path: Optional[str] = None
+        self._status_display_path: Optional[str] = None
         self._last_rating_set_time: float = 0.0
         self._hover_prefetch_timer = QTimer(self)
         self._hover_prefetch_timer.setSingleShot(True)
@@ -218,7 +219,7 @@ class MainWindow(QMainWindow):
         self._hover_clear_timer = QTimer(self)
         self._hover_clear_timer.setSingleShot(True)
         self._hover_clear_timer.setInterval(100)
-        self._hover_clear_timer.timeout.connect(self._do_hover_clear)
+        self._hover_clear_timer.timeout.connect(self._on_hover_ended)
         self.thumbnail_view.thumbnailHovered.connect(self._on_thumbnail_hovered)
         self.thumbnail_view.thumbnailLeft.connect(self._on_thumbnail_left)
         self.thumbnail_view.filtersApplied.connect(self._on_filters_applied)
@@ -241,6 +242,7 @@ class MainWindow(QMainWindow):
         self._hover_clear_timer.stop()
         # Publish filepath immediately — no network needed
         if path:
+            self._status_display_path = path
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE,
                 source="main_window",
@@ -258,13 +260,24 @@ class MainWindow(QMainWindow):
         # timer is cancelled in _on_thumbnail_hovered, avoiding flicker.
         self._hover_clear_timer.start()
 
-    def _do_hover_clear(self):
-        event_system.publish(StatusMessageEventData(
-            event_type=EventType.STATUS_MESSAGE, source="main_window",
-            timestamp=time.time(), message="", section=StatusSection.FILEPATH))
-        event_system.publish(StatusMessageEventData(
-            event_type=EventType.STATUS_MESSAGE, source="main_window",
-            timestamp=time.time(), message="", section=StatusSection.RATING))
+    def _on_hover_ended(self):
+        selected = self.selection_state.selected_paths
+        path = next(iter(selected)) if selected else None
+        self._status_display_path = path
+        if path:
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="main_window",
+                timestamp=time.time(), message=path, section=StatusSection.FILEPATH))
+            threading.Thread(
+                target=self._fetch_hover_rating, args=(path,), daemon=True
+            ).start()
+        else:
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="main_window",
+                timestamp=time.time(), message="", section=StatusSection.FILEPATH))
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="main_window",
+                timestamp=time.time(), message="", section=StatusSection.RATING))
 
     def _fetch_metadata_for_path(self, path: str):
         # why: picture view doesn't trigger the hover-prefetch flow, so we
@@ -303,7 +316,7 @@ class MainWindow(QMainWindow):
         # Skip stale hover results that were in-flight when a rating was just set
         if time.time() - self._last_rating_set_time < 0.5:
             return
-        if self.thumbnail_view.get_hovered_image_path() == path:
+        if path == self._status_display_path:
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE,
                 source="main_window",
