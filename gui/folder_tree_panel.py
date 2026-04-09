@@ -137,8 +137,7 @@ class FolderTreePanel(QWidget):
         self._dynamic_root = None
         self._tree.clear()
         for path in paths:
-            if os.path.isdir(path):  # disk-io: check watch-path exists before adding root
-                self._add_node(None, path)
+            self._add_node(None, path)
 
     def has_roots(self) -> bool:
         return self._tree.topLevelItemCount() > 0

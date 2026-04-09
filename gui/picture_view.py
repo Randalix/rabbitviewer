@@ -299,9 +299,12 @@ class PictureView(QWidget):
                 delta_normalized = inv_transform.map(QPointF(delta)) - inv_transform.map(QPointF(0, 0))
                 
                 current_center = self._picture_base.viewState().center
+                padded = self._picture_base.paddedRect()
+                if padded.width() == 0 or padded.height() == 0:
+                    return
                 new_center = QPointF(
-                    current_center.x() - delta_normalized.x() / self._picture_base.paddedRect().width(),
-                    current_center.y() + delta_normalized.y() / self._picture_base.paddedRect().height()
+                    current_center.x() - delta_normalized.x() / padded.width(),
+                    current_center.y() + delta_normalized.y() / padded.height()
                 )
                 self._picture_base.setCenter(new_center)
                 

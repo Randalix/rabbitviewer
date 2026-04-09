@@ -440,7 +440,7 @@ class ThumbnailViewWidget(QFrame):
             self._sync_virtual_viewport()
         self._priority_update_timer.start()
 
-    def load_directory(self, directory_path: str, recursive: bool = True):
+    def load_directory(self, directory_path: str, recursive: bool = False):
         self._notifications.reset_startup(time.perf_counter())
         self._startup_thumbnails_emitted = False
         self._startup_inline_thumb_count = 0

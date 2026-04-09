@@ -1139,7 +1139,7 @@ class MainWindow(QMainWindow):
             timeout=timeout,
         ))
 
-    def load_directory(self, directory_path: str, recursive: bool = True):
+    def load_directory(self, directory_path: str, recursive: bool = False):
         logger.debug(f"MainWindow: Starting to load directory: {directory_path} (Recursive: {recursive})")
         self.last_known_directory = directory_path
         from core.recent_directories import add as add_recent
