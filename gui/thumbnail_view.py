@@ -389,9 +389,11 @@ class ThumbnailViewWidget(QFrame):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setStyleSheet("QScrollArea { background: transparent; }")
 
         self._grid_container = QWidget()
         self._grid_container.setContentsMargins(0, 0, 0, 0)
+        self._grid_container.setStyleSheet("background: transparent;")
 
         self._virtual_grid = VirtualGridManager(
             self._grid_container,
