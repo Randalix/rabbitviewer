@@ -74,6 +74,18 @@ class NotificationHandler(QObject):
             # why: daemon watchdog/prior sessions emit previews_ready for
             # stale paths; skip to avoid wasting tick slots.
             if image_path not in self.model.path_to_idx:
+                # Check if this image lives inside a folder card — if so, feed
+                # the thumbnail into the card's preview mosaic.
+                parent = os.path.dirname(image_path)
+                node = self.model.folder_nodes.get(parent)
+                if node and len(node.preview_paths) < 4 and data.thumbnail_path not in node.preview_paths:
+                    node.preview_paths.append(data.thumbnail_path)
+                    folder_idx = self.model.path_to_idx.get(parent, -1)
+                    label = self._widget.labels.get(folder_idx) if folder_idx >= 0 else None
+                    if label:
+                        label._folder_preview_pixmaps = None  # invalidate cached mosaic
+                        label._cache_folder_previews()
+                        label.update()
                 return
             self.prioritizer.queue_previews([(image_path, data.thumbnail_path)])
             if not self.preview_tick_timer.isActive():
