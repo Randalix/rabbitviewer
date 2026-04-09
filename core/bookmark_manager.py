@@ -116,3 +116,59 @@ def execute_bookmark_transfer(
         op, dest_dir, done, skip, errs, total,
     )
     return results
+
+
+def save_bookmarks(bookmarks: List[Bookmark]) -> None:
+    data = {
+        "bookmarks": [
+            {"key": b.key, "name": b.name, "path": b.path} for b in bookmarks
+        ]
+    }
+    try:
+        os.makedirs(os.path.dirname(BOOKMARKS_PATH), exist_ok=True)
+        with open(BOOKMARKS_PATH, "w") as f:  # disk-io: write bookmarks config
+            yaml.dump(data, f, default_flow_style=False)
+    except OSError as e:
+        logger.error("Failed to save bookmarks: %s", e)
+
+
+def add_bookmark(path: str) -> None:
+    path = os.path.expanduser(path)
+    if not os.path.isdir(path):  # disk-io: verify directory exists before bookmarking
+        logger.warning("Cannot bookmark non-existent directory: %s", path)
+        return
+
+    bookmarks = load_bookmarks()
+
+    # Check if already bookmarked
+    if any(b.path == path for b in bookmarks):
+        logger.info("Path already bookmarked: %s", path)
+        return
+
+    # Find next available key
+    used_keys = {int(b.key) for b in bookmarks if b.key.isdigit()}
+    next_key = 1
+    while next_key in used_keys:
+        next_key += 1
+
+    name = os.path.basename(path) or path
+    new_bookmark = Bookmark(key=str(next_key), name=name, path=path)
+
+    bookmarks.append(new_bookmark)
+    save_bookmarks(bookmarks)
+    logger.info("Added bookmark: %s", path)
+
+
+def remove_bookmark(path: str) -> None:
+    path = os.path.expanduser(path)
+    bookmarks = load_bookmarks()
+
+    original_count = len(bookmarks)
+    bookmarks = [b for b in bookmarks if b.path != path]
+
+    if len(bookmarks) < original_count:
+        save_bookmarks(bookmarks)
+        logger.info("Removed bookmark: %s", path)
+    else:
+        logger.warning("Attempted to remove non-existent bookmark: %s", path)
+

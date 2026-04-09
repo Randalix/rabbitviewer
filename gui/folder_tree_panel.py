@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import logging
 
 from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QColor, QPainter, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QLineEdit,
+    QMenu,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTreeWidget,
@@ -16,6 +18,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from core.bookmark_manager import add_bookmark, load_bookmarks, remove_bookmark
+
+logger = logging.getLogger(__name__)
 
 _PLACEHOLDER = "__placeholder__"
 
@@ -86,6 +92,7 @@ class FolderTreePanel(QWidget):
     """
 
     navigate_to = Signal(str)
+    bookmarks_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -112,6 +119,8 @@ class FolderTreePanel(QWidget):
         self._tree.itemExpanded.connect(self._on_item_expanded)
         self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._tree.installEventFilter(self)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._tree)
 
         self._delegate = _HighlightDelegate(self._tree)
@@ -180,6 +189,35 @@ class FolderTreePanel(QWidget):
         item = self._tree.currentItem()
         if item:
             self._activate(item)
+
+    def _show_context_menu(self, position):
+        item = self._tree.itemAt(position)
+        if not item:
+            return
+
+        path = item.data(0, Qt.UserRole)
+        if not path or path == _PLACEHOLDER:
+            return
+
+        menu = QMenu()
+        bookmarked_paths = {b.path for b in load_bookmarks()}
+
+        if path in bookmarked_paths:
+            action = menu.addAction("Remove from bookmarks")
+            action.triggered.connect(lambda: self._remove_from_bookmarks(path))
+        else:
+            action = menu.addAction("Add to bookmarks")
+            action.triggered.connect(lambda: self._add_to_bookmarks(path))
+
+        menu.exec(self._tree.viewport().mapToGlobal(position))
+
+    def _add_to_bookmarks(self, path: str):
+        add_bookmark(path)
+        self.bookmarks_changed.emit()
+
+    def _remove_from_bookmarks(self, path: str):
+        remove_bookmark(path)
+        self.bookmarks_changed.emit()
 
     # ------------------------------------------------------------------ tree helpers
 

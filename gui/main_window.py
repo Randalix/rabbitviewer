@@ -25,6 +25,7 @@ from .menu_registry import build_menus
 from scripts.script_manager import ScriptManager, ScriptAPI
 from core.event_system import (event_system, EventType, EventData, InspectorEventData,
     StatusMessageEventData, StatusSection, DirectoryEventData)
+from core.bookmark_manager import load_bookmarks
 from core.selection import SelectionState, SelectionProcessor, SelectionHistory
 from network.gui_server import GuiServer
 from network.daemon_signals import DaemonSignals
@@ -70,6 +71,7 @@ class MainWindow(QMainWindow):
         self._tree_panel = FolderTreePanel()
         self._tree_panel.navigate_to.connect(
             lambda path: self.load_directory(path, recursive=False))
+        self._tree_panel.bookmarks_changed.connect(self._refresh_tree_roots)
         self._tree_panel.setMinimumWidth(150)
         self._tree_panel_width = 250  # restored width when re-shown
 
@@ -1049,6 +1051,12 @@ class MainWindow(QMainWindow):
         if self.thumbnail_view:
             self.thumbnail_view.toggle_group_mode()
 
+    def _refresh_tree_roots(self):
+        watch_paths = self.config_manager.get("watch_paths", [])
+        bookmark_paths = [b.path for b in load_bookmarks()]
+        root_paths = list(dict.fromkeys(watch_paths + bookmark_paths))
+        self._tree_panel.set_roots(root_paths)
+
     def _toggle_tree_panel(self):
         if self._tree_panel.isVisible():
             self._tree_panel_width = self._outer_splitter.sizes()[0]
@@ -1060,9 +1068,7 @@ class MainWindow(QMainWindow):
             total = self._outer_splitter.width()
             self._outer_splitter.setSizes(
                 [self._tree_panel_width, max(0, total - self._tree_panel_width)])
-            if not self._tree_panel.has_roots():
-                watch_paths = self.config_manager.get("watch_paths", [])
-                self._tree_panel.set_roots(watch_paths)
+            self._refresh_tree_roots()
             if self.last_known_directory:
                 self._tree_panel.set_current_path(self.last_known_directory)
             self._tree_panel.focus_tree()
