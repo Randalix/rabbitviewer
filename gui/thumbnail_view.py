@@ -245,6 +245,8 @@ class ThumbnailViewWidget(QFrame):
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
+        if not self.middle_mouse_pressed:
+            self.scroll_area.setFocus()
 
         if self.middle_mouse_pressed:
             delta = event.pos() - self.middle_mouse_press_pos

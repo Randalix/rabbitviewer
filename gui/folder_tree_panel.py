@@ -182,6 +182,10 @@ class FolderTreePanel(QWidget):
         self._roots.remove(self._dynamic_root)
         self._dynamic_root = None
 
+    def enterEvent(self, event) -> None:
+        self._tree.setFocus()
+        super().enterEvent(event)
+
     def focus_tree(self) -> None:
         self._tree.setFocus()
 
