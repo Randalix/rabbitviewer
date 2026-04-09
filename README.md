@@ -170,12 +170,14 @@ RabbitViewer exposes a clean API surface for automation. You can batch-edit rati
 
 Extend format support by adding a file to `plugins/`.
 
-Implement three functions:
+Subclass `BasePlugin` and implement:
 
 ```
-get_thumbnail()
-get_metadata()
-set_rating()
+get_supported_formats()
+process_thumbnail()
+process_view_image()
+generate_thumbnail()
+generate_view_image()
 ```
 
 Plugins are auto-discovered at startup.
@@ -188,12 +190,9 @@ RabbitViewer is designed to be extended — not forked.
 
 ### Standard Image Formats (via Pillow)
 
-* JPEG
-* PNG
-* BMP
-* GIF
-* TIFF
-* WebP
+* JPEG, PNG, BMP, GIF, TIFF, WebP
+* PSD (Photoshop)
+* JPEG 2000 (JP2)
 
 ### RAW Formats (via ExifTool preview extraction)
 
@@ -210,6 +209,13 @@ RabbitViewer is designed to be extended — not forked.
 * Phase One IIQ / CAP / EIP
 * Samsung SRW
 * Adobe DNG
+
+### HDR Formats
+
+* **OpenEXR** (.exr) — via `openexr` (`pip install ".[exr]"`)
+* **Radiance HDR** (.hdr, .pic) — via numpy (no extra install needed)
+
+Both formats use Reinhard tone-mapping for display.
 
 ### Video Formats (via ffmpeg + mpv)
 
@@ -308,8 +314,9 @@ Clean reinstall:
 Optional extras:
 
 ```
-venv/bin/pip install ".[cr3]"
-venv/bin/pip install ".[video]"
+venv/bin/pip install ".[exr]"     # OpenEXR support
+venv/bin/pip install ".[cr3]"     # Canon CR3 support
+venv/bin/pip install ".[video]"   # video thumbnails
 ```
 
 ---

@@ -14,7 +14,7 @@ class PILPlugin(BasePlugin):
 
     def get_supported_formats(self) -> List[str]:
         """Return list of supported file extensions."""
-        return ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp']
+        return ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp', '.psd', '.jp2']
 
     def generate_view_image(self, image_path: str, image_source: Union[str, bytes], orientation: int, output_path: str) -> bool:
         """
