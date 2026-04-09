@@ -46,6 +46,7 @@ class ThumbnailViewWidget(QFrame):
     _initial_files_signal = Signal(list)
     _initial_thumbs_signal = Signal(dict)
     _initial_folders_signal = Signal(list)   # list of FolderNode
+    _folder_node_updated_signal = Signal(str, list)  # path, image_paths — from background scan
     folderNavigated = Signal(str)            # emitted when user navigates into a folder
 
     def __init__(self, config_manager=None, parent=None):
@@ -132,6 +133,7 @@ class ThumbnailViewWidget(QFrame):
         self._initial_files_signal.connect(self._on_initial_files_received)
         self._initial_thumbs_signal.connect(self._on_initial_thumbs_received)
         self._initial_folders_signal.connect(self._on_initial_folders_received)
+        self._folder_node_updated_signal.connect(self._on_folder_node_updated)
 
         self._hovered_label: Optional[ThumbnailLabel] = None
         self._thumbnail_generated_signal.connect(self._on_thumbnail_ready, Qt.QueuedConnection)
@@ -489,7 +491,10 @@ class ThumbnailViewWidget(QFrame):
 
             # Discover subdirectories after files are emitted (slower DB queries)
             if not recursive:
-                folder_nodes = self.service.get_subdirectories(directory_path)
+                folder_nodes = self.service.get_subdirectories(
+                    directory_path,
+                    on_folder_card_scanned=self._folder_node_updated_signal.emit,
+                )
                 if folder_nodes:
                     logger.info("[folders] found %d subdirectories in %s", len(folder_nodes), directory_path)
                     self._initial_folders_signal.emit(folder_nodes)
@@ -528,6 +533,14 @@ class ThumbnailViewWidget(QFrame):
         # _add_image_batch deduplicates via _all_files_set.
         self._add_image_batch(folder_paths)
         logger.info("[folders] inserted %d folder cards into grid", len(folder_paths))
+
+    @Slot(str, list)
+    def _on_folder_node_updated(self, path: str, image_paths: list):
+        """Update image_paths on an existing FolderNode after a background scan."""
+        node = self.model.folder_nodes.get(path)
+        if node and not node.image_paths:
+            node.image_paths = image_paths
+            logger.debug("[folder-card] image_paths populated for %s (%d images)", path, len(image_paths))
 
     @Slot(dict)
     def _on_initial_thumbs_received(self, thumb_map: dict):

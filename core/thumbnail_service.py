@@ -173,7 +173,7 @@ class ThumbnailService:
             'thumbnail_paths': thumb_map,
         }
 
-    def get_subdirectories(self, parent_path: str) -> List[FolderNode]:
+    def get_subdirectories(self, parent_path: str, on_folder_card_scanned=None) -> List[FolderNode]:
         """Return FolderNodes for all immediate subdirectories.
 
         DB rows provide counts and preview thumbnails for indexed dirs.
@@ -212,10 +212,10 @@ class ThumbnailService:
             # This covers directories surfaced by the filesystem fallback that the
             # daemon hasn't walked yet.
             if not image_paths:
-                self._request_scan_for_folder_card(r['path'])
+                self._request_scan_for_folder_card(r['path'], on_images_discovered=on_folder_card_scanned)
         return nodes
 
-    def _request_scan_for_folder_card(self, path: str) -> None:
+    def _request_scan_for_folder_card(self, path: str, on_images_discovered=None) -> None:
         """Submit a low-priority reconcile scan for an unindexed folder card.
 
         Uses the ``folder_card_scan::`` job prefix so it doesn't conflict with
@@ -236,9 +236,12 @@ class ThumbnailService:
             if not discovered:
                 return
             logger.info("[folder-card] discovered %d files in %s", len(discovered), path)
-            discovered_list = list(discovered)
+            discovered_list = sorted(discovered)
             for wt in ('thumbnail', 'view_image', 'metadata'):
                 self.db.ledgers.file_work_batch_insert(discovered_list, wt, scan_root=path)
+
+            if on_images_discovered:
+                on_images_discovered(path, discovered_list)
 
             self.rm.submit_source_job(SourceJob(
                 job_id=f"folder_card_tasks::{path}",
@@ -261,6 +264,9 @@ class ThumbnailService:
             ),
             task_factory=self.tm.create_gui_tasks_for_file,
             create_tasks=False,
+            suppress_progress=True,  # why: this job scans a subdirectory; emitting
+            # scan_progress would pass path_belongs_to_current_directory() for the
+            # parent folder and inject subdirectory images into the non-recursive grid.
             on_complete=_on_complete,
             on_batch_discovered=_ledger_cb,
         ))
