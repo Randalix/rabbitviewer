@@ -17,6 +17,14 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+_BATCH_SIZE = 10
+
+
+def _batch_iter(files: list):
+    """Yield successive 10-item slices — shared by post-scan task generators."""
+    for i in range(0, len(files), _BATCH_SIZE):
+        yield files[i:i + _BATCH_SIZE]
+
 
 class ThumbnailService:
     """In-process service facade used by the GUI."""
@@ -114,21 +122,11 @@ class ThumbnailService:
                 for wt in ('thumbnail', 'view_image', 'metadata'):
                     self.db.ledgers.file_work_batch_insert(discovered_list, wt, scan_root=path)
 
-                def _discovered_batch_generator():
-                    batch = []
-                    for f in discovered:
-                        batch.append(f)
-                        if len(batch) >= 10:
-                            yield batch
-                            batch = []
-                    if batch:
-                        yield batch
-
                 task_job = SourceJob(
                     job_id=f"post_scan::{path}",
                     priority=Priority.LOW,
                     task_priority=Priority.LOW,
-                    generator=_discovered_batch_generator(),
+                    generator=_batch_iter(discovered_list),
                     task_factory=self.tm.create_gui_tasks_for_file,
                     create_tasks=True,
                     suppress_progress=True,
@@ -210,7 +208,62 @@ class ThumbnailService:
                 preview_paths=r['preview_paths'],
                 image_paths=image_paths,
             ))
+            # Trigger a background scan for any folder that has no indexed images.
+            # This covers directories surfaced by the filesystem fallback that the
+            # daemon hasn't walked yet.
+            if not image_paths:
+                self._request_scan_for_folder_card(r['path'])
         return nodes
+
+    def _request_scan_for_folder_card(self, path: str) -> None:
+        """Submit a low-priority reconcile scan for an unindexed folder card.
+
+        Uses the ``folder_card_scan::`` job prefix so it doesn't conflict with
+        the active ``gui_scan::`` job for the currently-viewed directory.
+        Deduplicates via the render manager's active_jobs registry.
+        """
+        job_id = f"folder_card_scan::{path}"
+        with self.rm.active_jobs_lock:
+            if job_id in self.rm.active_jobs:
+                return
+
+        logger.info("[folder-card] scheduling background scan for unindexed folder: %s", path)
+
+        reconcile_ctx = ReconcileContext(db_file_set=set())
+
+        def _on_complete():
+            discovered = reconcile_ctx.discovered_files
+            if not discovered:
+                return
+            logger.info("[folder-card] discovered %d files in %s", len(discovered), path)
+            discovered_list = list(discovered)
+            for wt in ('thumbnail', 'view_image', 'metadata'):
+                self.db.ledgers.file_work_batch_insert(discovered_list, wt, scan_root=path)
+
+            self.rm.submit_source_job(SourceJob(
+                job_id=f"folder_card_tasks::{path}",
+                priority=Priority.LOW,
+                task_priority=Priority.LOW,
+                generator=_batch_iter(discovered_list),
+                task_factory=self.tm.create_gui_tasks_for_file,
+                create_tasks=True,
+                suppress_progress=True,
+            ))
+
+        def _ledger_cb(paths):
+            self.db.ledgers.ledger_batch_insert(paths, scan_root=path)
+
+        self.rm.submit_source_job(SourceJob(
+            job_id=job_id,
+            priority=Priority.LOW,
+            generator=self.directory_scanner.scan_incremental_reconcile(
+                path, False, reconcile_ctx
+            ),
+            task_factory=self.tm.create_gui_tasks_for_file,
+            create_tasks=False,
+            on_complete=_on_complete,
+            on_batch_discovered=_ledger_cb,
+        ))
 
     def get_filtered_file_paths(self, text_filter: str, star_states: List[bool],
                                 tag_names: Optional[List[str]] = None,

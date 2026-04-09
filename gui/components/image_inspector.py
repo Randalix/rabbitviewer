@@ -151,8 +151,11 @@ class ImageInspector(QWidget):
                 status = response.get(image_path, {})
                 if status.get('view_image_ready') and status.get('view_image_path'):
                     view_image_path = status['view_image_path']
-                # Fallback to thumbnail when fullres is unavailable
-                elif cache_only and status.get('thumbnail_ready') and status.get('thumbnail_path'):
+                # Always fall back to thumbnail when fullres is unavailable —
+                # prevents a blank inspector while the view image is being
+                # generated. The heatmap pre-warms fullres in the background;
+                # once ready it will be used on the next fetch for this image.
+                elif status.get('thumbnail_ready') and status.get('thumbnail_path'):
                     view_image_path = status['thumbnail_path']
 
             if not view_image_path and not cache_only:
