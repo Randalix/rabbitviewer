@@ -176,10 +176,30 @@ class ThumbnailService:
         }
 
     def get_subdirectories(self, parent_path: str) -> List[FolderNode]:
-        """Return FolderNodes for immediate subdirectories that contain images."""
+        """Return FolderNodes for all immediate subdirectories.
+
+        DB rows provide counts and preview thumbnails for indexed dirs.
+        A filesystem fallback (os.scandir) picks up dirs not yet in the DB.
+        """
         rows = self.db.images.get_subdirectory_info(parent_path)
+        db_names = {r['name'] for r in rows}
+
+        # Filesystem fallback: include dirs the DB doesn't know about yet
+        try:
+            for entry in os.scandir(parent_path):  # disk-io: surface unindexed subdirs as folder cards
+                if entry.is_dir(follow_symlinks=False) and entry.name not in db_names:
+                    rows.append({
+                        'path': entry.path,
+                        'name': entry.name,
+                        'image_count': 0,
+                        'recursive_count': 0,
+                        'preview_paths': [],
+                    })
+        except OSError as e:
+            logger.warning("get_subdirectories: scandir failed for %s: %s", parent_path, e)
+
         nodes = []
-        for r in rows:
+        for r in sorted(rows, key=lambda r: r['name']):
             image_paths = sorted(self.db.images.get_directory_files(r['path'], recursive=True))
             nodes.append(FolderNode(
                 path=r['path'],
