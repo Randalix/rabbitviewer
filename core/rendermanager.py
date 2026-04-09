@@ -218,12 +218,19 @@ class RenderManager:
                     # Update args so the queued task runs with the latest values (e.g. latest rating).
                     task.args = args
                     task.kwargs = kwargs
+                    task.cancel_event = cancel_event
                     logger.debug(f"Task '{task_id}' pending — updated args in-place.")
                     if callback:
                         with self.task_callbacks_lock:
                             self.task_callbacks.setdefault(task_id, []).append(callback)
                     callback = None  # already stored
-                    _skip_graph_update = True  # task is already queued, don't re-queue
+                    if not task.is_active:
+                        # Task was cancelled while sitting in the queue. Reactivate it so
+                        # the priority-inheritance and runnable checks fire below.
+                        task.is_active = True
+                        task.state = TaskState.PENDING
+                    else:
+                        _skip_graph_update = True  # task is already queued, don't re-queue
             else: # New task
                 task = RenderTask(
                     task_id=task_id, priority=priority, func=func,
@@ -307,12 +314,14 @@ class RenderManager:
                             bfs.append(self.task_graph[dep_id])
         
         # Outside the lock, re-submit the tasks. submit_task handles invalidation.
+        # why: clear cancel_event on upgrade — a speculative task's cancel_event may
+        # already be set; inheriting it would cause the upgraded task to abort immediately.
         for task in tasks_to_resubmit.values():
             self.submit_task(
                 task.task_id, priority, task.func, *task.args,
                 dependencies=task.dependencies, task_type=task.task_type,
                 on_complete_callback=task.on_complete_callback,
-                cancel_event=task.cancel_event, **task.kwargs
+                cancel_event=None, **task.kwargs
             )
 
     def downgrade_task_priorities(self, task_ids: Set[str], priority: Priority):
