@@ -96,7 +96,7 @@ class ThumbnailLabel(ItemCard):
                 timestamp=time.time(),
                 image_path=folder_image,
                 normalized_position=QPointF(0.5, 0.5),
-                cache_only=True,
+                cache_only=False,
             ))
             return
         pos = self._pending_norm_pos

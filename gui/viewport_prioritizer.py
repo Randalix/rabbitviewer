@@ -17,6 +17,10 @@ class ViewportPrioritizer:
     _PREVIEW_TICK_BATCH = 20
     _STALE_THRESHOLD_S = 5.0
     _FULLRES_DEBOUNCE_S = 0.4
+    # Number of folder images added to the pre-warm queue per heatmap send window.
+    # Progressive: one batch is submitted every _FULLRES_DEBOUNCE_S seconds until
+    # the folder is fully warmed or leaves the fullres range.
+    _FOLDER_FULLRES_BATCH = 5
 
     def __init__(self, model: ThumbnailModel, send_heatmap: Callable):
         self.model = model
@@ -26,6 +30,9 @@ class ViewportPrioritizer:
         self._last_fullres_pairs: Dict[str, int] = {}
         self._stale_request_ts: Dict[str, float] = {}
         self._last_fullres_send_time: float = 0.0
+        # Per-folder warmup cursor: folder_path → next image index to submit.
+        # Reset to zero when the folder card leaves the fullres heatmap range.
+        self._folder_warmup_cursors: Dict[str, int] = {}
 
         self._pending_previews: List[Tuple[str, str]] = []
 
@@ -119,11 +126,38 @@ class ViewportPrioritizer:
                 if path not in current_thumb and path not in folder_paths:
                     current_thumb[path] = int(Priority.GUI_REQUEST_LOW)
 
+        # Compute debounce state once so the folder cursor and the send gate
+        # both use the same timestamp.
+        now = time.monotonic()
+        fullres_debounced = now - self._last_fullres_send_time < self._FULLRES_DEBOUNCE_S
+
+        active_folder_cards: Set[str] = set()
         current_fullres: Dict[str, int] = {}
         for vis_idx, priority in fullres_pairs:
             orig_idx = vis_to_orig(vis_idx)
             if orig_idx is not None:
-                current_fullres[all_files[orig_idx]] = priority
+                path = all_files[orig_idx]
+                node = folder_paths.get(path)
+                if node is not None and node.image_paths:
+                    active_folder_cards.add(path)
+                    cursor = self._folder_warmup_cursors.get(path, 0)
+                    # Advance cursor only when the send window is open so we
+                    # submit exactly one batch per _FULLRES_DEBOUNCE_S interval.
+                    if not fullres_debounced and cursor < len(node.image_paths):
+                        cursor = min(cursor + self._FOLDER_FULLRES_BATCH, len(node.image_paths))
+                        self._folder_warmup_cursors[path] = cursor
+                    for i, img_path in enumerate(node.image_paths[:cursor]):
+                        current_fullres[img_path] = self._folder_image_priority(
+                            i, len(node.image_paths), priority
+                        )
+                else:
+                    current_fullres[path] = priority
+
+        # Reset warmup cursors for folder cards that left the fullres range.
+        # Their images will naturally appear in fullres_to_cancel via the delta.
+        for path in list(self._folder_warmup_cursors):
+            if path not in active_folder_cards:
+                del self._folder_warmup_cursors[path]
 
         # --- Early out: skip IPC when every (path, priority) pair is identical ---
         if current_thumb == self._last_thumb_pairs and current_fullres == self._last_fullres_pairs:
@@ -159,9 +193,8 @@ class ViewportPrioritizer:
         fullres_to_cancel = [p for p in prev_fullres if p not in current_fullres]
 
         # --- Debounce fullres to avoid schedule/cancel churn during rapid hover ---
-        now = time.monotonic()
         send_fullres = True
-        if (delta_fullres or fullres_to_cancel) and now - self._last_fullres_send_time < self._FULLRES_DEBOUNCE_S:
+        if (delta_fullres or fullres_to_cancel) and fullres_debounced:
             delta_fullres = []
             fullres_to_cancel = []
             send_fullres = False
@@ -203,6 +236,21 @@ class ViewportPrioritizer:
     def invalidate_thumb_pairs(self, path: str) -> None:
         self._last_thumb_pairs.pop(path, None)
 
+    # -- Folder pre-warm -----------------------------------------------------
+
+    def _folder_image_priority(self, image_idx: int, total_images: int, base_priority: int) -> int:
+        """Return the render priority for the *image_idx*-th image in a folder.
+
+        *image_idx*: 0-based position in the folder's sorted image list.
+        *total_images*: total number of images in the folder.
+        *base_priority*: heatmap priority of the folder card itself.
+
+        Currently flat — every image gets *base_priority*.
+        Replace with a position-aware strategy (e.g. evenly-spread importance
+        sampling across the full range) when that feature is introduced.
+        """
+        return base_priority
+
     # -- Lifecycle -----------------------------------------------------------
 
     def clear(self) -> List[str]:
@@ -212,5 +260,6 @@ class ViewportPrioritizer:
         self._last_fullres_pairs = {}
         self._stale_request_ts = {}
         self._last_fullres_send_time = 0.0
+        self._folder_warmup_cursors.clear()
         self._pending_previews.clear()
         return cancel_paths
