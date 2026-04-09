@@ -383,6 +383,34 @@ class FolderTreePanel(QWidget):
                     self._activate(item)
                 return True
 
+            elif key == Qt.Key_G and mods == Qt.ControlModifier:
+                # Ctrl+G: jump to last sibling (last folder at current level).
+                item = self._tree.currentItem()
+                if item:
+                    parent = item.parent()
+                    if parent:
+                        last = parent.child(parent.childCount() - 1)
+                    else:
+                        last = self._tree.topLevelItem(self._tree.topLevelItemCount() - 1)
+                    if last:
+                        self._tree.setCurrentItem(last)
+                        self._tree.scrollToItem(last)
+                return True
+
+            elif key == Qt.Key_G and mods == (Qt.ControlModifier | Qt.ShiftModifier):
+                # Ctrl+Shift+G: jump to first sibling (top of current level).
+                item = self._tree.currentItem()
+                if item:
+                    parent = item.parent()
+                    if parent:
+                        first = parent.child(0)
+                    else:
+                        first = self._tree.topLevelItem(0)
+                    if first:
+                        self._tree.setCurrentItem(first)
+                        self._tree.scrollToItem(first)
+                return True
+
             else:
                 # Any printable character opens the search bar.
                 # Content shortcuts are already disabled by HotkeyManager while
