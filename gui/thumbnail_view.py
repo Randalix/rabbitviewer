@@ -136,6 +136,12 @@ class ThumbnailViewWidget(QFrame):
         self._folder_node_updated_signal.connect(self._on_folder_node_updated)
 
         self._hovered_label: Optional[ThumbnailLabel] = None
+        self._hovered_video_label: Optional[ThumbnailLabel] = None
+        self._video_hover_timer = QTimer(self)
+        self._video_hover_timer.setSingleShot(True)
+        self._video_hover_timer.setInterval(500)  # 500ms delay
+        self._video_hover_timer.timeout.connect(self._start_video_playback)
+
         self._thumbnail_generated_signal.connect(self._on_thumbnail_ready, Qt.QueuedConnection)
 
         self._is_loading = False
@@ -158,6 +164,18 @@ class ThumbnailViewWidget(QFrame):
             self.service.update_viewport_heatmap,
             upgrades, downgrades, fullres, cancels,
         )
+
+    def _start_video_playback(self):
+        label = self._hovered_label
+        if not label or not label.is_video:
+            return
+
+        if self._hovered_video_label and self._hovered_video_label != label:
+            self._hovered_video_label.stop_video_playback()
+
+        self._hovered_video_label = label
+        if isValid(self._hovered_video_label):
+            self._hovered_video_label.start_video_playback()
 
     def _update_label_selection(self, orig_idx: int, selected: bool) -> None:
         """Callback for SelectionInteraction to update label highlight state."""
@@ -226,8 +244,16 @@ class ThumbnailViewWidget(QFrame):
                     timeout=0))
             self._priority_update_timer.start()
 
+            if label.is_video:
+                self._video_hover_timer.start()
+
     def _clear_hovered_label(self, label: ThumbnailLabel):
         if self._hovered_label == label:
+            self._video_hover_timer.stop()
+            if self._hovered_video_label:
+                self._hovered_video_label.stop_video_playback()
+                self._hovered_video_label = None
+
             self._hovered_label = None
             self.thumbnailLeft.emit()
             event_system.publish(EventData(
@@ -272,6 +298,7 @@ class ThumbnailViewWidget(QFrame):
         self._clear_hovered_label(label)
         if len(self._widget_pool) < self._pool_size:
             label.hide()
+            label.cleanup()
             label.setPixmap(QPixmap())
             label.loaded = False
             label.setSelected(False)
