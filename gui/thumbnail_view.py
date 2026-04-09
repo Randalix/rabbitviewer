@@ -648,8 +648,14 @@ class ThumbnailViewWidget(QFrame):
         if not self.service:
             return
         # Phase 1: fetch only visible labels immediately so stars appear without delay.
-        visible_paths = [label.file_path for label in self.labels.values()]
-        all_paths = list(self.model.all_files)
+        # Exclude folder cards — their ratings live in FolderNode.rating and are
+        # painted directly from there; they are not in image_metadata.
+        folder_paths = self.model.folder_nodes.keys()
+        visible_paths = [
+            label.file_path for label in self.labels.values()
+            if label.file_path not in folder_paths
+        ]
+        all_paths = [p for p in self.model.all_files if p not in folder_paths]
 
         def _fetch():
             try:
@@ -679,6 +685,18 @@ class ThumbnailViewWidget(QFrame):
             rating = self._rating_cache.get(label.file_path)
             if rating is not None:
                 label._display_rating = rating
+                label.update()
+
+    def update_folder_rating(self, folder_path: str, rating: int) -> None:
+        """Update the in-memory FolderNode rating and repaint the card."""
+        node = self.model.folder_nodes.get(folder_path)
+        if node is None:
+            return
+        node.rating = rating
+        idx = self.model.path_to_idx.get(folder_path)
+        if idx is not None:
+            label = self.labels.get(idx)
+            if label:
                 label.update()
 
     def path_belongs_to_current_directory(self, path: str) -> bool:

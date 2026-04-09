@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 def run_script(api: ScriptAPI, selected_images: list[str] = None):
     """
-    Sets the rating of the selected images to 0 stars.
+    Sets the rating of the selected images/folders to 0 stars.
 
     Args:
         api: The ScriptAPI instance providing access to viewer functions.
@@ -15,11 +15,19 @@ def run_script(api: ScriptAPI, selected_images: list[str] = None):
     if selected_images is None:
         selected_images = list(api.get_selected_images())
 
-    if not selected_images:
-        logger.info("No images selected to set rating to 0 stars.")
+    folders = list(api.get_selected_folders())
+
+    if not selected_images and not folders:
+        logger.info("No images or folders selected to set rating to 0 stars.")
         return
 
-    logger.info(f"Setting rating to 0 stars for {len(selected_images)} images.")
-    api.set_rating_for_images(selected_images, 0)
-    api.show_overlay(selected_images, "stars", {"count": 0}, duration=2000, overlay_id="rating")
+    if selected_images:
+        logger.info(f"Setting rating to 0 stars for {len(selected_images)} images.")
+        api.set_rating_for_images(selected_images, 0)
+        api.show_overlay(selected_images, "stars", {"count": 0}, duration=2000, overlay_id="rating")
+
+    if folders:
+        logger.info(f"Setting rating to 0 stars for {len(folders)} folders.")
+        api.set_rating_for_folders(folders, 0)
+
     logger.info("Rating set to 0 stars.")

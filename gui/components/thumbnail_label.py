@@ -216,6 +216,13 @@ class ThumbnailLabel(ItemCard):
                 painter.setPen(self._FOLDER_BADGE_FG)
                 painter.drawText(badge_rect, Qt.AlignCenter, badge_text)
 
+        # Star rating (bottom strip, same as image rating display)
+        node_rating = node.rating if node else 0
+        if node_rating > 0:
+            strip_h = max(rect.height() // 3, 24)
+            rating_rect = QRect(rect.x(), rect.y() + rect.height() - strip_h, rect.width(), strip_h)
+            render_stars(painter, rating_rect, {"count": node_rating})
+
         painter.end()
 
     def _cache_folder_previews(self):

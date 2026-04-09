@@ -724,6 +724,45 @@ class ImageTable(BaseTable):
             return []
 
     # ------------------------------------------------------------------
+    #  Folder Rating
+    # ------------------------------------------------------------------
+
+    def get_folder_ratings_batch(self, folder_paths: List[str]) -> Dict[str, int]:
+        """Return {folder_path: rating} for a batch of folder paths. Missing → 0."""
+        if not folder_paths:
+            return {}
+        try:
+            conn = self._read_conn()
+            cursor = conn.cursor()
+            placeholders = ','.join('?' * len(folder_paths))
+            cursor.execute(
+                f'SELECT folder_path, rating FROM folder_ratings WHERE folder_path IN ({placeholders})',
+                folder_paths,
+            )
+            result = {row[0]: row[1] for row in cursor.fetchall()}
+            for p in folder_paths:
+                result.setdefault(p, 0)
+            return result
+        except sqlite3.Error as e:
+            logger.error("Error in get_folder_ratings_batch: %s", e)
+            return {p: 0 for p in folder_paths}
+
+    def set_folder_rating(self, folder_path: str, rating: int) -> bool:
+        """Store a star rating (0-5) for a folder."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    'INSERT OR REPLACE INTO folder_ratings (folder_path, rating, updated_at) VALUES (?, ?, ?)',
+                    (folder_path, max(0, min(5, rating)), time.time()),
+                )
+                self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error("Error setting folder rating for %s: %s", folder_path, e)
+            return False
+
+    # ------------------------------------------------------------------
     #  Orientation
     # ------------------------------------------------------------------
 

@@ -196,6 +196,9 @@ class ThumbnailService:
         except OSError as e:
             logger.warning("get_subdirectories: scandir failed for %s: %s", parent_path, e)
 
+        all_paths = [r['path'] for r in rows]
+        ratings = self.db.images.get_folder_ratings_batch(all_paths) if all_paths else {}
+
         nodes = []
         for r in sorted(rows, key=lambda r: r['name']):
             image_paths = sorted(self.db.images.get_directory_files(r['path'], recursive=True))
@@ -207,6 +210,7 @@ class ThumbnailService:
                 recursive_count=r['recursive_count'],
                 preview_paths=r['preview_paths'],
                 image_paths=image_paths,
+                rating=ratings.get(r['path'], 0),
             ))
             # Trigger a background scan for any folder that has no indexed images.
             # This covers directories surfaced by the filesystem fallback that the
@@ -401,6 +405,9 @@ class ThumbnailService:
                     task_type=TaskType.SIMPLE,
                 )
         return success
+
+    def set_folder_rating(self, folder_path: str, rating: int) -> bool:
+        return self.db.images.set_folder_rating(folder_path, rating)
 
     # ------------------------------------------------------------------
     #  Rotation

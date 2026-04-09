@@ -201,6 +201,16 @@ def init_schema(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             pass  # pending_deletions never existed (fresh install)
 
+        # ── folder_ratings ────────────────────────────────────────────
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS folder_ratings (
+                folder_path TEXT PRIMARY KEY,
+                rating      INTEGER NOT NULL DEFAULT 0,
+                updated_at  REAL NOT NULL
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_folder_rating ON folder_ratings(rating)')
+
         # ── ai_scanned ────────────────────────────────────────────────
         # Tracks files that have been processed by an AI model regardless of
         # whether a positive result was found. Prevents re-scanning files that

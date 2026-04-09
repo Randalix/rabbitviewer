@@ -312,6 +312,23 @@ class ScriptAPI:
                 timestamp=time.time(), message="Failed to set rating for images.", timeout=5000
             ))
 
+    def set_rating_for_folders(self, folder_paths: List[str], rating: int) -> None:
+        """Set a star rating (0-5) on folder cards."""
+        if not (0 <= rating <= 5):
+            logger.error("Invalid rating value: %d. Must be between 0 and 5.", rating)
+            return
+        if not folder_paths:
+            return
+        service = self.main_window.service
+        for path in folder_paths:
+            service.set_folder_rating(path, rating)
+        def _gui_update():
+            tv = self.main_window.thumbnail_view
+            if tv:
+                for path in folder_paths:
+                    tv.update_folder_rating(path, rating)
+        self._on_main_thread(_gui_update)
+
     def invalidate_thumbnails(self, image_paths: List[str], clear_gui: bool = True) -> None:
         """Evict cached thumbnail state for the given paths.
 
