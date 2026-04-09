@@ -549,7 +549,7 @@ def main():
     parser.add_argument(
         '--recursive',
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help='Scan the directory recursively. Use --no-recursive to disable.',
     )
     parser.add_argument(
