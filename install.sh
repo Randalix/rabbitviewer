@@ -272,7 +272,27 @@ else
 fi
 echo
 
-# 4c. AI features (CLIP vector search + auto-rotate + face recognition).
+# 4c. HDR image support (OpenEXR + Radiance HDR).
+echo
+bold "HDR Image Support (optional)"
+yellow "  Enables OpenEXR (.exr) and Radiance HDR (.hdr, .pic) support."
+yellow "  Installs openexr + numpy. Both formats use Reinhard tone-mapping for display."
+echo
+printf '  Install HDR support? [y/N] '
+read -r INSTALL_EXR </dev/tty
+echo
+
+if [[ "${INSTALL_EXR:-}" =~ ^[Yy]$ ]]; then
+    yellow "Installing HDR dependencies …"
+    "$VENV_PIP" install ".[exr]"
+    green "  HDR dependencies installed."
+else
+    yellow "  Skipping HDR support. You can install it later with:"
+    yellow "    $VENV_PIP install '.[exr]'"
+fi
+echo
+
+# 4d. AI features (CLIP vector search + auto-rotate + face recognition).
 echo
 bold "AI Features (optional)"
 yellow "  RabbitViewer can use local AI models for:"

@@ -222,7 +222,26 @@ if not defined MISSING_OPTIONAL (
 )
 echo.
 
-REM 4c. AI features (CLIP vector search + auto-rotate + face recognition).
+REM 4c. HDR image support (OpenEXR + Radiance HDR).
+echo.
+echo HDR Image Support (optional)
+echo   Enables OpenEXR (.exr) and Radiance HDR (.hdr, .pic) support.
+echo   Installs openexr + numpy. Both formats use Reinhard tone-mapping for display.
+echo.
+set /p "INSTALL_EXR=  Install HDR support? [y/N] "
+echo.
+
+if /i "%INSTALL_EXR%"=="y" (
+    echo Installing HDR dependencies ...
+    "%VENV_PIP%" install ".[exr]"
+    echo   HDR dependencies installed.
+) else (
+    echo   Skipping HDR support. You can install it later with:
+    echo     %VENV_PIP% install ".[exr]"
+)
+echo.
+
+REM 4d. AI features (CLIP vector search + auto-rotate + face recognition).
 echo.
 echo AI Features (optional)
 echo   RabbitViewer can use local AI models for:
