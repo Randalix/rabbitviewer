@@ -22,6 +22,7 @@ from .date_filter_dialog import DateFilterDialog
 from .modal_menu import ModalMenu
 from .hotkey_help_overlay import HotkeyHelpOverlay, show_at_startup
 from .menu_registry import build_menus
+from .thumbnail_context_menu import build_thumbnail_context_menu
 from scripts.script_manager import ScriptManager, ScriptAPI
 from core.event_system import (event_system, EventType, EventData, InspectorEventData,
     StatusMessageEventData, StatusSection, DirectoryEventData)
@@ -160,6 +161,7 @@ class MainWindow(QMainWindow):
         self._setup_hotkeys()
         self.hotkey_manager.register_focus_sink(self._tree_panel)
         self.modal_menu = ModalMenu(self, build_menus(), self.script_manager)
+        self.thumbnail_view.contextMenuRequested.connect(self._on_thumbnail_context_menu)
         self._setup_event_subscriptions()
 
         if show_at_startup():
@@ -1067,6 +1069,18 @@ class MainWindow(QMainWindow):
     def _toggle_group_mode(self):
         if self.thumbnail_view:
             self.thumbnail_view.toggle_group_mode()
+
+    def _on_thumbnail_context_menu(self, pos):
+        selected = self.selection_state.selected_paths
+        hovered = getattr(self, "current_hovered_image", None)
+        menu = build_thumbnail_context_menu(
+            self.hotkey_manager,
+            self.modal_menu._menus,
+            self.script_manager,
+            selected,
+            hovered,
+        )
+        menu.exec(pos)
 
     def _refresh_tree_roots(self):
         watch_paths = self.config_manager.get("watch_paths", [])

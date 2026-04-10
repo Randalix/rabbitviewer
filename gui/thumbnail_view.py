@@ -50,6 +50,7 @@ class ThumbnailViewWidget(QFrame):
     _initial_folders_signal = Signal(list)   # list of FolderNode
     _folder_node_updated_signal = Signal(str, list)  # path, image_paths — from background scan
     folderNavigated = Signal(str)            # emitted when user navigates into a folder
+    contextMenuRequested = Signal(object)    # emits QPoint (global pos) on right-click
 
     def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
@@ -421,6 +422,9 @@ class ThumbnailViewWidget(QFrame):
             self.selection.on_mouse_press(start_index, event.modifiers())
 
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        self.contextMenuRequested.emit(event.globalPos())
 
     def _recompute_selected_indices(self):
         self.selection.recompute_selected_indices()
