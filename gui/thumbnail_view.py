@@ -210,22 +210,6 @@ class ThumbnailViewWidget(QFrame):
         if not label or not label.is_video or not isValid(label):
             return
 
-        if self._ffmpeg_available is None:
-            try:
-                subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                self._ffmpeg_available = True
-            except FileNotFoundError:
-                self._ffmpeg_available = False
-        if not self._ffmpeg_available:
-            event_system.publish(StatusMessageEventData(
-                event_type=EventType.STATUS_MESSAGE, source="thumbnail_view",
-                timestamp=time.time(),
-                message="FFmpeg not found - video thumbnails disabled",
-                timeout=5000
-            ))
-            return
-
-        # Clean up any existing video playback
         if self._hovered_video_label and self._hovered_video_label != label:
             self._hovered_video_label.detach_video_player()
 
@@ -259,14 +243,14 @@ class ThumbnailViewWidget(QFrame):
         """Handle video scrubbing position changes."""
         if self._hovered_video_label:
             logger.debug("[scrub] Position changed to %.3f (from %.3f)", position, self._last_scrub_position)
-            
+
             # Only update position if it's changed
             if self._last_scrub_position != position:
                 self._last_scrub_position = position
-                
+
                 # Generate new thumbnail at current position
                 thumb = self._generate_video_thumbnail(
-                    self._hovered_video_label.file_path, 
+                    self._hovered_video_label.file_path,
                     position
                 )
                 if thumb:
@@ -362,6 +346,12 @@ class ThumbnailViewWidget(QFrame):
 
     def _clear_hovered_label(self, label: ThumbnailLabel):
         if self._hovered_label == label:
+            self._video_hover_timer.stop()
+            if self._hovered_video_label:
+                self._hovered_video_label.detach_video_player()
+                self._video_scrub_player.hide()
+                self._hovered_video_label = None
+
             self._hovered_label = None
             self.thumbnailLeft.emit()
             event_system.publish(EventData(
