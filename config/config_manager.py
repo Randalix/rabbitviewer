@@ -189,10 +189,15 @@ DEFAULT_CONFIG = {
         "toggle_tree_panel": {
             "sequence": "Tab",
             "description": "Toggle folder tree panel"
-        }
+        },
+        "menu:add": {
+            "sequence": "C",
+            "description": "Open Add menu (OCIO color space, …)"
+        },
     },
     "color_management": {
-        "icc_profile_path": "",  # path to monitor ICC profile; empty = disabled
+        "icc_profile_path": "",   # path to monitor ICC profile; empty = disabled
+        "ocio_config_path": "",   # default OCIO config; pre-fills the OCIO dialog
     },
     "ai": {
         "enabled": True,

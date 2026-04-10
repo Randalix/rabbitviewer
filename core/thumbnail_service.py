@@ -41,6 +41,9 @@ class ThumbnailService:
         self._clip_cache_gen = -1     # db.embedding_generation when cache was built
         self._clip_cache_lock = threading.Lock()
 
+        from core.ocio_manager import ocio_manager
+        ocio_manager.init(self.db)
+
     def prepare_for_shutdown(self):
         self.rm.prepare_for_shutdown()
 
@@ -408,6 +411,87 @@ class ThumbnailService:
 
     def set_folder_rating(self, folder_path: str, rating: int) -> bool:
         return self.db.images.set_folder_rating(folder_path, rating)
+
+    # ------------------------------------------------------------------
+    #  OCIO color management
+    # ------------------------------------------------------------------
+
+    def set_ocio_assignment(
+        self,
+        path: str,
+        is_folder: bool,
+        config_path: str,
+        input_space: str,
+        display: str = "",
+        view: str = "",
+    ) -> None:
+        """Persist an OCIO assignment and invalidate affected thumbnail caches."""
+        self.db.ocio.set(path, is_folder, config_path, input_space, display, view)
+        from core.ocio_manager import ocio_manager
+        ocio_manager.invalidate_config_cache(config_path)
+        if is_folder:
+            self._invalidate_ocio_cache_for_folder(path)
+
+    def delete_ocio_assignment(self, path: str) -> None:
+        """Remove an OCIO assignment and invalidate affected caches."""
+        assignment = self.db.ocio.get_for_file(path)
+        config_path = assignment.config_path if assignment else None
+        self.db.ocio.delete(path)
+        if config_path:
+            from core.ocio_manager import ocio_manager
+            ocio_manager.invalidate_config_cache(config_path)
+        # Invalidate cache for the path itself (file) or its subtree (folder)
+        self._invalidate_ocio_cache_for_folder(path)
+
+    def _invalidate_ocio_cache_for_folder(self, folder_path: str) -> None:
+        """Delete cached thumbnail/view-image files for all files under *folder_path*.
+
+        Clears the DB columns too so ThumbnailManager queues regeneration.
+        Uses the existing remove_records/cache eviction helpers rather than
+        duplicating file-delete logic.
+        """
+        try:
+            conn = self.db.images._read_conn()
+            rows = conn.execute(
+                "SELECT file_path, thumbnail_path, view_image_path "
+                "FROM image_metadata "
+                "WHERE file_path = ? OR file_path LIKE ?",
+                (folder_path, folder_path.rstrip("/") + "/%"),
+            ).fetchall()
+        except Exception as e:
+            logger.warning("OCIO cache invalidation query failed: %s", e)
+            return
+
+        if not rows:
+            return
+
+        file_paths = [r[0] for r in rows]
+        # Delete cache files from disk
+        for _fp, thumb, view in rows:
+            for cache_path in (thumb, view):
+                if cache_path:
+                    try:
+                        os.remove(cache_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as e:
+                        logger.warning("Failed to remove cache file %s: %s", cache_path, e)
+
+        # Clear cache columns in DB so regeneration is triggered
+        try:
+            with self.db.images._lock:
+                self.db.images.conn.executemany(
+                    "UPDATE image_metadata SET thumbnail_path = NULL, view_image_path = NULL "
+                    "WHERE file_path = ?",
+                    [(fp,) for fp in file_paths],
+                )
+                self.db.images._soft_commit()
+        except Exception as e:
+            logger.warning("OCIO DB cache clear failed: %s", e)
+
+        logger.info(
+            "OCIO: invalidated %d cached thumbnails under %s", len(file_paths), folder_path
+        )
 
     # ------------------------------------------------------------------
     #  Rotation

@@ -11,6 +11,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QTransform
 from gui.color_profile import apply_profile_pixmap
+from gui.ocio_display import apply_ocio_to_qimage
 from PySide6.QtWidgets import (
     QVBoxLayout, QScrollArea, QWidget, QFrame
 )
@@ -142,6 +143,7 @@ class ThumbnailViewWidget(QFrame):
         self._notifications.preview_tick_timer.timeout.connect(self._tick_preview_loading)
 
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
+        event_system.subscribe(EventType.OPEN_OCIO_DIALOG, self._on_open_ocio_dialog)
 
         self.overlay_manager = OverlayManager(request_update=self._request_label_update)
         self.overlay_manager.register_renderer("stars", render_stars)
@@ -673,6 +675,22 @@ class ThumbnailViewWidget(QFrame):
                     if label:
                         label.update()
 
+    def _on_open_ocio_dialog(self, event_data) -> None:
+        """Open the OCIO assignment dialog for the current selection."""
+        if self.service is None:
+            return
+        paths = list(self.selection.current_selection)
+        if not paths:
+            # Fall back to the currently-viewed directory
+            paths = self.model.current_files[:] if self.model.current_files else []
+        if not paths:
+            return
+        from config.config_manager import ConfigManager
+        from gui.ocio_dialog import OcioDialog
+        default_config = ConfigManager().get("color_management.ocio_config_path", "")
+        dlg = OcioDialog(paths, self.service, config_path=default_config, parent=self)
+        dlg.exec()
+
     def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
         self._notifications.set_daemon_signals(daemon_signals)
 
@@ -982,6 +1000,7 @@ class ThumbnailViewWidget(QFrame):
         self.selection.dispose()
         event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed_indicators)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
+        event_system.unsubscribe(EventType.OPEN_OCIO_DIALOG, self._on_open_ocio_dialog)
         self.filter_controller.dispose()
         self._notifications.dispose()
 
@@ -1054,6 +1073,7 @@ class ThumbnailViewWidget(QFrame):
             _err_img.fill(QColor(255, 0, 0))
             pixmap = QPixmap.fromImage(_err_img)
         else:
+            image = apply_ocio_to_qimage(image, original_path)
             pixmap = apply_profile_pixmap(image)
 
         if is_error:

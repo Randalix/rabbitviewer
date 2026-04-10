@@ -170,9 +170,20 @@ def build_menus() -> dict:
         "Recent", refresh=lambda node: _build_recent_children(node),
     )
 
+    # Add menu — actions that assign metadata/color to selected items.
+    add_menu = MenuNode("Add", children=[
+        MenuNode(
+            "OCIO color space",
+            key="o",
+            action=_publish(EventType.OPEN_OCIO_DIALOG),
+            visible=_thumbnail_only,
+        ),
+    ])
+
     return {
         "sort": sort_menu, "tags": tag_menu, "export": export_menu,
         "rotate": rotate_menu, "open_with": open_with_menu,
         "viewport": viewport_menu, "bookmark": bookmark_menu,
         "recent": recent_menu, "filter": filter_menu, "goto": goto_menu,
+        "add": add_menu,
     }

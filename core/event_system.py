@@ -89,6 +89,9 @@ class EventType(Enum):
     RUN_SCRIPT = "run_script"
     OPEN_MODAL_MENU = "open_modal_menu"
 
+    # OCIO color management
+    OPEN_OCIO_DIALOG = "open_ocio_dialog"
+
     # Directory events
     NAVIGATE_TO_FOLDER = "navigate_to_folder"
     OPEN_RECENT_DIRECTORY = "open_recent_directory"

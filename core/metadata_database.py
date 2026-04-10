@@ -19,6 +19,7 @@ from core.db.face_table import FaceTable
 from core.db.embedding_table import EmbeddingTable
 from core.db.ledger_table import LedgerTable
 from core.db.cache_table import CacheTable
+from core.db.ocio_table import OcioTable
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class MetadataDatabase:
         self.embeddings = EmbeddingTable(db_path)
         self.ledgers = LedgerTable(db_path)
         self.cache = CacheTable(db_path)
+        self.ocio = OcioTable(db_path)
 
     @property
     def embedding_generation(self) -> int:
@@ -182,6 +184,7 @@ class MetadataDatabase:
         self.embeddings.close()
         self.ledgers.close()
         self.cache.close()
+        self.ocio.close()
         logger.info(f"Metadata database connections closed: {self.db_path}")
 
 

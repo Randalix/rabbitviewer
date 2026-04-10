@@ -211,6 +211,24 @@ def init_schema(conn: sqlite3.Connection) -> None:
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_folder_rating ON folder_ratings(rating)')
 
+        # ── ocio_assignments ──────────────────────────────────────────
+        # Per-file or per-folder OCIO color space assignments.  Folder entries
+        # inherit to all files under that path (and sub-folders).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ocio_assignments (
+                path         TEXT PRIMARY KEY,
+                is_folder    INTEGER NOT NULL DEFAULT 0,
+                config_path  TEXT NOT NULL,
+                input_space  TEXT NOT NULL,
+                display      TEXT NOT NULL DEFAULT '',
+                view         TEXT NOT NULL DEFAULT '',
+                updated_at   REAL NOT NULL
+            )
+        ''')
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_ocio_is_folder ON ocio_assignments(is_folder)'
+        )
+
         # ── ai_scanned ────────────────────────────────────────────────
         # Tracks files that have been processed by an AI model regardless of
         # whether a positive result was found. Prevents re-scanning files that

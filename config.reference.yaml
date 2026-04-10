@@ -40,6 +40,7 @@ inspector:
 
 color_management:
   icc_profile_path: ""  # path to monitor ICC profile; empty = disabled
+  ocio_config_path: ""  # default OCIO config path; pre-fills the OCIO dialog; empty = disabled
 
 gui:
   background_color: '#000000'
