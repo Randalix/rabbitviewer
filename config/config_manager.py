@@ -41,8 +41,9 @@ DEFAULT_CONFIG = {
             "extra_sequences": ["Right"]
         },
         "previous_image": {
-            "sequence": "Left",
+            "sequence": "A",
             "description": "Navigate to previous image",
+            "extra_sequences": ["Left"]
         },
         "toggle_inspector": {
             "sequence": "I",
@@ -190,7 +191,7 @@ DEFAULT_CONFIG = {
             "description": "Toggle folder tree panel"
         },
         "menu:add": {
-            "sequence": "A",
+            "sequence": "Shift+A",
             "description": "Open Add menu (OCIO color space, …)"
         },
     },

@@ -173,6 +173,11 @@ def build_menus() -> dict:
     # Add menu — actions that assign metadata/color to selected items.
     add_menu = MenuNode("Add", children=[
         MenuNode(
+            "Tag",
+            key="t",
+            action=_publish(EventType.OPEN_TAG_EDITOR),
+        ),
+        MenuNode(
             "OCIO color space",
             key="o",
             action=_publish(EventType.OPEN_OCIO_DIALOG),

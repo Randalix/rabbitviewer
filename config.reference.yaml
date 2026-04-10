@@ -67,8 +67,10 @@ hotkeys:
     extra_sequences:
       - Right
   previous_image:
-    sequence: Left
+    sequence: A
     description: Navigate to previous image
+    extra_sequences:
+      - Left
   toggle_inspector:
     sequence: I
     description: Toggle inspector window
@@ -121,7 +123,7 @@ hotkeys:
     sequence: G
     description: Go to navigation menu
   "menu:add":
-    sequence: A
+    sequence: Shift+A
     description: Open Add menu (OCIO color space, …)
   "menu:export":
     sequence: X
