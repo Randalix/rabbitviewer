@@ -99,6 +99,7 @@ class ThumbnailViewWidget(QFrame):
         self._video_hover_timer.timeout.connect(self._start_video_playback)
         self._hovered_video_label: Optional[ThumbnailLabel] = None
 
+
         self.viewport().installEventFilter(self)
         self.installEventFilter(self)
         self._setupResizeTimer()
