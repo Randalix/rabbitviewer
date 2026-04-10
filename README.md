@@ -140,9 +140,9 @@ Generate AI-edited variants of selected images using a local ComfyUI server (`G`
 
 ### Color Management
 
-Point RabbitViewer at your monitor's ICC profile and all images — thumbnails, full-resolution views, comparisons, inspector — are converted from sRGB to your calibrated color space at display time.
+#### ICC Monitor Profile
 
-Set it in `~/.config/rabbitviewer/config.yaml`:
+Point RabbitViewer at your monitor's ICC profile and all images — thumbnails, full-resolution views, comparisons, inspector — are converted from sRGB to your calibrated color space at display time.
 
 ```yaml
 color_management:
@@ -150,6 +150,23 @@ color_management:
 ```
 
 No cache rebuild required. Leave the path empty to disable.
+
+#### OCIO Color Space Assignments (optional)
+
+Requires `pip install ".[ocio]"` (OpenColorIO + numpy).
+
+Assign an [OpenColorIO](https://opencolorio.org/) config and input color space to any selection of files or folders. Folder assignments inherit to all subfolders; a file-level assignment overrides its folder's setting.
+
+Open the **Add** menu with `C` → **OCIO color space**. Pick a `.ocio` config file and select the input color space from the dropdown (populated from the config). Optionally override the display and view transforms.
+
+Set a global default config path to pre-fill the dialog:
+
+```yaml
+color_management:
+  ocio_config_path: /path/to/aces_1.3/config.ocio
+```
+
+OCIO transforms are applied at display time — no thumbnails are rebuilt when you change an assignment.
 
 ### Full Image Viewer
 
@@ -317,6 +334,7 @@ Optional extras:
 venv/bin/pip install ".[exr]"     # OpenEXR support
 venv/bin/pip install ".[cr3]"     # Canon CR3 support
 venv/bin/pip install ".[video]"   # video thumbnails
+venv/bin/pip install ".[ocio]"    # OCIO color space assignments
 ```
 
 ---

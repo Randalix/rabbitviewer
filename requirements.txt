@@ -6,3 +6,6 @@ pytest==7.2.1
 pytest-qt==4.0.2
 send2trash
 python-mpv
+# Optional — OCIO color management (install with: pip install ".[ocio]")
+# opencolorio
+# numpy

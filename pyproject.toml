@@ -20,6 +20,7 @@ dependencies = [
 cr3 = []
 dev = ["pytest==7.2.1", "pytest-qt==4.0.2"]
 exr = ["openexr", "numpy"]
+ocio = ["opencolorio", "numpy"]
 
 [project.scripts]
 rabbit = "cli.rabbit:main"

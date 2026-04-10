@@ -292,7 +292,29 @@ else
 fi
 echo
 
-# 4d. AI features (CLIP vector search + auto-rotate + face recognition).
+# 4d. OCIO color management.
+echo
+bold "OCIO Color Management (optional)"
+yellow "  Enables per-file and per-folder OpenColorIO color space assignments."
+yellow "  Use the 'Add' menu (C) in the thumbnail view to assign a .ocio config"
+yellow "  and input color space to any selection of files or folders."
+yellow "  Installs opencolorio + numpy (~30 MB)."
+echo
+printf '  Install OCIO support? [y/N] '
+read -r INSTALL_OCIO </dev/tty
+echo
+
+if [[ "${INSTALL_OCIO:-}" =~ ^[Yy]$ ]]; then
+    yellow "Installing OCIO dependencies …"
+    "$VENV_PIP" install ".[ocio]"
+    green "  OCIO dependencies installed."
+else
+    yellow "  Skipping OCIO support. You can install it later with:"
+    yellow "    $VENV_PIP install '.[ocio]'"
+fi
+echo
+
+# 4f. AI features (CLIP vector search + auto-rotate + face recognition).
 echo
 bold "AI Features (optional)"
 yellow "  RabbitViewer can use local AI models for:"
