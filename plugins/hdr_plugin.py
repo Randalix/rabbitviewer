@@ -26,10 +26,13 @@ class HDRPlugin(BasePlugin):
     def get_supported_formats(self) -> List[str]:
         return ['.hdr', '.pic']
 
-    def _read_hdr_as_pil(self, path: str) -> Optional[Image.Image]:
+    def _read_hdr_as_pil(self, path: str, file_path: Optional[str] = None) -> Optional[Image.Image]:
         """
-        Decodes a Radiance RGBE (.hdr/.pic) file into a PIL Image using a
-        pure numpy RGBE decoder, then applies Reinhard tone-mapping.
+        Decodes a Radiance RGBE (.hdr/.pic) file into a PIL Image.
+
+        If an OCIO assignment exists for *file_path* (defaults to *path*),
+        applies the DisplayViewTransform to the raw float data.  Otherwise
+        falls back to Reinhard tone-mapping.
         """
         if not _numpy_available:
             return None
@@ -97,9 +100,19 @@ class HDRPlugin(BasePlugin):
                     img_data[y, mask, 1] = rgbe[mask, 1] * scale
                     img_data[y, mask, 2] = rgbe[mask, 2] * scale
 
-            # Reinhard tone-mapping for scene-linear HDR data.
-            img_data = img_data / (1 + img_data)
-            img_data = np.clip(img_data * 255, 0, 255).astype(np.uint8)
+            # Apply OCIO if assigned, otherwise fall back to Reinhard tone-mapping.
+            ocio_path = file_path or path
+            ocio_applied = False
+            if ocio_path:
+                from core.ocio_manager import ocio_manager
+                assignment = ocio_manager.get_assignment(ocio_path)
+                if assignment is not None:
+                    img_data = ocio_manager.apply_to_float(img_data, assignment)
+                    img_data = (img_data * 255).astype(np.uint8)
+                    ocio_applied = True
+            if not ocio_applied:
+                img_data = img_data / (1 + img_data)
+                img_data = np.clip(img_data * 255, 0, 255).astype(np.uint8)
 
             return Image.fromarray(img_data, 'RGB')
         except (OSError, ValueError, KeyError) as e:
@@ -107,7 +120,7 @@ class HDRPlugin(BasePlugin):
             return None
 
     def generate_view_image(self, image_path: str, image_source: Union[str, bytes], orientation: int, output_path: str) -> bool:
-        img = self._read_hdr_as_pil(image_path)
+        img = self._read_hdr_as_pil(image_path, file_path=image_path)
         if not img:
             return False
         try:
@@ -121,7 +134,7 @@ class HDRPlugin(BasePlugin):
             return False
 
     def generate_thumbnail(self, image_path: str, image_source: Optional[Union[str, bytes]], orientation: int, output_path: str) -> bool:
-        img = self._read_hdr_as_pil(image_path)
+        img = self._read_hdr_as_pil(image_path, file_path=image_path)
         if not img:
             return False
         try:

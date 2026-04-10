@@ -25,10 +25,12 @@ class EXRPlugin(BasePlugin):
     def get_supported_formats(self) -> List[str]:
         return ['.exr']
 
-    def _read_exr_as_pil(self, source: Union[str, bytes]) -> Optional[Image.Image]:
+    def _read_exr_as_pil(self, source: Union[str, bytes], file_path: Optional[str] = None) -> Optional[Image.Image]:
         """
-        Reads an EXR file, applies Reinhard tone-mapping to map HDR scene-linear
-        data into a displayable LDR range, and returns a PIL Image.
+        Reads an EXR file and returns a PIL Image.
+
+        If an OCIO assignment exists for *file_path*, applies the DisplayViewTransform
+        to the raw float data.  Otherwise falls back to Reinhard tone-mapping.
         """
         if not _exr_available:
             return None
@@ -58,9 +60,18 @@ class EXRPlugin(BasePlugin):
                 logger.error(f"EXR has no recognizable RGB channels: {ch_names}")
                 return None
 
-            # Reinhard tone-mapping for scene-linear HDR data.
-            img_data = img_data / (1 + img_data)
-            img_data = np.clip(img_data * 255, 0, 255).astype(np.uint8)
+            # Apply OCIO if assigned, otherwise fall back to Reinhard tone-mapping.
+            ocio_applied = False
+            if file_path:
+                from core.ocio_manager import ocio_manager
+                assignment = ocio_manager.get_assignment(file_path)
+                if assignment is not None:
+                    img_data = ocio_manager.apply_to_float(img_data, assignment)
+                    img_data = (img_data * 255).astype(np.uint8)
+                    ocio_applied = True
+            if not ocio_applied:
+                img_data = img_data / (1 + img_data)
+                img_data = np.clip(img_data * 255, 0, 255).astype(np.uint8)
 
             img = Image.fromarray(img_data, 'L' if img_data.ndim == 2 else None)
             if img.mode != 'RGB':
@@ -75,7 +86,7 @@ class EXRPlugin(BasePlugin):
         Creates a viewable JPEG from the source EXR by decoding, tone-mapping,
         and applying orientation, then saves it to the output path.
         """
-        img = self._read_exr_as_pil(image_source)
+        img = self._read_exr_as_pil(image_source, file_path=image_path)
         if not img:
             return False
 
@@ -95,7 +106,7 @@ class EXRPlugin(BasePlugin):
         applying orientation, resizing, and saving to the output path.
         """
         source = image_source if image_source else image_path
-        img = self._read_exr_as_pil(source)
+        img = self._read_exr_as_pil(source, file_path=image_path)
         if not img:
             return False
 

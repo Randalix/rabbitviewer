@@ -104,6 +104,36 @@ class OcioManager:
             logger.warning("OCIO transform failed: %s", e)
             return image
 
+    def apply_to_float(self, arr, assignment: "OcioAssignment"):
+        """Apply OCIO transform to a float32 HxWx3 array in scene-linear space.
+
+        For HDR source data (EXR, HDR) where values are not pre-normalized to
+        [0, 1].  Returns a float array clipped to [0, 1], or the original array
+        on any error.
+        """
+        if not _OCIO_AVAILABLE:
+            return arr
+        try:
+            import numpy as np
+            cfg = self._load_config(assignment.config_path)
+            if cfg is None:
+                return arr
+            display = assignment.display or cfg.getDefaultDisplay()
+            view = assignment.view or cfg.getDefaultView(display)
+            xform = ocio.DisplayViewTransform(
+                src=assignment.input_space,
+                display=display,
+                view=view,
+            )
+            proc = cfg.getProcessor(xform)
+            cpu = proc.getDefaultCPUProcessor()
+            result = np.array(arr, dtype=np.float32)
+            cpu.applyRGB(result)
+            return result.clip(0.0, 1.0)
+        except Exception as e:
+            logger.warning("OCIO float transform failed: %s", e)
+            return arr
+
     def invalidate_config_cache(self, config_path: Optional[str] = None) -> None:
         """Drop cached OCIO config(s) so they are reloaded on next use."""
         if config_path is None:

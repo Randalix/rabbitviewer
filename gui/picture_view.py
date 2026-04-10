@@ -9,6 +9,7 @@ import os
 import time
 import threading
 from .picture_base import PictureBase, WHEEL_ZOOM_STEP
+from .ocio_display import apply_ocio_to_qimage
 from core.event_system import event_system, EventType, InspectorEventData, StatusMessageEventData, StatusSection
 from network.daemon_signals import DaemonSignals
 from core.notifications import PreviewsReadyData
@@ -60,6 +61,13 @@ class PictureView(QWidget):
         self._retry_timer.timeout.connect(self._retry_load_current)
 
         self.service = None
+
+        event_system.subscribe(EventType.OCIO_ASSIGNMENT_CHANGED, self._on_ocio_assignment_changed)
+
+    def _on_ocio_assignment_changed(self, event_data) -> None:
+        """OCIO assignment changed — reload the current image with the new transform."""
+        if self._current_path:
+            self.loadImage(self._current_path, force_reload=True)
 
     def set_service(self, service):
         self.service = service
@@ -127,9 +135,9 @@ class PictureView(QWidget):
 
         if result.get('view_image_source') == "memory":
             image_bytes = self.service.get_cached_view_image(image_path)
-            success = self._picture_base.loadImageFromBytes(image_bytes) if image_bytes else False
+            success = self._load_with_ocio_from_bytes(image_bytes, image_path) if image_bytes else False
         elif result.get('view_image_path'):
-            success = self._picture_base.loadImageFromPath(result['view_image_path'])
+            success = self._load_with_ocio_from_path(result['view_image_path'], image_path)
         else:
             self._picture_base.setImage(QImage())
             self._current_path = image_path
@@ -235,6 +243,24 @@ class PictureView(QWidget):
     def set_daemon_signals(self, daemon_signals: DaemonSignals) -> None:
         self._daemon_signals = daemon_signals
         daemon_signals.previews_ready.connect(self._on_previews_ready)
+
+    def _load_with_ocio_from_path(self, cache_path: str, source_path: str) -> bool:
+        """Load QImage from *cache_path*, apply OCIO for *source_path*, then display."""
+        img = QImage(cache_path)
+        if img.isNull():
+            return False
+        img = apply_ocio_to_qimage(img, source_path)
+        self._picture_base.setImage(img)
+        return True
+
+    def _load_with_ocio_from_bytes(self, data: bytes, source_path: str) -> bool:
+        """Load QImage from *data*, apply OCIO for *source_path*, then display."""
+        img = QImage()
+        if not img.loadFromData(data) or img.isNull():
+            return False
+        img = apply_ocio_to_qimage(img, source_path)
+        self._picture_base.setImage(img)
+        return True
 
     def _apply_db_orientation(self, image_path: str) -> None:
         if not self.service:
@@ -398,6 +424,7 @@ class PictureView(QWidget):
         self._picture_base.zoomOut(factor)
 
     def closeEvent(self, event):
+        event_system.unsubscribe(EventType.OCIO_ASSIGNMENT_CHANGED, self._on_ocio_assignment_changed)
         self._inspector_timer.stop()
         self._wheel_idle_timer.stop()
         self._retry_timer.stop()
