@@ -91,6 +91,7 @@ class EventType(Enum):
 
     # OCIO color management
     OPEN_OCIO_DIALOG = "open_ocio_dialog"
+    OCIO_ASSIGNMENT_CHANGED = "ocio_assignment_changed"
 
     # Directory events
     NAVIGATE_TO_FOLDER = "navigate_to_folder"

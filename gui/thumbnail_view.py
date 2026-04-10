@@ -144,6 +144,7 @@ class ThumbnailViewWidget(QFrame):
 
         event_system.subscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
         event_system.subscribe(EventType.OPEN_OCIO_DIALOG, self._on_open_ocio_dialog)
+        event_system.subscribe(EventType.OCIO_ASSIGNMENT_CHANGED, self._on_ocio_assignment_changed)
 
         self.overlay_manager = OverlayManager(request_update=self._request_label_update)
         self.overlay_manager.register_renderer("stars", render_stars)
@@ -675,6 +676,16 @@ class ThumbnailViewWidget(QFrame):
                     if label:
                         label.update()
 
+    def _on_ocio_assignment_changed(self, event_data) -> None:
+        """OCIO assignments changed — drop cached pixmaps so thumbnails are re-rendered."""
+        self.model.pixmap_cache.clear()
+        self.model.thumb_path_cache.clear()
+        for state in self.model.image_states.values():
+            state.loaded = False
+            state.prioritized = False
+        # Re-queue visible thumbnails at their current priorities
+        self._prioritize_visible_thumbnails()
+
     def _on_open_ocio_dialog(self, event_data) -> None:
         """Open the OCIO assignment dialog for the current selection."""
         if self.service is None:
@@ -1001,6 +1012,7 @@ class ThumbnailViewWidget(QFrame):
         event_system.unsubscribe(EventType.SELECTION_CHANGED, self._on_selection_changed_indicators)
         event_system.unsubscribe(EventType.THUMBNAIL_OVERLAY, self._on_overlay_event)
         event_system.unsubscribe(EventType.OPEN_OCIO_DIALOG, self._on_open_ocio_dialog)
+        event_system.unsubscribe(EventType.OCIO_ASSIGNMENT_CHANGED, self._on_ocio_assignment_changed)
         self.filter_controller.dispose()
         self._notifications.dispose()
 

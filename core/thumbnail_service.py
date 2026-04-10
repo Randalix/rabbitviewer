@@ -431,6 +431,7 @@ class ThumbnailService:
         ocio_manager.invalidate_config_cache(config_path)
         if is_folder:
             self._invalidate_ocio_cache_for_folder(path)
+        self._publish_ocio_changed()
 
     def delete_ocio_assignment(self, path: str) -> None:
         """Remove an OCIO assignment and invalidate affected caches."""
@@ -440,6 +441,7 @@ class ThumbnailService:
         if config_path:
             from core.ocio_manager import ocio_manager
             ocio_manager.invalidate_config_cache(config_path)
+        self._publish_ocio_changed()
         # Invalidate cache for the path itself (file) or its subtree (folder)
         self._invalidate_ocio_cache_for_folder(path)
 
@@ -492,6 +494,15 @@ class ThumbnailService:
         logger.info(
             "OCIO: invalidated %d cached thumbnails under %s", len(file_paths), folder_path
         )
+
+    def _publish_ocio_changed(self) -> None:
+        """Notify the GUI that OCIO assignments changed so it redraws thumbnails."""
+        from core.event_system import event_system, EventType, EventData
+        event_system.publish(EventData(
+            event_type=EventType.OCIO_ASSIGNMENT_CHANGED,
+            source="thumbnail_service",
+            timestamp=time.time(),
+        ))
 
     # ------------------------------------------------------------------
     #  Rotation
