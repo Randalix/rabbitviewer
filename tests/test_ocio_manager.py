@@ -120,6 +120,66 @@ class TestOcioManager:
         mgr.init(db)
         assert mgr._db is db
 
+    def test_apply_uses_display_view_transform(self):
+        """apply() must use DisplayViewTransform, not getProcessor(src, display, view).
+
+        The 3-arg positional form hits the (src, dst, direction) overload and
+        raises 'incompatible function arguments' at runtime (confirmed in logs).
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+
+        # Build a minimal fake PyOpenColorIO module
+        mock_ocio = MagicMock()
+        fake_xform = MagicMock(name="DisplayViewTransform_instance")
+        mock_ocio.DisplayViewTransform.return_value = fake_xform
+
+        fake_cpu = MagicMock(name="cpu_processor")
+        fake_cpu.applyRGB = MagicMock()  # must not raise
+        fake_proc = MagicMock(name="processor")
+        fake_proc.getDefaultCPUProcessor.return_value = fake_cpu
+
+        fake_cfg = MagicMock(name="config")
+        fake_cfg.getDefaultDisplay.return_value = "sRGB"
+        fake_cfg.getDefaultView.return_value = "Default"
+        fake_cfg.getProcessor.return_value = fake_proc
+        mock_ocio.Config.CreateFromFile.return_value = fake_cfg
+
+        mgr = OcioManager()
+
+        import core.ocio_manager as _mod
+        orig_avail = _mod._OCIO_AVAILABLE
+        orig_ocio = getattr(_mod, "ocio", None)
+        _mod._OCIO_AVAILABLE = True
+        _mod.ocio = mock_ocio
+
+        try:
+            img = Image.new("RGB", (4, 4), (200, 100, 50))
+            assignment = OcioAssignment(
+                path="/shots/img.exr",
+                is_folder=False,
+                config_path="/configs/aces.ocio",
+                input_space="ACEScg",
+                display="sRGB",
+                view="Default",
+            )
+            mgr.apply(img, assignment)
+
+            # DisplayViewTransform must be constructed with the right kwargs
+            mock_ocio.DisplayViewTransform.assert_called_once_with(
+                src="ACEScg",
+                display="sRGB",
+                view="Default",
+            )
+            # getProcessor must receive the transform object, not 3 positional args
+            fake_cfg.getProcessor.assert_called_once_with(fake_xform)
+        finally:
+            _mod._OCIO_AVAILABLE = orig_avail
+            if orig_ocio is None:
+                del _mod.ocio
+            else:
+                _mod.ocio = orig_ocio
+
     def test_get_assignment_queries_db(self, tmp_env):
         db = tmp_env["db"]
         db.ocio.set("/photos", True, "/cfg/aces.ocio", "sRGB")

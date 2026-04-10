@@ -82,8 +82,13 @@ class OcioManager:
             display = assignment.display or cfg.getDefaultDisplay()
             view = assignment.view or cfg.getDefaultView(display)
 
-            # Use display+view transform to map input space → display output
-            proc = cfg.getProcessor(assignment.input_space, display, view)
+            # Use DisplayViewTransform to map input space → display output
+            xform = ocio.DisplayViewTransform(
+                src=assignment.input_space,
+                display=display,
+                view=view,
+            )
+            proc = cfg.getProcessor(xform)
             cpu = proc.getDefaultCPUProcessor()
 
             # Ensure RGB

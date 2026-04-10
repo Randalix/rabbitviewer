@@ -429,8 +429,7 @@ class ThumbnailService:
         self.db.ocio.set(path, is_folder, config_path, input_space, display, view)
         from core.ocio_manager import ocio_manager
         ocio_manager.invalidate_config_cache(config_path)
-        if is_folder:
-            self._invalidate_ocio_cache_for_folder(path)
+        self._invalidate_ocio_cache_for_folder(path)
         self._publish_ocio_changed()
 
     def delete_ocio_assignment(self, path: str) -> None:
@@ -468,6 +467,9 @@ class ThumbnailService:
             return
 
         file_paths = [r[0] for r in rows]
+        # Evict fullres in-memory cache for each affected path
+        for fp in file_paths:
+            self.tm.fullres_cache.invalidate(fp)
         # Delete cache files from disk
         for _fp, thumb, view in rows:
             for cache_path in (thumb, view):
