@@ -6,19 +6,20 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, QPointF, QRect
 from PySide6.QtGui import QPixmap, QColor, QPainter
-from PySide6.QtWidgets import QVBoxLayout
-
 from gui.components.item_card import ItemCard
 from core.event_system import event_system, EventType, InspectorEventData
 from gui.overlay_manager import OverlayManager
 from gui.overlay_renderers import render_stars
 from core.folder_node import FolderNode
-from .video_thumbnail_player import VideoThumbnailPlayer
-from plugins.video_plugin import VIDEO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
-_VIDEO_EXTENSIONS = frozenset(VIDEO_EXTENSIONS)
+# Inlined to avoid eagerly importing plugins.video_plugin at startup.
+# Kept in sync by tests/test_startup_lazy_imports.py::TestVideoExtensionsConstant.
+_VIDEO_EXTENSIONS = frozenset([
+    '.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v',
+    '.wmv', '.flv', '.mpg', '.mpeg', '.3gp', '.ts',
+])
 
 def _is_video(path: str) -> bool:
     _, ext = os.path.splitext(path)
@@ -37,24 +38,28 @@ class ThumbnailLabel(ItemCard):
 
         self._original_idx: int = -1
         self._overlay_manager: OverlayManager | None = None
-        self._display_rating: Optional[int] = None
+        self._display_rating: Optional[int] = None  # set by ThumbnailViewWidget in ratings mode
 
+        # Folder card state
         self.is_folder: bool = False
         self._folder_node: FolderNode | None = None
-        self._folder_preview_pixmaps: list | None = None
+        self._folder_preview_pixmaps: list | None = None  # cached scaled QPixmaps
 
+        # Throttle inspector events to ~60 fps so rapid mouse movement does not
+        # flood the event system and block the GUI thread with socket calls.
         self._pending_norm_pos: Optional[QPointF] = None
         self._inspector_timer = QTimer(self)
         self._inspector_timer.setSingleShot(True)
-        self._inspector_timer.setInterval(16)
+        self._inspector_timer.setInterval(16)  # ~60 fps
         self._inspector_timer.timeout.connect(self._flushInspectorEvent)
 
         self.is_video = _is_video(self.file_path)
-        self._video_player: Optional[VideoThumbnailPlayer] = None
+        self._video_player = None
         self._video_playback_active = False
 
     def updateThumbnail(self, pixmap: QPixmap):
         if not pixmap.isNull():
+            # Don't upscale: only scale down if the pixmap exceeds the label size.
             if pixmap.width() > self.size or pixmap.height() > self.size:
                 scaled = pixmap.scaled(
                     self.size,
@@ -66,27 +71,16 @@ class ThumbnailLabel(ItemCard):
             self.setPixmap(scaled)
             self.loaded = True
 
-    def start_video_playback(self):
-        if not self.is_video or self._video_playback_active:
-            return
+    def attach_video_player(self, player):
+        self._video_player = player
         self._video_playback_active = True
-        if not self._video_player:
-            self._video_player = VideoThumbnailPlayer(self)
-            self._video_player.loadVideo(self.file_path)
-            self.layout().addWidget(self._video_player)
-        self._video_player.show()
 
-    def stop_video_playback(self):
-        if not self._video_playback_active:
-            return
+    def detach_video_player(self):
+        self._video_player = None
         self._video_playback_active = False
-        if self._video_player:
-            self._video_player.hide()
 
     def cleanup(self):
-        if self._video_player:
-            self._video_player.destroy_player()
-            self._video_player = None
+        self.detach_video_player()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

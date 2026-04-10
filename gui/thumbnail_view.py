@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 
 from gui.picture_base import PictureBase
 from gui.components.virtual_grid_manager import VirtualGridManager
-from gui.components.thumbnail_label import ThumbnailLabel
+from gui.components.thumbnail_label import ThumbnailLabel, _is_video
+from gui.video_view import VideoView
 from core.selection import ReplaceSelectionCommand
 from gui.selection_interaction import SelectionInteraction
 from core.event_system import (event_system, EventType, EventData,
@@ -82,6 +83,15 @@ class ThumbnailViewWidget(QFrame):
         )
 
         self._setupUI()
+
+        # Single shared video player for thumbnail scrubbing. Created at startup
+        # so Qt sets up OpenGL compositing for the window immediately (avoids the
+        # window restructuring flash that would occur on first hover otherwise).
+        self._video_scrub_player = VideoView(scrub=True, parent=self._grid_container)
+        self._video_scrub_player.setFocusPolicy(Qt.NoFocus)
+        self._video_scrub_player.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._video_scrub_player.hide()
+
         self.viewport().installEventFilter(self)
         self.installEventFilter(self)
         self._setupResizeTimer()
@@ -167,15 +177,20 @@ class ThumbnailViewWidget(QFrame):
 
     def _start_video_playback(self):
         label = self._hovered_label
-        if not label or not label.is_video:
+        if not label or not label.is_video or not isValid(label):
             return
 
         if self._hovered_video_label and self._hovered_video_label != label:
-            self._hovered_video_label.stop_video_playback()
+            self._hovered_video_label.detach_video_player()
 
         self._hovered_video_label = label
-        if isValid(self._hovered_video_label):
-            self._hovered_video_label.start_video_playback()
+        player = self._video_scrub_player
+        pos = label.mapTo(self._grid_container, QPoint(0, 0))
+        player.setGeometry(pos.x(), pos.y(), label.width(), label.height())
+        player.loadVideo(label.file_path)
+        player.show()
+        player.raise_()
+        label.attach_video_player(player)
 
     def _update_label_selection(self, orig_idx: int, selected: bool) -> None:
         """Callback for SelectionInteraction to update label highlight state."""
@@ -251,7 +266,8 @@ class ThumbnailViewWidget(QFrame):
         if self._hovered_label == label:
             self._video_hover_timer.stop()
             if self._hovered_video_label:
-                self._hovered_video_label.stop_video_playback()
+                self._hovered_video_label.detach_video_player()
+                self._video_scrub_player.hide()
                 self._hovered_video_label = None
 
             self._hovered_label = None
@@ -325,6 +341,7 @@ class ThumbnailViewWidget(QFrame):
                 label.file_path = file_path
                 label.original_path = file_path
                 label.loaded = False
+                label.is_video = _is_video(file_path)
                 label.show()
                 return label
 
@@ -335,6 +352,7 @@ class ThumbnailViewWidget(QFrame):
             label.loaded = False
             label.is_folder = False
             label._folder_node = None
+            label.is_video = _is_video(file_path)
             label.show()
         else:
             label = ThumbnailLabel(file_path, self.display_size, self.gui_config)
@@ -811,6 +829,7 @@ class ThumbnailViewWidget(QFrame):
                     new_orig = vis_to_orig[new_vis_idx]
                     label._original_idx = new_orig
                     label.file_path = self.model.all_files[new_orig]
+                    label.is_video = _is_video(label.file_path)
 
                 self._virtual_grid.splice_items(
                     result.removed_vis_indices,
@@ -982,6 +1001,9 @@ class ThumbnailViewWidget(QFrame):
         # Clear pixmap/path caches
         self.model.pixmap_cache.clear()
         self.model.thumb_path_cache.clear()
+
+        # Destroy mpv player before GL context teardown
+        self._video_scrub_player.close()
 
         # Clear widget pool
         for label in self._widget_pool:
