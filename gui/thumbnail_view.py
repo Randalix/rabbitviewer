@@ -126,6 +126,13 @@ class ThumbnailViewWidget(QFrame):
         )
         self._video_hover_outline.hide()
 
+        self._video_hover_timer = QTimer(self)
+        self._video_hover_timer.setInterval(250)  # ms to hover before playback starts
+        self._video_hover_timer.setSingleShot(True)
+        self._video_hover_timer.timeout.connect(self._start_video_playback)
+        self._hovered_video_label: Optional[ThumbnailLabel] = None
+
+
         self.viewport().installEventFilter(self)
         self.installEventFilter(self)
         self._setupResizeTimer()
