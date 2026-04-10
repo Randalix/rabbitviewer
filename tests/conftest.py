@@ -30,7 +30,29 @@ if 'PySide6' not in sys.modules:
         # as methods. Extend to callables if method-call form is ever exercised in tests.
         def __init__(self, x=0.0, y=0.0): self.x = x; self.y = y
 
-    class _Qt:
+    class _QtNamespace:
+        """Stub namespace for nested Qt enums like Qt.CursorShape.ClosedHandCursor."""
+        _counter = 0x7F000000
+        def __getattr__(self, name):
+            _QtNamespace._counter += 1
+            val = _QtNamespace._counter
+            setattr(self, name, val)
+            return val
+        def __or__(self, other): return 0
+        def __ror__(self, other): return 0
+        def __and__(self, other): return 0
+        def __rand__(self, other): return 0
+        def __int__(self): return 0
+        def __bool__(self): return True
+
+    class _QtMeta(type):
+        """Metaclass that returns a unique int or namespace for any missing Qt constant."""
+        def __getattr__(cls, name):
+            val = _QtNamespace()
+            setattr(cls, name, val)
+            return val
+
+    class _Qt(metaclass=_QtMeta):
         CaseInsensitive = 1
         Key_Return = 0x01000004
         Key_Enter = 0x01000005
@@ -81,7 +103,7 @@ if 'PySide6' not in sys.modules:
     _qtgui = types.ModuleType('PySide6.QtGui')
     for _name in ('QImage', 'QColor', 'QMouseEvent', 'QKeyEvent',
                    'QCursor', 'QPainter', 'QFont', 'QPainterPath', 'QPen',
-                   'QRegion', 'QTransform'):
+                   'QRegion', 'QTransform', 'QOpenGLContext'):
         setattr(_qtgui, _name, type(_name, (_Stub,), {}))
 
     class _QPixmap(_Stub):
@@ -154,14 +176,20 @@ if 'PySide6' not in sys.modules:
     _qtwidgets.QCompleter = _QCompleter  # type: ignore[attr-defined]
     _qtcore.QStringListModel = type('QStringListModel', (_Stub,), {})  # type: ignore[attr-defined]
 
+    # QtOpenGLWidgets stubs — needed by gui/video_view.py
+    _qtopenglwidgets = types.ModuleType('PySide6.QtOpenGLWidgets')
+    _qtopenglwidgets.QOpenGLWidget = type('QOpenGLWidget', (_QWidget,), {})  # type: ignore[attr-defined]
+
     _pyside6 = types.ModuleType('PySide6')
     _pyside6.QtCore = _qtcore         # type: ignore[attr-defined]
     _pyside6.QtGui = _qtgui           # type: ignore[attr-defined]
     _pyside6.QtWidgets = _qtwidgets   # type: ignore[attr-defined]
+    _pyside6.QtOpenGLWidgets = _qtopenglwidgets  # type: ignore[attr-defined]
     sys.modules['PySide6'] = _pyside6
     sys.modules['PySide6.QtCore'] = _qtcore
     sys.modules['PySide6.QtGui'] = _qtgui
     sys.modules['PySide6.QtWidgets'] = _qtwidgets
+    sys.modules['PySide6.QtOpenGLWidgets'] = _qtopenglwidgets
 
 # ---------------------------------------------------------------------------
 # shiboken6 stub — isValid(obj) always returns True in tests (no real Qt objects)

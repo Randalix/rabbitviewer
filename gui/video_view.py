@@ -3,7 +3,7 @@ import time
 
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QPointF
-from PySide6.QtGui import QKeyEvent, QMouseEvent, QOpenGLContext
+from PySide6.QtGui import QKeyEvent, QMouseEvent, QOpenGLContext, QPainter, QPixmap
 
 from core.event_system import (
     event_system, EventType, InspectorEventData,
@@ -25,6 +25,7 @@ class VideoView(QOpenGLWidget):
     escapePressed = Signal()
     navigateRequested = Signal(str)  # "next" or "previous"
     _mpv_frame_ready = Signal()  # thread-safe bridge from mpv decode thread → Qt
+    firstFrameReady = Signal()   # emitted once per loadVideo when first frame arrives
 
     def __init__(self, scrub: bool = False, parent=None):
         super().__init__(parent)
@@ -40,8 +41,10 @@ class VideoView(QOpenGLWidget):
 
         self._player = None
         self._render_ctx = None
+        self._has_first_frame: bool = False
+        self._fallback_pixmap: QPixmap | None = None
 
-        self._mpv_frame_ready.connect(self.update, Qt.QueuedConnection)
+        self._mpv_frame_ready.connect(self._on_qt_frame_ready, Qt.QueuedConnection)
 
         if not scrub:
             self._status_timer = QTimer(self)
@@ -133,12 +136,13 @@ class VideoView(QOpenGLWidget):
         if not self._player:
             return
         try:
-            dur = self._player.duration
-            if not dur or dur <= 0:
-                return
-            self._duration = dur
-            target = max(0.0, min(norm_x * dur, dur))
-            self._player.seek(target, reference="absolute", precision="exact")
+            if not self._duration:
+                dur = self._player.duration
+                if not dur or dur <= 0:
+                    return
+                self._duration = dur
+            target = max(0.0, min(norm_x * self._duration, self._duration))
+            self._player.seek(target, reference="absolute", precision="keyframes")
         except Exception:  # why: mpv property/command raises on terminated player
             pass
 
@@ -146,6 +150,25 @@ class VideoView(QOpenGLWidget):
 
     def _on_mpv_update(self):
         self._mpv_frame_ready.emit()
+
+    def set_fallback_pixmap(self, pixmap: QPixmap | None):
+        self._fallback_pixmap = pixmap
+
+    def paintEvent(self, event):
+        if self._scrub and not self._has_first_frame and self._fallback_pixmap and not self._fallback_pixmap.isNull():
+            painter = QPainter(self)
+            painter.drawPixmap(self.rect(), self._fallback_pixmap)
+            painter.end()
+            return
+        super().paintEvent(event)
+
+    @Slot()
+    def _on_qt_frame_ready(self):
+        if not self._has_first_frame:
+            self._has_first_frame = True
+            self._fallback_pixmap = None
+            self.firstFrameReady.emit()
+        self.update()
 
     def paintGL(self):
         if not self._render_ctx:
@@ -363,6 +386,7 @@ class VideoView(QOpenGLWidget):
                 message="",
                 section=StatusSection.PROCESS,
             ))
+        self._has_first_frame = False
         if self._render_ctx:
             try:
                 self.makeCurrent()

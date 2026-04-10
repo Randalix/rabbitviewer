@@ -1,11 +1,11 @@
 from __future__ import annotations
+import os
 import time
 import logging
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, QPointF, QRect
 from PySide6.QtGui import QPixmap, QColor, QPainter
-
 from gui.components.item_card import ItemCard
 from core.event_system import event_system, EventType, InspectorEventData
 from gui.overlay_manager import OverlayManager
@@ -13,6 +13,17 @@ from gui.overlay_renderers import render_stars
 from core.folder_node import FolderNode
 
 logger = logging.getLogger(__name__)
+
+# Inlined to avoid eagerly importing plugins.video_plugin at startup.
+# Kept in sync by tests/test_startup_lazy_imports.py::TestVideoExtensionsConstant.
+_VIDEO_EXTENSIONS = frozenset([
+    '.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v',
+    '.wmv', '.flv', '.mpg', '.mpeg', '.3gp', '.ts',
+])
+
+def _is_video(path: str) -> bool:
+    _, ext = os.path.splitext(path)
+    return ext.lower() in _VIDEO_EXTENSIONS
 
 
 class ThumbnailLabel(ItemCard):
@@ -42,6 +53,15 @@ class ThumbnailLabel(ItemCard):
         self._inspector_timer.setInterval(16)  # ~60 fps
         self._inspector_timer.timeout.connect(self._flushInspectorEvent)
 
+        self.is_video = _is_video(self.file_path)
+        self._video_player = None
+        self._video_playback_active = False
+        self._pending_seek_pos: Optional[float] = None
+        self._seek_timer = QTimer(self)
+        self._seek_timer.setSingleShot(True)
+        self._seek_timer.setInterval(16)  # ~60 fps
+        self._seek_timer.timeout.connect(self._flushSeek)
+
     def updateThumbnail(self, pixmap: QPixmap):
         if not pixmap.isNull():
             # Don't upscale: only scale down if the pixmap exceeds the label size.
@@ -56,6 +76,25 @@ class ThumbnailLabel(ItemCard):
             self.setPixmap(scaled)
             self.loaded = True
 
+    def attach_video_player(self, player):
+        self._video_player = player
+        self._video_playback_active = True
+
+    def detach_video_player(self):
+        self._seek_timer.stop()
+        self._pending_seek_pos = None
+        self._video_player = None
+        self._video_playback_active = False
+
+    def _flushSeek(self):
+        pos = self._pending_seek_pos
+        if pos is not None and self._video_player:
+            self._pending_seek_pos = None
+            self._video_player.seek_normalized(pos)
+
+    def cleanup(self):
+        self.detach_video_player()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             event.ignore()
@@ -67,6 +106,15 @@ class ThumbnailLabel(ItemCard):
             self._queueFolderInspectorEvent(event.position())
         else:
             self._queueInspectorEvent(event.position())
+
+        if self._video_playback_active and self._video_player:
+            pos = event.position()
+            widget_rect = self.rect()
+            if widget_rect.width() > 0:
+                self._pending_seek_pos = max(0.0, min(1.0, pos.x() / widget_rect.width()))
+                if not self._seek_timer.isActive():
+                    self._seek_timer.start()
+
         super().mouseMoveEvent(event)
 
     def _queueInspectorEvent(self, pos: QPointF):
