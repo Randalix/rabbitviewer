@@ -142,7 +142,8 @@ class VideoView(QOpenGLWidget):
                     return
                 self._duration = dur
             target = max(0.0, min(norm_x * self._duration, self._duration))
-            self._player.seek(target, reference="absolute", precision="keyframes")
+            precision = "exact" if self._duration < 10.0 else "keyframes"
+            self._player.seek(target, reference="absolute", precision=precision)
         except Exception:  # why: mpv property/command raises on terminated player
             pass
 
