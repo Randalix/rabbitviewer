@@ -324,6 +324,7 @@ class TestInitialThumbsUpdate:
     def test_updates_materialized_placeholder(self):
         """Thumb paths arriving after materialization update existing labels."""
         view = _make_view(all_files=["/img/a.jpg", "/img/b.jpg"])
+        view.model.current_directory_path = "/img"
 
         # Simulate materialized placeholder labels (no pixmap yet)
         label_a = MagicMock()
@@ -338,7 +339,7 @@ class TestInitialThumbsUpdate:
 
         with patch("gui.thumbnail_view.QImage", return_value=mock_image), \
              patch("gui.thumbnail_view.apply_profile_pixmap", return_value=mock_pixmap):
-            ThumbnailViewWidget._on_initial_thumbs_received(view, {
+            ThumbnailViewWidget._on_initial_thumbs_received(view, "/img", {
                 "/img/a.jpg": "/cache/a_thumb.jpg",
                 "/img/b.jpg": "/cache/b_thumb.jpg",
             })
@@ -355,12 +356,13 @@ class TestInitialThumbsUpdate:
     def test_skips_already_loaded_pixmaps(self):
         """Labels that already have a pixmap are not updated again."""
         view = _make_view(all_files=["/img/a.jpg"])
+        view.model.current_directory_path = "/img"
         label_a = MagicMock()
         view.labels = {0: label_a}
         view.model.pixmap_cache[0] = MagicMock()  # already loaded
 
         with patch("gui.thumbnail_view.QImage") as MockQImage:
-            ThumbnailViewWidget._on_initial_thumbs_received(view, {
+            ThumbnailViewWidget._on_initial_thumbs_received(view, "/img", {
                 "/img/a.jpg": "/cache/a_thumb.jpg",
             })
 
@@ -370,8 +372,9 @@ class TestInitialThumbsUpdate:
     def test_stores_paths_for_unknown_files(self):
         """Thumb paths for files not yet in all_files are stored for later."""
         view = _make_view(all_files=["/img/a.jpg"])
+        view.model.current_directory_path = "/img"
 
-        ThumbnailViewWidget._on_initial_thumbs_received(view, {
+        ThumbnailViewWidget._on_initial_thumbs_received(view, "/img", {
             "/img/a.jpg": "/cache/a_thumb.jpg",
             "/img/unknown.jpg": "/cache/unknown_thumb.jpg",
         })
@@ -381,6 +384,7 @@ class TestInitialThumbsUpdate:
     def test_unmaterialized_labels_not_updated(self):
         """Files in all_files but not materialized just get thumb path cached."""
         view = _make_view(all_files=["/img/a.jpg", "/img/b.jpg"])
+        view.model.current_directory_path = "/img"
         # Only label 0 is materialized
         view.labels = {0: MagicMock()}
 
@@ -390,7 +394,7 @@ class TestInitialThumbsUpdate:
 
         with patch("gui.thumbnail_view.QImage", return_value=mock_image), \
              patch("gui.thumbnail_view.apply_profile_pixmap", return_value=mock_pixmap):
-            ThumbnailViewWidget._on_initial_thumbs_received(view, {
+            ThumbnailViewWidget._on_initial_thumbs_received(view, "/img", {
                 "/img/a.jpg": "/cache/a_thumb.jpg",
                 "/img/b.jpg": "/cache/b_thumb.jpg",
             })

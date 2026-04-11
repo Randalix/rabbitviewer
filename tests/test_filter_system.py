@@ -333,9 +333,10 @@ class TestIsLoadingCachedFolder:
         view.model.pixmap_cache = {}
 
         files = ["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"]
+        view.model.current_directory_path = "/img"
 
         with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget._on_initial_files_received(view, files)
+            ThumbnailViewWidget._on_initial_files_received(view, "/img", files)
 
         assert view._folder_is_cached is True
         assert view._is_loading is False
@@ -351,9 +352,10 @@ class TestIsLoadingCachedFolder:
         view.model.initial_thumb_paths = {}
         view.model.path_to_idx = {}
         view.model.pixmap_cache = {}
+        view.model.current_directory_path = "/img"
 
         with patch("gui.thumbnail_view.event_system"):
-            ThumbnailViewWidget._on_initial_files_received(view, [])
+            ThumbnailViewWidget._on_initial_files_received(view, "/img", [])
 
         assert view._folder_is_cached is False
         assert view._is_loading is True

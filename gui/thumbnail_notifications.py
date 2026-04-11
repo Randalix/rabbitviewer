@@ -143,7 +143,8 @@ class NotificationHandler(QObject):
         self._widget._is_loading = False
         self.scan_batch_pending = False
 
-        if not self.model.hidden_indices and self._widget._virtual_grid:
+        needs_filter = self.model.hidden_indices or self._filter_controller.has_active_filter()
+        if not needs_filter and self._widget._virtual_grid:
             # No filter active: data structures are fully populated by the
             # append-only fast path.  Do one final sorted reorder (no-op if
             # all_files is already sorted) and snap the container height.

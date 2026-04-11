@@ -354,6 +354,28 @@ class FilterController(QObject):
         ))
         self.filters_applied.emit()
 
+    def has_active_filter(self) -> bool:
+        """True if any filter is set (service-based or in-memory)."""
+        if self.model.current_filter:
+            return True
+        if not all(self.model.current_star_filter):
+            return True
+        if self.model.current_tag_filter:
+            return True
+        if self.model.duplicates_only:
+            return True
+        if self.model.current_date_filter is not None:
+            return True
+        if self.model.clip_search_paths is not None:
+            return True
+        if self.model.person_filter_paths is not None:
+            return True
+        if self.model.selection_filter_paths is not None:
+            return True
+        if self.model.similarity_filter_paths is not None:
+            return True
+        return False
+
     # -- Lifecycle -----------------------------------------------------------
 
     def start_filter_timer(self):

@@ -45,9 +45,10 @@ class ThumbnailViewWidget(QFrame):
     _thumbnail_generated_signal = Signal(str, QImage, object)
     # Dedicated signal for the DB-response file list so it always triggers an
     # immediate layout update, regardless of what fast-scan batches arrived first.
-    _initial_files_signal = Signal(list)
-    _initial_thumbs_signal = Signal(dict)
-    _initial_folders_signal = Signal(list)   # list of FolderNode
+    # directory_path is carried so the slot can discard stale responses (TOCTOU).
+    _initial_files_signal = Signal(str, list)
+    _initial_thumbs_signal = Signal(str, dict)
+    _initial_folders_signal = Signal(str, list)   # directory_path, list of FolderNode
     _folder_node_updated_signal = Signal(str, list)  # path, image_paths — from background scan
     folderNavigated = Signal(str)            # emitted when user navigates into a folder
     contextMenuRequested = Signal(object)    # emits QPoint (global pos) on right-click
@@ -535,11 +536,19 @@ class ThumbnailViewWidget(QFrame):
                 len(files), thumb_count, directory_path,
             )
 
+            # Guard against navigation that happened while the request was in flight.
+            if self.model.current_directory_path != directory_path:
+                logger.info(
+                    "[trace] stale response for %s (now showing %s), discarding",
+                    directory_path, self.model.current_directory_path,
+                )
+                return
+
             # Emit files and thumbnails first so the grid populates immediately
-            self._initial_files_signal.emit(sorted(files))
+            self._initial_files_signal.emit(directory_path, sorted(files))
             if thumbnail_paths:
                 logger.info("[startup] %d cached thumbnail paths from initial response", len(thumbnail_paths))
-                self._initial_thumbs_signal.emit(thumbnail_paths)
+                self._initial_thumbs_signal.emit(directory_path, thumbnail_paths)
 
             # Discover subdirectories after files are emitted (slower DB queries)
             if not recursive:
@@ -549,16 +558,22 @@ class ThumbnailViewWidget(QFrame):
                 )
                 if folder_nodes:
                     logger.info("[folders] found %d subdirectories in %s", len(folder_nodes), directory_path)
-                    self._initial_folders_signal.emit(folder_nodes)
+                    self._initial_folders_signal.emit(directory_path, folder_nodes)
         else:
             logger.error("Failed to request file list for %s from daemon. Response: %s", directory_path, response)
 
-    @Slot(list)
-    def _on_initial_files_received(self, files: list):
+    @Slot(str, list)
+    def _on_initial_files_received(self, directory_path: str, files: list):
         """Handles the DB-response file list.  Populates data structures and
         triggers a layout update; actual widget creation is deferred to virtual
         viewport sync.
         """
+        if self.model.current_directory_path != directory_path:
+            logger.info(
+                "[trace] _on_initial_files_received: stale response for %s (now %s), discarding",
+                directory_path, self.model.current_directory_path,
+            )
+            return
         self._folder_is_cached = len(files) > 0
         if self._folder_is_cached:
             self._is_loading = False
@@ -569,12 +584,24 @@ class ThumbnailViewWidget(QFrame):
         if not files:
             return
         self._add_image_batch(files)
-        if self.model.all_files:
+        # Only reapply filters now if a filter is actually active. Without this
+        # guard the async service call races against scan_progress additions and
+        # compute_hidden_indices triggers a spurious _rebuild_layout_for_filter
+        # that wipes the cached thumbnail pixmaps from newly materialized labels.
+        # When no filter is active the layout is already correct from
+        # _flush_scan_layout; scan_complete handles the final sort/snap.
+        if self.model.all_files and self.filter_controller.has_active_filter():
             self.filter_controller.reapply_filters()
 
-    @Slot(list)
-    def _on_initial_folders_received(self, folder_nodes: list):
+    @Slot(str, list)
+    def _on_initial_folders_received(self, directory_path: str, folder_nodes: list):
         """Insert folder entries at the start of the grid (before images)."""
+        if self.model.current_directory_path != directory_path:
+            logger.info(
+                "[trace] _on_initial_folders_received: stale response for %s (now %s), discarding",
+                directory_path, self.model.current_directory_path,
+            )
+            return
         if not folder_nodes:
             return
         folder_paths = []
@@ -594,8 +621,14 @@ class ThumbnailViewWidget(QFrame):
             node.image_paths = image_paths
             logger.debug("[folder-card] image_paths populated for %s (%d images)", path, len(image_paths))
 
-    @Slot(dict)
-    def _on_initial_thumbs_received(self, thumb_map: dict):
+    @Slot(str, dict)
+    def _on_initial_thumbs_received(self, directory_path: str, thumb_map: dict):
+        if self.model.current_directory_path != directory_path:
+            logger.info(
+                "[trace] _on_initial_thumbs_received: stale response for %s (now %s), discarding",
+                directory_path, self.model.current_directory_path,
+            )
+            return
         for source_path, thumb_path in thumb_map.items():
             orig_idx = self.model.path_to_idx.get(source_path, -1)
             if orig_idx < 0:
