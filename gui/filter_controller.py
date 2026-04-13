@@ -271,7 +271,10 @@ class FilterController(QObject):
                 result = result | phash_dupes
 
             if self._filtered_paths_ready is not None:
-                self._filtered_paths_ready.emit(result)
+                if self._filtered_paths_ready is not None:
+                    self._filtered_paths_ready.emit(result)
+                else:
+                    logger.error("Tried to emit _filtered_paths_ready but signal is None")
             else:
                 logger.error("Tried to emit _filtered_paths_ready but signal is None")
         except Exception as e:
