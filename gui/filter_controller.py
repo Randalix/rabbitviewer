@@ -270,7 +270,10 @@ class FilterController(QObject):
                 phash_dupes = self.service.get_phash_duplicate_paths(list(self.model.all_files))
                 result = result | phash_dupes
 
-            self._filtered_paths_ready.emit(result)
+            if self._filtered_paths_ready is not None:
+                self._filtered_paths_ready.emit(result)
+            else:
+                logger.error("Tried to emit _filtered_paths_ready but signal is None")
         except Exception as e:
             # why: service calls can raise; broad guard ensures
             # _filtered_paths_ready always fires to unlock _filter_in_flight.
