@@ -287,19 +287,36 @@ class FilterController(QObject):
     def _on_filtered_paths_ready(self, visible_paths):
         self._filter_in_flight = False
 
-        if visible_paths is None:
-            visible_paths = set(self.model.all_files)
+        try:
+            if visible_paths is None:
+                visible_paths = set(self.model.all_files)
 
-        if self.model.clip_search_paths is not None:
-            visible_paths = visible_paths & self.model.clip_search_paths
-        if self.model.person_filter_paths is not None:
-            visible_paths = visible_paths & self.model.person_filter_paths
-        if self.model.selection_filter_paths is not None:
-            visible_paths = visible_paths & self.model.selection_filter_paths
-        if self.model.similarity_filter_paths is not None:
-            visible_paths = visible_paths & self.model.similarity_filter_paths
+            if self.model.clip_search_paths is not None:
+                visible_paths = visible_paths & self.model.clip_search_paths
+            if self.model.person_filter_paths is not None:
+                visible_paths = visible_paths & self.model.person_filter_paths
+            if self.model.selection_filter_paths is not None:
+                visible_paths = visible_paths & self.model.selection_filter_paths
+            if self.model.similarity_filter_paths is not None:
+                visible_paths = visible_paths & self.model.similarity_filter_paths
 
-        self._apply_filter_results(visible_paths)
+            self._apply_filter_results(visible_paths)
+        except Exception as e:
+            logger.error(
+                "Error processing filtered paths: %s",
+                str(e),
+                exc_info=True
+            )
+            # Fallback to showing all files
+            visible_paths = set()
+            self._apply_filter_results(visible_paths)
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE,
+                source="thumbnail_view",
+                timestamp=time.time(),
+                message="Error applying filters - showing all files",
+                timeout=4000
+            ))
 
         # If another filter change arrived while this one was in flight,
         # re-submit with the latest filter values.
