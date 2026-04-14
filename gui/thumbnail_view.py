@@ -76,6 +76,7 @@ class ThumbnailViewWidget(QFrame):
         self._video_scrub_player = None  # Will be initialized later
         self._last_scrub_position = 0.0  # Initialize with a valid float value
         self._video_original_pixmap = None  # saved pixmap to restore on leave
+        self._ffmpeg_available: bool | None = None  # None = unchecked
         assert self._last_scrub_position == 0.0, "Scrub position must start at 0.0"
 
         # VirtualGridManager is created in _setupUI
@@ -209,10 +210,13 @@ class ThumbnailViewWidget(QFrame):
         if not label or not label.is_video or not isValid(label):
             return
 
-        # Check for FFmpeg availability
-        try:
-            subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except FileNotFoundError:
+        if self._ffmpeg_available is None:
+            try:
+                subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self._ffmpeg_available = True
+            except FileNotFoundError:
+                self._ffmpeg_available = False
+        if not self._ffmpeg_available:
             event_system.publish(StatusMessageEventData(
                 event_type=EventType.STATUS_MESSAGE, source="thumbnail_view",
                 timestamp=time.time(),
@@ -270,18 +274,6 @@ class ThumbnailViewWidget(QFrame):
                 else:
                     logger.warning("[scrub] Failed to generate thumbnail at position %.3f", position)
 
-    def _cleanup_video_playback(self):
-        """Clean up video playback resources."""
-        if self._hovered_video_label:
-            self._hovered_video_label.detach_video_player()
-            self._hovered_video_label = None
-            if self._video_scrub_player:
-                try:
-                    self._video_scrub_player.stop()
-                    self._video_scrub_player.hide()
-                except Exception as e:
-                    logger.error("Error cleaning up video playback: %s", e)
-
     def _on_playback_state_changed(self, playing: bool):
         pass
 
@@ -337,18 +329,22 @@ class ThumbnailViewWidget(QFrame):
 
     def _set_hovered_label(self, label: ThumbnailLabel):
         if self._hovered_label != label:
+            # Tear down any active video overlay before switching labels.
+            # _clear_hovered_label only cleans up if the leaving label matches
+            # _hovered_video_label, which it won't when gliding from a video to
+            # a non-video label.
+            if self._hovered_video_label and self._hovered_video_label != label:
+                self._clear_video_overlay(self._hovered_video_label)
+
             self._hovered_label = label
             self.thumbnailHovered.emit(label.original_path)
             event_system.publish(ThumbnailHoveredEventData(
                 event_type=EventType.THUMBNAIL_HOVERED, source="thumbnail_view",
                 timestamp=time.time(), path=label.original_path))
-            
+
             # Start video playback if it's a video
             if label.is_video:
-                self._video_original_pixmap = label.pixmap()  # save before any overwrite
-                thumb = self._generate_video_thumbnail(label.file_path, 0.0)
-                if thumb:
-                    label.updateThumbnail(QPixmap.fromImage(thumb))
+                self._video_original_pixmap = label.pixmap()  # save before mpv overlay
                 self._start_video_playback()
                 self._last_scrub_position = 0.0  # Reset scrub position tracking
 
@@ -374,16 +370,21 @@ class ThumbnailViewWidget(QFrame):
             self._priority_update_timer.start()
 
         # Clear video player if it exists
-        if self._video_scrub_player and self._hovered_video_label == label:
-            self._video_play_timer.stop()
-            if self._video_original_pixmap is not None and isValid(label):
-                label.setPixmap(self._video_original_pixmap)
-            self._video_original_pixmap = None
-            self._hovered_video_label.detach_video_player()
-            self._hovered_video_label = None
+        if self._hovered_video_label == label:
+            self._clear_video_overlay(label)
+
+    def _clear_video_overlay(self, label: ThumbnailLabel):
+        """Tear down the video player overlay and restore the label's original pixmap."""
+        self._video_play_timer.stop()
+        if self._video_original_pixmap is not None and isValid(label):
+            label.setPixmap(self._video_original_pixmap)
+        self._video_original_pixmap = None
+        label.detach_video_player()
+        self._hovered_video_label = None
+        if self._video_scrub_player:
             self._video_scrub_player.hide()
             self._video_scrub_player.stop()
-            self._video_hover_outline.hide()
+        self._video_hover_outline.hide()
 
     def _reposition_video_player(self):
         """Reposition the video overlay to stay over its label after scroll/resize."""

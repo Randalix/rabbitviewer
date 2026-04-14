@@ -142,7 +142,9 @@ class VideoView(QOpenGLWidget):
             self._current_path = None
             return False
 
-    def seek_normalized(self, norm_x: float):
+    def _seek_to_seconds(self, seconds: float):
+        """Seek to an absolute time. Uses exact precision for short clips (<10s),
+        keyframes for longer ones so scrubbing stays responsive."""
         if not self._player:
             return
         try:
@@ -151,27 +153,33 @@ class VideoView(QOpenGLWidget):
                 if not dur or dur <= 0:
                     return
                 self._duration = dur
-            target = max(0.0, min(norm_x * self._duration, self._duration))
+            target = max(0.0, min(seconds, self._duration))
             precision = "exact" if self._duration < 10.0 else "keyframes"
             self._player.seek(target, reference="absolute", precision=precision)
         except Exception:  # why: mpv property/command raises on terminated player
             pass
 
+    def seek_normalized(self, norm_x: float):
+        if not self._duration:
+            try:
+                dur = self._player.duration if self._player else None
+                if dur and dur > 0:
+                    self._duration = dur
+            except Exception:
+                pass
+        self._seek_to_seconds(norm_x * self._duration)
+
     def setPosition(self, position: float):
-        """Set the video playback position (0-based fraction of total duration)."""
-        if not self._player:
-            return
-        try:
-            if not self._duration:
-                dur = self._player.duration
-                if not dur or dur <= 0:
-                    return
-                self._duration = dur
-            target_time = self._duration * position
-            self._player.seek(target_time, reference="absolute", precision="exact")
-            self.playbackStateChanged.emit(False)  # Emit signal when playback is paused
-        except Exception:  # why: mpv property/command raises on terminated player
-            pass
+        """Seek to a normalised position (0–1). Used by the thumbnail scrub overlay."""
+        if not self._duration:
+            try:
+                dur = self._player.duration if self._player else None
+                if dur and dur > 0:
+                    self._duration = dur
+            except Exception:
+                pass
+        self._seek_to_seconds(position * self._duration)
+        self.playbackStateChanged.emit(False)
 
     # --------------------------------------------------------- mpv render callback
 
