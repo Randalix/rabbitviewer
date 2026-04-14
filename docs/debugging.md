@@ -89,6 +89,30 @@ tail -f ~/.rabbitviewer/daemon.log
 grep -E '\[(ERROR|WARNING)\]' ~/.rabbitviewer/rabbitviewer.log | tail -50
 ```
 
+**For AI-agent use**, `rabbit grep-logs` wraps the above with sane defaults:
+
+```bash
+# Errors + warnings from both logs (last 200 lines each)
+rabbit grep-logs
+
+# Scan more history
+rabbit grep-logs --tail 1000
+
+# Add custom search terms on top of the default level filter
+rabbit grep-logs --pattern "thumbnail" --pattern "cache miss"
+
+# Show surrounding context lines
+rabbit grep-logs --context 3
+
+# Lower the level floor to INFO; daemon log only
+rabbit grep-logs --level INFO --daemon-only
+
+# Pure keyword search, no level filter
+rabbit grep-logs --no-defaults --pattern "speculative"
+```
+
+Run `rabbit grep-logs --help` for all options.
+
 Default format: `%(asctime)s [%(levelname)s] %(name)s - %(message)s`
 
 Every module uses `logger = logging.getLogger(__name__)`, so `%(name)s` tells you exactly where the message originated (e.g. `core.rendermanager`, `gui.thumbnail_view`).
