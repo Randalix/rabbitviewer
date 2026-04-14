@@ -368,6 +368,18 @@ class ThumbnailViewWidget(QFrame):
             self._video_scrub_player.hide()
             self._video_scrub_player.stop()
 
+    def _reposition_video_player(self):
+        """Reposition the video overlay to stay over its label after scroll/resize."""
+        if not self._video_scrub_player or not self._hovered_video_label:
+            return
+        label = self._hovered_video_label
+        if not isValid(label):
+            return
+        label_rect = label.rect()
+        label_pos_in_view = label.mapTo(self, label_rect.topLeft())
+        self._video_scrub_player.setFixedSize(label_rect.width(), label_rect.height())
+        self._video_scrub_player.move(label_pos_in_view)
+
     @property
     def folder_paths(self) -> Set[str]:
         """Paths currently displayed as folder cards in the grid."""
@@ -604,6 +616,7 @@ class ThumbnailViewWidget(QFrame):
             self._virtual_grid.update_layout()
             self._sync_virtual_viewport()
         self._priority_update_timer.start()
+        self._reposition_video_player()
 
     def load_directory(self, directory_path: str, recursive: bool = False):
         self._notifications.reset_startup(time.perf_counter())
@@ -1538,6 +1551,7 @@ class ThumbnailViewWidget(QFrame):
         """
         self._sync_virtual_viewport()  # materialize/recycle labels for new scroll pos
         self._sel_indicator.update()
+        self._reposition_video_player()
         if not self._priority_update_timer.isActive():
             self._prioritize_visible_thumbnails()  # immediate first update
             self._priority_update_timer.start()
