@@ -2,10 +2,12 @@ from __future__ import annotations
 import os
 import time
 import logging
-logger = logging.getLogger(__name__)
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, List, Set
+
+logger = logging.getLogger(__name__)
 from PySide6.QtCore import (
     Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QEvent, Slot
 )
@@ -63,8 +65,17 @@ class ThumbnailViewWidget(QFrame):
         self.display_size = int(config_manager.get("thumbnail_size", 128))
         self.cache_dir = os.path.expanduser(config_manager.get("cache_dir"))
         self.spacing = self.gui_config.get("spacing", 5)
+        self._video_hover_timer = QTimer(self)
+        self._video_play_timer = QTimer(self)
+        self._video_play_timer.setSingleShot(True)
+        self._video_play_timer.setInterval(500)
+        self._video_play_timer.timeout.connect(self._on_video_stillness)
         self.service = None
         self.model = ThumbnailModel()
+        self._hovered_video_label = None  # Initialize video label state
+        self._video_scrub_player = None  # Will be initialized later
+        self._last_scrub_position = 0.0  # Initialize with a valid float value
+        assert self._last_scrub_position == 0.0, "Scrub position must start at 0.0"
 
         # VirtualGridManager is created in _setupUI
         self._virtual_grid: Optional[VirtualGridManager] = None
@@ -90,10 +101,12 @@ class ThumbnailViewWidget(QFrame):
         # Single shared video player for thumbnail scrubbing. Created at startup
         # so Qt sets up OpenGL compositing for the window immediately (avoids the
         # window restructuring flash that would occur on first hover otherwise).
-        self._video_scrub_player = VideoView(scrub=True, parent=self._grid_container)
+        self._video_scrub_player = VideoView(scrub=True, parent=self)
         self._video_scrub_player.setFocusPolicy(Qt.NoFocus)
         self._video_scrub_player.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._video_scrub_player.hide()
+        # Ensure video player doesn't affect grid layout
+        self._video_scrub_player.setGeometry(0, 0, 1, 1)
 
         self._video_hover_timer = QTimer(self)
         self._video_hover_timer.setInterval(250)  # ms to hover before playback starts
@@ -186,6 +199,19 @@ class ThumbnailViewWidget(QFrame):
         if not label or not label.is_video or not isValid(label):
             return
 
+        # Check for FFmpeg availability
+        try:
+            subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except FileNotFoundError:
+            event_system.publish(StatusMessageEventData(
+                event_type=EventType.STATUS_MESSAGE, source="thumbnail_view",
+                timestamp=time.time(),
+                message="FFmpeg not found - video thumbnails disabled",
+                timeout=5000
+            ))
+            return
+
+        # Clean up any existing video playback
         if self._hovered_video_label and self._hovered_video_label != label:
             self._hovered_video_label.detach_video_player()
 
@@ -198,6 +224,53 @@ class ThumbnailViewWidget(QFrame):
         player.show()
         player.raise_()
         label.attach_video_player(player)
+
+        # Connect scrubbing controls
+        player.positionChanged.connect(self._on_video_position_changed)
+        player.playbackStateChanged.connect(self._on_playback_state_changed)
+
+        # Initialize scrub position tracking and arm stillness timer
+        self._last_scrub_position = 0.0
+        self._video_play_timer.start()
+
+    def _on_video_stillness(self):
+        """Called 500ms after the last mouse movement — unpause from current scrub position."""
+        if self._video_scrub_player and self._hovered_video_label:
+            self._video_scrub_player.play()
+
+    def _on_video_position_changed(self, position: float):
+        """Handle video scrubbing position changes."""
+        if self._hovered_video_label:
+            logger.debug("[scrub] Position changed to %.3f (from %.3f)", position, self._last_scrub_position)
+            
+            # Only update position if it's changed
+            if self._last_scrub_position != position:
+                self._last_scrub_position = position
+                
+                # Generate new thumbnail at current position
+                thumb = self._generate_video_thumbnail(
+                    self._hovered_video_label.file_path, 
+                    position
+                )
+                if thumb:
+                    self._hovered_video_label.updateThumbnail(QPixmap.fromImage(thumb))
+                else:
+                    logger.warning("[scrub] Failed to generate thumbnail at position %.3f", position)
+
+    def _cleanup_video_playback(self):
+        """Clean up video playback resources."""
+        if self._hovered_video_label:
+            self._hovered_video_label.detach_video_player()
+            self._hovered_video_label = None
+            if self._video_scrub_player:
+                try:
+                    self._video_scrub_player.stop()
+                    self._video_scrub_player.hide()
+                except Exception as e:
+                    logger.error("Error cleaning up video playback: %s", e)
+
+    def _on_playback_state_changed(self, playing: bool):
+        pass
 
     def _update_label_selection(self, orig_idx: int, selected: bool) -> None:
         """Callback for SelectionInteraction to update label highlight state."""
@@ -256,6 +329,16 @@ class ThumbnailViewWidget(QFrame):
             event_system.publish(ThumbnailHoveredEventData(
                 event_type=EventType.THUMBNAIL_HOVERED, source="thumbnail_view",
                 timestamp=time.time(), path=label.original_path))
+            
+            # Start video playback if it's a video
+            if label.is_video:
+                # Generate thumbnail at current position
+                thumb = self._generate_video_thumbnail(label.file_path, 0.0)
+                if thumb:
+                    label.updateThumbnail(QPixmap.fromImage(thumb))
+                self._start_video_playback()
+                self._last_scrub_position = 0.0  # Reset scrub position tracking
+
             if getattr(label, 'is_folder', False) and label._folder_node:
                 node = label._folder_node
                 count = node.recursive_count or node.image_count
@@ -270,18 +353,20 @@ class ThumbnailViewWidget(QFrame):
 
     def _clear_hovered_label(self, label: ThumbnailLabel):
         if self._hovered_label == label:
-            self._video_hover_timer.stop()
-            if self._hovered_video_label:
-                self._hovered_video_label.detach_video_player()
-                self._video_scrub_player.hide()
-                self._hovered_video_label = None
-
             self._hovered_label = None
             self.thumbnailLeft.emit()
             event_system.publish(EventData(
                 event_type=EventType.THUMBNAIL_LEFT, source="thumbnail_view",
                 timestamp=time.time()))
             self._priority_update_timer.start()
+
+        # Clear video player if it exists
+        if self._video_scrub_player and self._hovered_video_label == label:
+            self._video_play_timer.stop()
+            self._hovered_video_label.detach_video_player()
+            self._hovered_video_label = None
+            self._video_scrub_player.hide()
+            self._video_scrub_player.stop()
 
     @property
     def folder_paths(self) -> Set[str]:
@@ -311,6 +396,29 @@ class ThumbnailViewWidget(QFrame):
         if self.selection.is_range_selection_active or (self.selection.is_in_drag and event.buttons() & Qt.LeftButton):
             current_idx = self._get_thumbnail_at_pos(event.pos())
             self.selection.on_mouse_move(current_idx)
+
+        # Handle video scrubbing position tracking
+        if self._hovered_video_label and self._video_scrub_player:
+            pos = self.mapToGlobal(event.pos())
+            player_pos = self._video_scrub_player.mapFromGlobal(pos)
+            
+            # Access the video widget correctly
+            video_widget = self._video_scrub_player.video_widget
+            if video_widget.rect().contains(player_pos):
+                # Calculate scrub position based on mouse coordinates
+                rect = video_widget.rect()
+                logger.debug("[scrub] video widget rect: %s", rect)
+                
+                normalized_pos = (player_pos.x() - rect.left()) / rect.width()
+                position = max(0, min(1, normalized_pos))
+                logger.debug("[scrub] calculated position: %.3f", position)
+                
+                if abs(position - self._last_scrub_position) > 0.01:
+                    logger.debug("[scrub] updating position from %.3f to %.3f",
+                                self._last_scrub_position, position)
+                    self._video_scrub_player.setPosition(position)
+                    self._last_scrub_position = position
+                    self._video_play_timer.start()  # reset 500ms countdown on movement
 
     def _recycle_label(self, label: ThumbnailLabel):
         if not isValid(label):
@@ -1011,6 +1119,49 @@ class ThumbnailViewWidget(QFrame):
         if degrees:
             return image.transformed(QTransform().rotate(degrees), Qt.SmoothTransformation)
         return image
+
+    def _generate_video_thumbnail(self, file_path: str, position: float = 0.0):
+        """Generate video thumbnail using FFmpeg.
+        
+        Args:
+            file_path: Path to video file
+            position: Optional seek position (0-based)
+        """
+        try:
+            thumb_dir = os.path.join(self.cache_dir, "video_thumbs")
+            os.makedirs(thumb_dir, exist_ok=True)
+            
+            base_name = os.path.basename(file_path)
+            thumb_path = os.path.join(thumb_dir, f"{base_name}_{int(position * 1000)}.png")
+            
+            if os.path.exists(thumb_path):  # disk-io: local thumbnail cache file
+                image = QImage(thumb_path)
+                if not image.isNull():
+                    return image
+                    
+            cmd = [
+                "ffmpeg",
+                "-ss", str(position),
+                "-i", file_path,
+                "-frames:v", "1",
+                "-q:v", "2",
+                "-an",
+                thumb_path
+            ]
+            
+            subprocess.run(cmd, stderr=subprocess.PIPE, timeout=5)
+            
+            image = QImage(thumb_path)
+            if not image.isNull():
+                return image
+            return None
+            
+        except subprocess.CalledProcessError as e:
+            logger.error("FFmpeg error generating thumbnail for %s: %s", file_path, e.stderr.decode())
+            return None
+        except Exception as e:
+            logger.error("Error generating thumbnail for %s: %s", file_path, str(e))
+            return None
 
     def rotate_thumbnails(self, image_paths: List[str], degrees: int) -> None:
         # why: optimistic rotation for immediate feedback before regenerated thumbnail arrives

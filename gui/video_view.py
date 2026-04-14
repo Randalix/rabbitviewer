@@ -1,5 +1,6 @@
 import logging
 import time
+import subprocess
 
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QPointF
@@ -26,6 +27,8 @@ class VideoView(QOpenGLWidget):
     navigateRequested = Signal(str)  # "next" or "previous"
     _mpv_frame_ready = Signal()  # thread-safe bridge from mpv decode thread → Qt
     firstFrameReady = Signal()   # emitted once per loadVideo when first frame arrives
+    positionChanged = Signal(float)
+    playbackStateChanged = Signal(bool)
 
     def __init__(self, scrub: bool = False, parent=None):
         super().__init__(parent)
@@ -34,6 +37,8 @@ class VideoView(QOpenGLWidget):
             self.setAttribute(Qt.WA_DeleteOnClose)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
+        # Debug: Show red border to verify alignment with thumbnail
+        self.setStyleSheet("border: 2px solid red;")
 
         self._current_path: str | None = None
         self._duration: float = 0.0
@@ -73,6 +78,9 @@ class VideoView(QOpenGLWidget):
         self._current_path = path
         self._duration = 0.0
 
+        # Geometry is already set by the caller (_start_video_playback).
+        # Do not override it here.
+
         try:
             import mpv
 
@@ -82,6 +90,7 @@ class VideoView(QOpenGLWidget):
                     input_default_bindings=False,
                     input_vo_keyboard=False,
                     keep_open="yes",
+                    loop_file="inf",
                     hwdec="auto-safe",
                     hr_seek="yes",
                     pause=True,
@@ -116,6 +125,7 @@ class VideoView(QOpenGLWidget):
             self.doneCurrent()
 
             self._player.play(path)
+            self.playbackStateChanged.emit(True)  # Emit signal when playback starts
 
             if not self._scrub:
                 self._status_timer.start()
@@ -144,6 +154,22 @@ class VideoView(QOpenGLWidget):
             target = max(0.0, min(norm_x * self._duration, self._duration))
             precision = "exact" if self._duration < 10.0 else "keyframes"
             self._player.seek(target, reference="absolute", precision=precision)
+        except Exception:  # why: mpv property/command raises on terminated player
+            pass
+
+    def setPosition(self, position: float):
+        """Set the video playback position (0-based fraction of total duration)."""
+        if not self._player:
+            return
+        try:
+            if not self._duration:
+                dur = self._player.duration
+                if not dur or dur <= 0:
+                    return
+                self._duration = dur
+            target_time = self._duration * position
+            self._player.seek(target_time, reference="absolute", precision="exact")
+            self.playbackStateChanged.emit(False)  # Emit signal when playback is paused
         except Exception:  # why: mpv property/command raises on terminated player
             pass
 
@@ -403,6 +429,33 @@ class VideoView(QOpenGLWidget):
                 pass
             self._player = None
 
+    @property
+    def video_widget(self):
+        """Expose ourselves as the video widget for rendering"""
+        return self
+
+    def _apply_scaling(self):
+        """Ensure video fits within thumbnail boundaries while maintaining aspect ratio."""
+        w, h = self.width(), self.height()
+        if w <= 1 or h <= 1:
+            return
+
+        # The player is already sized to match the thumbnail by the caller
+        # Just ensure the video_widget (self) occupies the full space
+        self.setFixedSize(w, h)
+
     def closeEvent(self, event):
         self._destroy_player()
         super().closeEvent(event)
+
+    def play(self):
+        """Unpause playback from the current position."""
+        if self._player:
+            try:
+                self._player.pause = False
+            except Exception:  # why: mpv property raises on terminated player
+                pass
+
+    def stop(self):
+        """Stop video playback and clean up resources."""
+        self._destroy_player()

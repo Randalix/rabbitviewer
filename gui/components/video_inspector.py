@@ -1,7 +1,7 @@
 import logging
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from gui.video_view import VideoView
 
@@ -21,18 +21,29 @@ class VideoInspector(QWidget):
         self._current_path: str | None = None
         self._is_panning = False
 
+        self.setMouseTracking(True)
+        self._video_view.setMouseTracking(True)
+
+        self._play_timer = QTimer(self)
+        self._play_timer.setSingleShot(True)
+        self._play_timer.setInterval(500)
+        self._play_timer.timeout.connect(self._video_view.play)
+
     @property
     def current_path(self) -> str | None:
         return self._current_path
 
     def load_video(self, path: str) -> bool:
         self._current_path = path
-        return self._video_view.loadVideo(path)
+        result = self._video_view.loadVideo(path)
+        self._play_timer.start()
+        return result
 
     def seek_normalized(self, norm_x: float):
         self._video_view.seek_normalized(norm_x)
 
     def destroy_player(self):
+        self._play_timer.stop()
         self._video_view.close()
 
     # ------------------------------------------------------------------ input
@@ -50,6 +61,7 @@ class VideoInspector(QWidget):
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):
+        self._play_timer.start()  # reset 500ms countdown on any movement
         if self._is_panning:
             self._scrub_at(event)
         super().mouseMoveEvent(event)
