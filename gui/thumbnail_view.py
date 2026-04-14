@@ -75,6 +75,7 @@ class ThumbnailViewWidget(QFrame):
         self._hovered_video_label = None  # Initialize video label state
         self._video_scrub_player = None  # Will be initialized later
         self._last_scrub_position = 0.0  # Initialize with a valid float value
+        self._video_original_pixmap = None  # saved pixmap to restore on leave
         assert self._last_scrub_position == 0.0, "Scrub position must start at 0.0"
 
         # VirtualGridManager is created in _setupUI
@@ -114,6 +115,15 @@ class ThumbnailViewWidget(QFrame):
         self._video_hover_timer.timeout.connect(self._start_video_playback)
         self._hovered_video_label: Optional[ThumbnailLabel] = None
 
+        # Outline overlay — sits above the video player to keep the hover border visible.
+        bw = self.gui_config.get("border_width", 1)
+        hc = self.gui_config.get("hover_border_color", "#2d59b6")
+        self._video_hover_outline = QWidget(self)
+        self._video_hover_outline.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._video_hover_outline.setStyleSheet(
+            f"QWidget {{ border: {bw}px solid {hc}; background: transparent; }}"
+        )
+        self._video_hover_outline.hide()
 
         self.viewport().installEventFilter(self)
         self.installEventFilter(self)
@@ -223,6 +233,9 @@ class ThumbnailViewWidget(QFrame):
         player.loadVideo(label.file_path)
         player.show()
         player.raise_()
+        self._video_hover_outline.setGeometry(player.geometry())
+        self._video_hover_outline.show()
+        self._video_hover_outline.raise_()
         label.attach_video_player(player)
 
         # Connect scrubbing controls
@@ -332,7 +345,7 @@ class ThumbnailViewWidget(QFrame):
             
             # Start video playback if it's a video
             if label.is_video:
-                # Generate thumbnail at current position
+                self._video_original_pixmap = label.pixmap()  # save before any overwrite
                 thumb = self._generate_video_thumbnail(label.file_path, 0.0)
                 if thumb:
                     label.updateThumbnail(QPixmap.fromImage(thumb))
@@ -363,10 +376,14 @@ class ThumbnailViewWidget(QFrame):
         # Clear video player if it exists
         if self._video_scrub_player and self._hovered_video_label == label:
             self._video_play_timer.stop()
+            if self._video_original_pixmap is not None and isValid(label):
+                label.setPixmap(self._video_original_pixmap)
+            self._video_original_pixmap = None
             self._hovered_video_label.detach_video_player()
             self._hovered_video_label = None
             self._video_scrub_player.hide()
             self._video_scrub_player.stop()
+            self._video_hover_outline.hide()
 
     def _reposition_video_player(self):
         """Reposition the video overlay to stay over its label after scroll/resize."""
@@ -379,6 +396,7 @@ class ThumbnailViewWidget(QFrame):
         label_pos_in_view = label.mapTo(self, label_rect.topLeft())
         self._video_scrub_player.setFixedSize(label_rect.width(), label_rect.height())
         self._video_scrub_player.move(label_pos_in_view)
+        self._video_hover_outline.setGeometry(self._video_scrub_player.geometry())
 
     @property
     def folder_paths(self) -> Set[str]:
