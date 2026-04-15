@@ -37,8 +37,6 @@ class VideoView(QOpenGLWidget):
             self.setAttribute(Qt.WA_DeleteOnClose)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
-        # Debug: Show red border to verify alignment with thumbnail
-        self.setStyleSheet("border: 2px solid red;")
 
         self._current_path: str | None = None
         self._duration: float = 0.0
@@ -48,6 +46,21 @@ class VideoView(QOpenGLWidget):
         self._render_ctx = None
         self._has_first_frame: bool = False
         self._fallback_pixmap: QPixmap | None = None
+
+        # Child cover label — only created for scrub mode.  Because it is a
+        # child of this QOpenGLWidget it composites inside the same native
+        # CALayer on macOS, so it reliably covers the black GL surface during
+        # mpv initialisation.  A sibling widget outside the GL layer cannot
+        # guarantee this because the system compositor may interleave the two
+        # layers independently.
+        if scrub:
+            from PySide6.QtWidgets import QLabel
+            self._cover = QLabel(self)
+            self._cover.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self._cover.setAlignment(Qt.AlignCenter)
+            self._cover.hide()
+        else:
+            self._cover = None
 
         self._mpv_frame_ready.connect(self._on_qt_frame_ready, Qt.QueuedConnection)
 
@@ -77,6 +90,7 @@ class VideoView(QOpenGLWidget):
         self._destroy_player()
         self._current_path = path
         self._duration = 0.0
+        self._has_first_frame = False
 
         # Geometry is already set by the caller (_start_video_playback).
         # Do not override it here.
@@ -191,7 +205,14 @@ class VideoView(QOpenGLWidget):
 
     def paintEvent(self, event):
         if self._scrub and not self._has_first_frame and self._fallback_pixmap and not self._fallback_pixmap.isNull():
+            logger.debug(
+                "[video-align] fallback paint: widget=(%d,%d) pixmap=(%d,%d)",
+                self.width(), self.height(),
+                self._fallback_pixmap.width(), self._fallback_pixmap.height(),
+            )
             painter = QPainter(self)
+            # TODO: drawPixmap(rect, pixmap) stretches — use KeepAspectRatio to
+            # match the label's AlignCenter rendering and avoid a jump on first frame.
             painter.drawPixmap(self.rect(), self._fallback_pixmap)
             painter.end()
             return
@@ -211,6 +232,11 @@ class VideoView(QOpenGLWidget):
         fbo = self.defaultFramebufferObject()
         w = int(self.width() * self.devicePixelRatio())
         h = int(self.height() * self.devicePixelRatio())
+        logger.debug(
+            "[video-align] paintGL: widget=(%d,%d) dpr=%.1f render_fbo=(%d,%d) pos=(%d,%d)",
+            self.width(), self.height(), self.devicePixelRatio(),
+            w, h, self.x(), self.y(),
+        )
         self._render_ctx.render(
             opengl_fbo={'w': w, 'h': h, 'fbo': fbo},
             flip_y=True,

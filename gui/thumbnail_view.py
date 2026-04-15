@@ -15,7 +15,7 @@ from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QTransform
 from gui.color_profile import apply_profile_pixmap
 from gui.ocio_display import apply_ocio_to_qimage
 from PySide6.QtWidgets import (
-    QVBoxLayout, QScrollArea, QWidget, QFrame
+    QVBoxLayout, QScrollArea, QWidget, QFrame, QLabel
 )
 
 from gui.picture_base import PictureBase
@@ -73,6 +73,7 @@ class ThumbnailViewWidget(QFrame):
         self.service = None
         self.model = ThumbnailModel()
         self._hovered_video_label = None  # Initialize video label state
+        self._hovered_vis_idx: Optional[int] = None  # vis_idx of the label under the video overlay
         self._video_scrub_player = None  # Will be initialized later
         self._last_scrub_position = 0.0  # Initialize with a valid float value
         self._video_original_pixmap = None  # saved pixmap to restore on leave
@@ -108,6 +109,16 @@ class ThumbnailViewWidget(QFrame):
         self._video_scrub_player.hide()
         # Ensure video player doesn't affect grid layout
         self._video_scrub_player.setGeometry(0, 0, 1, 1)
+
+        # Cover label: plain QLabel that shows the static thumbnail while the
+        # VideoView initialises.  Sits above the VideoView; hidden once mpv has
+        # its first real frame so the live video shows through beneath.
+        bg = self.gui_config.get("placeholder_color", "#1a1a1a")
+        self._video_cover_label = QLabel(self)
+        self._video_cover_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._video_cover_label.setAlignment(Qt.AlignCenter)
+        self._video_cover_label.setStyleSheet(f"background: {bg};")
+        self._video_cover_label.hide()
 
         self._video_hover_timer = QTimer(self)
         self._video_hover_timer.setInterval(250)  # ms to hover before playback starts
@@ -226,25 +237,51 @@ class ThumbnailViewWidget(QFrame):
             self._hovered_video_label.detach_video_player()
 
         self._hovered_video_label = label
+        self._hovered_vis_idx = label.vis_idx
         player = self._video_scrub_player
-        pos = label.mapTo(self._grid_container, QPoint(0, 0))
-        player.setGeometry(pos.x(), pos.y(), label.width(), label.height())
+
+        pos = self._video_player_pos(self._hovered_vis_idx)
+        logger.debug(
+            "[video-align] start vis_idx=%d pos=(%d,%d) size=(%d,%d) scroll_y=%d",
+            self._hovered_vis_idx, pos.x(), pos.y(),
+            label.width(), label.height(),
+            self.scroll_area.verticalScrollBar().value(),
+        )
+        geom = (pos.x(), pos.y(), label.width(), label.height())
+        player.setGeometry(*geom)
         player.set_fallback_pixmap(label.pixmap())
         player.loadVideo(label.file_path)
-        player.show()
-        player.raise_()
-        self._video_hover_outline.setGeometry(player.geometry())
+        player.firstFrameReady.connect(self._on_first_video_frame_ready)
+
+        # Show the cover label immediately so the thumbnail is visible while
+        # mpv initialises.  The VideoView stays hidden until firstFrameReady.
+        self._video_cover_label.setGeometry(*geom)
+        self._video_cover_label.setPixmap(label.pixmap())
+        self._video_cover_label.show()
+        self._video_cover_label.raise_()
+
+        self._video_hover_outline.setGeometry(*geom)
         self._video_hover_outline.show()
         self._video_hover_outline.raise_()
         label.attach_video_player(player)
 
-        # Connect scrubbing controls
+        # Connect scrubbing controls — disconnected symmetrically in _clear_video_overlay.
         player.positionChanged.connect(self._on_video_position_changed)
-        player.playbackStateChanged.connect(self._on_playback_state_changed)
 
         # Initialize scrub position tracking and arm stillness timer
         self._last_scrub_position = 0.0
         self._video_play_timer.start()
+
+    def _on_first_video_frame_ready(self):
+        if self._hovered_vis_idx is None:
+            return  # hover cleared before the first frame arrived
+        player = self._video_scrub_player
+        player.show()
+        # repaint() is synchronous: calls paintGL() immediately, populating the
+        # GL FBO with the real frame before the cover is removed.  Without this,
+        # the FBO is still black when the cover hides, causing a black flash.
+        player.repaint()
+        self._video_cover_label.hide()
 
     def _on_video_stillness(self):
         """Called 500ms after the last mouse movement — unpause from current scrub position."""
@@ -269,9 +306,6 @@ class ThumbnailViewWidget(QFrame):
                     self._hovered_video_label.updateThumbnail(QPixmap.fromImage(thumb))
                 else:
                     logger.warning("[scrub] Failed to generate thumbnail at position %.3f", position)
-
-    def _on_playback_state_changed(self, playing: bool):
-        pass
 
     def _update_label_selection(self, orig_idx: int, selected: bool) -> None:
         """Callback for SelectionInteraction to update label highlight state."""
@@ -370,30 +404,53 @@ class ThumbnailViewWidget(QFrame):
             self._clear_video_overlay(label)
 
     def _clear_video_overlay(self, label: ThumbnailLabel):
-        """Tear down the video player overlay and restore the label's original pixmap."""
         self._video_play_timer.stop()
         if self._video_original_pixmap is not None and isValid(label):
             label.setPixmap(self._video_original_pixmap)
         self._video_original_pixmap = None
         label.detach_video_player()
         self._hovered_video_label = None
+        self._hovered_vis_idx = None
         if self._video_scrub_player:
+            # Disconnect to prevent accumulating duplicate connections across hovers.
+            for sig, slot in [
+                (self._video_scrub_player.positionChanged, self._on_video_position_changed),
+                (self._video_scrub_player.firstFrameReady, self._on_first_video_frame_ready),
+            ]:
+                try:
+                    sig.disconnect(slot)
+                except RuntimeError:
+                    pass  # why: disconnect raises if never connected (e.g. FFmpeg missing, frame arrived before clear)
             self._video_scrub_player.hide()
             self._video_scrub_player.stop()
+        self._video_cover_label.hide()
         self._video_hover_outline.hide()
 
+    def _video_player_pos(self, vis_idx: int) -> QPoint:
+        """Compute the player's position in self's coordinate space from grid math.
+
+        Avoids mapTo(label) so the result is never stale due to a recycled or
+        reflowed label widget.  Grid coordinates are authoritative; the scroll
+        offset and viewport inset are the only runtime inputs.
+        """
+        grid = self._virtual_grid
+        scroll_x = self.scroll_area.horizontalScrollBar().value()
+        scroll_y = self.scroll_area.verticalScrollBar().value()
+        container_pos = grid.pos_for(vis_idx)
+        vp_pos = QPoint(container_pos.x() - scroll_x, container_pos.y() - scroll_y)
+        return self.scroll_area.viewport().mapTo(self, vp_pos)
+
     def _reposition_video_player(self):
-        """Reposition the video overlay to stay over its label after scroll/resize."""
-        if not self._video_scrub_player or not self._hovered_video_label:
+        """Reposition the video overlay using pure grid math — no widget mapTo."""
+        if not self._video_scrub_player or self._hovered_vis_idx is None:
             return
-        label = self._hovered_video_label
-        if not isValid(label):
-            return
-        label_rect = label.rect()
-        label_pos_in_view = label.mapTo(self, label_rect.topLeft())
-        self._video_scrub_player.setFixedSize(label_rect.width(), label_rect.height())
-        self._video_scrub_player.move(label_pos_in_view)
-        self._video_hover_outline.setGeometry(self._video_scrub_player.geometry())
+        pos = self._video_player_pos(self._hovered_vis_idx)
+        logger.debug("[video-align] reposition vis_idx=%d pos=(%d,%d)",
+                     self._hovered_vis_idx, pos.x(), pos.y())
+        w, h = self._video_scrub_player.width(), self._video_scrub_player.height()
+        self._video_scrub_player.move(pos)
+        self._video_cover_label.setGeometry(pos.x(), pos.y(), w, h)
+        self._video_hover_outline.setGeometry(pos.x(), pos.y(), w, h)
 
     @property
     def folder_paths(self) -> Set[str]:
@@ -1493,6 +1550,7 @@ class ThumbnailViewWidget(QFrame):
 
         label = self._get_or_create_label(file_path, original_idx)
         label._original_idx = original_idx
+        label.vis_idx = visible_idx
         label._overlay_manager = self.overlay_manager
 
         # Configure folder cards

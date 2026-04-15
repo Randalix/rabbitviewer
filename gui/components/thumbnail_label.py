@@ -37,6 +37,7 @@ class ThumbnailLabel(ItemCard):
         self.config = config
 
         self._original_idx: int = -1
+        self.vis_idx: int = -1
         self._overlay_manager: OverlayManager | None = None
         self._display_rating: Optional[int] = None  # set by ThumbnailViewWidget in ratings mode
 

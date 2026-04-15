@@ -82,6 +82,10 @@ class VirtualGridManager(QObject):
     def columns(self) -> int:
         return self._columns
 
+    def pos_for(self, vis_idx: int) -> QPoint:
+        """Return the top-left position of *vis_idx* in container coordinates."""
+        return QPoint(self._pos_x(vis_idx), self._pos_y(vis_idx))
+
     def calculate_columns(self, available_width: int) -> int:
         content_width = available_width - 2 * self._spacing
         if content_width < self._thumb_size:
