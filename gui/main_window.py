@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self._tree_panel.navigate_to.connect(
             lambda path: self.load_directory(path, recursive=False))
         self._tree_panel.bookmarks_changed.connect(self._refresh_tree_roots)
+        self._tree_panel.watch_path_requested.connect(self._add_watch_path)
         self._tree_panel.setMinimumWidth(150)
         self._tree_panel_width = 250  # restored width when re-shown
 
@@ -1081,6 +1082,13 @@ class MainWindow(QMainWindow):
             hovered,
         )
         menu.exec(pos)
+
+    def _add_watch_path(self, path: str) -> None:
+        watch_paths = self.config_manager.get("watch_paths", [])
+        if path not in watch_paths:
+            watch_paths = list(watch_paths) + [path]
+            self.config_manager.set("watch_paths", watch_paths)
+            self._refresh_tree_roots()
 
     def _refresh_tree_roots(self):
         watch_paths = self.config_manager.get("watch_paths", [])

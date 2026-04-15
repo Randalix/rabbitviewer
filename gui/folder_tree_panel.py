@@ -94,6 +94,7 @@ class FolderTreePanel(QWidget):
 
     navigate_to = Signal(str)
     bookmarks_changed = Signal()
+    watch_path_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -213,6 +214,11 @@ class FolderTreePanel(QWidget):
         else:
             action = menu.addAction("Add to bookmarks")
             action.triggered.connect(lambda: self._add_to_bookmarks(path))
+
+        if path not in self._watch_roots:
+            menu.addSeparator()
+            action = menu.addAction("Add to watch paths")
+            action.triggered.connect(lambda: self.watch_path_requested.emit(path))
 
         menu.exec(self._tree.viewport().mapToGlobal(position))
 
