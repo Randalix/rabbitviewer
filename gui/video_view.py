@@ -82,7 +82,7 @@ class VideoView(QOpenGLWidget):
                      self._has_first_frame, self._fallback_pixmap is not None)
         super().resizeEvent(event)
 
-    def loadVideo(self, path: str) -> bool:
+    def loadVideo(self, path: str, start_pct: float = 0.0) -> bool:
         if path == self._current_path and self._player:
             logger.debug("[flash] loadVideo early-return (same path) size=(%d,%d)", self.width(), self.height())
             return True
@@ -100,7 +100,7 @@ class VideoView(QOpenGLWidget):
             import mpv
 
             if self._scrub:
-                self._player = mpv.MPV(
+                mpv_kwargs = dict(
                     vo="libmpv",
                     input_default_bindings=False,
                     input_vo_keyboard=False,
@@ -110,7 +110,15 @@ class VideoView(QOpenGLWidget):
                     hr_seek="yes",
                     pause=True,
                     aid="no",
+                    # Widget is sized to the ffmpeg thumbnail's aspect ratio, so
+                    # any mpv letterboxing would be sub-pixel and appear as a shift
+                    # relative to the JPEG thumbnail. Stretching to fill is at most
+                    # a 1-pixel aspect distortion — invisible in practice.
+                    keepaspect="no",
                 )
+                if start_pct > 0.0:
+                    mpv_kwargs["start"] = f"{start_pct * 100:.1f}%"
+                self._player = mpv.MPV(**mpv_kwargs)
             else:
                 self._player = mpv.MPV(
                     vo="libmpv",
@@ -207,56 +215,45 @@ class VideoView(QOpenGLWidget):
     @Slot()
     def _on_qt_frame_ready(self):
         if not self._has_first_frame:
-            self._has_first_frame = True
-            # Don't clear _fallback_pixmap here — pts=None at this point means
-            # mpv fired its update callback but hasn't decoded a real frame yet.
-            # paintGL clears the fallback on the first non-None pts render.
-            logger.debug("[flash] first frame ready size=(%d,%d)", self.width(), self.height())
-            self.firstFrameReady.emit()
-        else:
-            logger.debug("[flash] mpv frame update (subsequent) size=(%d,%d)", self.width(), self.height())
+            # Gate on pts being non-None: mpv fires its update callback before
+            # the first frame is decoded, so _has_first_frame must not be set
+            # until there is actually something to render (pts != None).
+            try:
+                pts_ready = self._player.time_pos is not None if self._player else False
+            except Exception:
+                pts_ready = False
+            if pts_ready:
+                self._has_first_frame = True
+                self._fallback_pixmap = None
+                logger.debug("[flash] first real frame ready size=(%d,%d)", self.width(), self.height())
+                self.firstFrameReady.emit()
         self.update()
 
     def paintGL(self):
-        if self._scrub and self._fallback_pixmap and not self._fallback_pixmap.isNull():
-            # Show fallback until mpv has a genuinely decoded frame (pts != None).
-            # Even after _has_first_frame is set, pts=None means the surface is
-            # still black — mpv's update callback fires before the first decode.
-            pts_ready = False
-            if self._has_first_frame and self._render_ctx and self._player:
-                try:
-                    pts_ready = self._player.time_pos is not None
-                except Exception:
-                    pass
-            if not pts_ready:
-                logger.debug("[flash] paintGL FALLBACK (pts not ready) size=(%d,%d)", self.width(), self.height())
-                scaled = self._fallback_pixmap.scaled(
-                    self.width(), self.height(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
-                painter = QPainter(self)
-                x = (self.width() - scaled.width()) // 2
-                y = (self.height() - scaled.height()) // 2
-                painter.drawPixmap(x, y, scaled)
-                painter.end()
-                return
-            # pts is non-None — mpv has real content; drop the fallback.
-            logger.debug("[flash] paintGL dropping fallback, pts ready size=(%d,%d)", self.width(), self.height())
-            self._fallback_pixmap = None
-
-        if not self._render_ctx:
-            logger.debug("[flash] paintGL NO-CTX size=(%d,%d) first_frame=%s",
-                         self.width(), self.height(), self._has_first_frame)
+        if self._scrub and not self._has_first_frame and self._fallback_pixmap and not self._fallback_pixmap.isNull():
+            logger.debug("[flash] paintGL FALLBACK size=(%d,%d)", self.width(), self.height())
+            scaled = self._fallback_pixmap.scaled(
+                self.width(), self.height(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            painter = QPainter(self)
+            x = (self.width() - scaled.width()) // 2
+            y = (self.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+            painter.end()
             return
-        try:
-            pts = self._player.time_pos if self._player else None
-        except Exception:
-            pts = None
-        logger.debug("[flash] paintGL MPV size=(%d,%d) pts=%s", self.width(), self.height(), pts)
+        if not self._render_ctx:
+            return
         fbo = self.defaultFramebufferObject()
-        w = int(self.width() * self.devicePixelRatio())
-        h = int(self.height() * self.devicePixelRatio())
+        dpr = self.devicePixelRatio()
+        w = int(self.width() * dpr)
+        h = int(self.height() * dpr)
+        if self._scrub:
+            logger.debug(
+                "[align-mpv] paintGL css=(%d,%d) dpr=%.2f fbo=(%d,%d) widget_pos=(%d,%d)",
+                self.width(), self.height(), dpr, w, h, self.x(), self.y(),
+            )
         self._render_ctx.render(
             opengl_fbo={'w': w, 'h': h, 'fbo': fbo},
             flip_y=True,

@@ -9,13 +9,13 @@ from typing import Optional, Dict, List, Set
 
 logger = logging.getLogger(__name__)
 from PySide6.QtCore import (
-    Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QEvent, Slot
+    Qt, Signal, QTimer, QElapsedTimer, QPoint, QPointF, QEvent, QSize, Slot
 )
 from PySide6.QtGui import QPixmap, QImage, QColor, QMouseEvent, QTransform
 from gui.color_profile import apply_profile_pixmap
 from gui.ocio_display import apply_ocio_to_qimage
 from PySide6.QtWidgets import (
-    QVBoxLayout, QScrollArea, QWidget, QFrame
+    QVBoxLayout, QScrollArea, QWidget, QFrame, QStyle
 )
 
 from gui.picture_base import PictureBase
@@ -229,24 +229,32 @@ class ThumbnailViewWidget(QFrame):
 
         self._hovered_video_label = label
         self._hovered_vis_idx = label.vis_idx
+        logger.debug("[revert] _hovered_video_label set path=%s", label.file_path)
         player = self._video_scrub_player
 
         pos = self._video_player_pos(self._hovered_vis_idx)
+        # Ground truth: where does the label itself say it is in self's coords?
+        label_self_pos = label.mapTo(self, label.rect().topLeft())
+        ox, oy, pw, ph = self._pixmap_rect_in_label(label)
         logger.debug(
-            "[video-align] start vis_idx=%d pos=(%d,%d) size=(%d,%d) scroll_y=%d",
-            self._hovered_vis_idx, pos.x(), pos.y(),
-            label.width(), label.height(),
-            self.scroll_area.verticalScrollBar().value(),
+            "[align] playback vis_idx=%d player_pos=(%d,%d) label_self_pos=(%d,%d) delta=(%d,%d) pixmap_size=(%s) pixmap_offset=(%d,%d)",
+            self._hovered_vis_idx,
+            pos.x(), pos.y(),
+            label_self_pos.x(), label_self_pos.y(),
+            pos.x() - label_self_pos.x(), pos.y() - label_self_pos.y(),
+            f"{pw}x{ph}" if label.pixmap() and not label.pixmap().isNull() else "null",
+            ox, oy,
         )
-        geom = (pos.x(), pos.y(), label.width(), label.height())
+        video_geom = (pos.x() + ox, pos.y() + oy, pw, ph)
+        outline_geom = (pos.x(), pos.y(), label.width(), label.height())
         # loadVideo first so _has_first_frame is reset before setGeometry
         # triggers the first paintGL (which uses the fallback pixmap).
-        player.loadVideo(label.file_path)
+        player.loadVideo(label.file_path, start_pct=0.1)
         player.set_fallback_pixmap(label.pixmap())
-        player.setGeometry(*geom)
+        player.setGeometry(*video_geom)
         player.raise_()  # labels created after startup may sit above the player
 
-        self._video_hover_outline.setGeometry(*geom)
+        self._video_hover_outline.setGeometry(*outline_geom)
         self._video_hover_outline.show()
         self._video_hover_outline.raise_()
         label.attach_video_player(player)
@@ -351,6 +359,16 @@ class ThumbnailViewWidget(QFrame):
             if label.is_video:
                 self._video_original_pixmap = label.pixmap()  # save before mpv overlay
                 self._last_scrub_position = 0.0  # Reset scrub position tracking
+                logger.debug("[revert] saved original pixmap null=%s path=%s",
+                             self._video_original_pixmap.isNull(), label.file_path)
+                logger.debug(
+                    "[align] hover vis_idx=%d label_pos_in_container=(%d,%d) label_size=(%d,%d) content_rect=(%d,%d,%d,%d)",
+                    label.vis_idx,
+                    label.pos().x(), label.pos().y(),
+                    label.width(), label.height(),
+                    label.contentsRect().x(), label.contentsRect().y(),
+                    label.contentsRect().width(), label.contentsRect().height(),
+                )
 
             if getattr(label, 'is_folder', False) and label._folder_node:
                 node = label._folder_node
@@ -374,13 +392,27 @@ class ThumbnailViewWidget(QFrame):
             self._priority_update_timer.start()
 
         # Clear video player if it exists
+        if label.is_video:
+            logger.debug("[revert] _clear_hovered_label is_video=True hovered_video_label_match=%s",
+                         self._hovered_video_label == label)
         if self._hovered_video_label == label:
             self._clear_video_overlay(label)
+        elif label.is_video:
+            # Quick hover: timer hasn't fired yet — cancel it and restore saved pixmap.
+            self._video_hover_timer.stop()
+            orig = self._video_original_pixmap
+            if orig is not None and not orig.isNull() and isValid(label):
+                label.setPixmap(orig)
+            self._video_original_pixmap = None
 
     def _clear_video_overlay(self, label: ThumbnailLabel):
         self._video_play_timer.stop()
-        if self._video_original_pixmap is not None and isValid(label):
-            label.setPixmap(self._video_original_pixmap)
+        orig = self._video_original_pixmap
+        logger.debug("[revert] _clear_video_overlay orig_null=%s label_valid=%s",
+                     orig.isNull() if orig is not None else "None",
+                     isValid(label))
+        if orig is not None and not orig.isNull() and isValid(label):
+            label.setPixmap(orig)
         self._video_original_pixmap = None
         label.detach_video_player()
         self._hovered_video_label = None
@@ -408,16 +440,48 @@ class ThumbnailViewWidget(QFrame):
         vp_pos = QPoint(container_pos.x() - scroll_x, container_pos.y() - scroll_y)
         return self.scroll_area.viewport().mapTo(self, vp_pos)
 
+    def _pixmap_rect_in_label(self, label: ThumbnailLabel) -> tuple[int, int, int, int]:
+        """Return (x, y, w, h) of the pixmap inside the label, in label-local coords.
+
+        Delegates to Qt's own QStyle.alignedRect on label.contentsRect() so we
+        match Qt's actual paint position (including DPR-aware pixmap sizes).
+        """
+        pix = label.pixmap()
+        if pix is None or pix.isNull():
+            return (0, 0, label.width(), label.height())
+        content = label.contentsRect()
+        dpr = pix.devicePixelRatio() or 1.0
+        pix_size = QSize(int(round(pix.width() / dpr)),
+                         int(round(pix.height() / dpr)))
+        aligned = QStyle.alignedRect(
+            Qt.LeftToRight, Qt.AlignCenter, pix_size, content,
+        )
+        logger.debug(
+            "[align-debug] label_rect=(%d,%d,%d,%d) contents=(%d,%d,%d,%d) "
+            "pix_raw=(%d,%d) pix_dpr=%.2f pix_css=(%d,%d) "
+            "aligned=(%d,%d,%d,%d) label_dpr=%.2f",
+            0, 0, label.width(), label.height(),
+            content.x(), content.y(), content.width(), content.height(),
+            pix.width(), pix.height(), dpr,
+            pix_size.width(), pix_size.height(),
+            aligned.x(), aligned.y(), aligned.width(), aligned.height(),
+            label.devicePixelRatioF(),
+        )
+        return (aligned.x(), aligned.y(), aligned.width(), aligned.height())
+
     def _reposition_video_player(self):
         """Reposition the video overlay using pure grid math — no widget mapTo."""
         if not self._video_scrub_player or self._hovered_vis_idx is None:
             return
         pos = self._video_player_pos(self._hovered_vis_idx)
-        logger.debug("[video-align] reposition vis_idx=%d pos=(%d,%d)",
-                     self._hovered_vis_idx, pos.x(), pos.y())
-        w, h = self._video_scrub_player.width(), self._video_scrub_player.height()
-        self._video_scrub_player.move(pos)
-        self._video_hover_outline.setGeometry(pos.x(), pos.y(), w, h)
+        label = self._hovered_video_label
+        if label is None or not isValid(label):
+            return
+        ox, oy, pw, ph = self._pixmap_rect_in_label(label)
+        logger.debug("[video-align] reposition vis_idx=%d pos=(%d,%d) pix_rect=(%d,%d,%d,%d)",
+                     self._hovered_vis_idx, pos.x(), pos.y(), ox, oy, pw, ph)
+        self._video_scrub_player.setGeometry(pos.x() + ox, pos.y() + oy, pw, ph)
+        self._video_hover_outline.setGeometry(pos.x(), pos.y(), label.width(), label.height())
 
     @property
     def folder_paths(self) -> Set[str]:
