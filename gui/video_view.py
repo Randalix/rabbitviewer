@@ -47,21 +47,6 @@ class VideoView(QOpenGLWidget):
         self._has_first_frame: bool = False
         self._fallback_pixmap: QPixmap | None = None
 
-        # Child cover label — only created for scrub mode.  Because it is a
-        # child of this QOpenGLWidget it composites inside the same native
-        # CALayer on macOS, so it reliably covers the black GL surface during
-        # mpv initialisation.  A sibling widget outside the GL layer cannot
-        # guarantee this because the system compositor may interleave the two
-        # layers independently.
-        if scrub:
-            from PySide6.QtWidgets import QLabel
-            self._cover = QLabel(self)
-            self._cover.setAttribute(Qt.WA_TransparentForMouseEvents)
-            self._cover.setAlignment(Qt.AlignCenter)
-            self._cover.hide()
-        else:
-            self._cover = None
-
         self._mpv_frame_ready.connect(self._on_qt_frame_ready, Qt.QueuedConnection)
 
         if not scrub:
@@ -81,16 +66,32 @@ class VideoView(QOpenGLWidget):
         return self._duration
 
     def initializeGL(self):
-        pass  # Deferred to loadVideo — context created on first play.
+        logger.debug("[flash] initializeGL scrub=%s size=(%d,%d)", self._scrub, self.width(), self.height())
+
+    def showEvent(self, event):
+        logger.debug("[flash] showEvent scrub=%s size=(%d,%d) first_frame=%s fallback=%s",
+                     self._scrub, self.width(), self.height(),
+                     self._has_first_frame, self._fallback_pixmap is not None)
+        super().showEvent(event)
+
+    def resizeEvent(self, event):
+        logger.debug("[flash] resizeEvent scrub=%s old=(%d,%d) new=(%d,%d) first_frame=%s fallback=%s",
+                     self._scrub,
+                     event.oldSize().width(), event.oldSize().height(),
+                     event.size().width(), event.size().height(),
+                     self._has_first_frame, self._fallback_pixmap is not None)
+        super().resizeEvent(event)
 
     def loadVideo(self, path: str) -> bool:
         if path == self._current_path and self._player:
+            logger.debug("[flash] loadVideo early-return (same path) size=(%d,%d)", self.width(), self.height())
             return True
 
         self._destroy_player()
         self._current_path = path
         self._duration = 0.0
         self._has_first_frame = False
+        logger.debug("[flash] loadVideo reset first_frame=False path=%s", path)
 
         # Geometry is already set by the caller (_start_video_playback).
         # Do not override it here.
@@ -203,40 +204,59 @@ class VideoView(QOpenGLWidget):
     def set_fallback_pixmap(self, pixmap: QPixmap | None):
         self._fallback_pixmap = pixmap
 
-    def paintEvent(self, event):
-        if self._scrub and not self._has_first_frame and self._fallback_pixmap and not self._fallback_pixmap.isNull():
-            logger.debug(
-                "[video-align] fallback paint: widget=(%d,%d) pixmap=(%d,%d)",
-                self.width(), self.height(),
-                self._fallback_pixmap.width(), self._fallback_pixmap.height(),
-            )
-            painter = QPainter(self)
-            # TODO: drawPixmap(rect, pixmap) stretches — use KeepAspectRatio to
-            # match the label's AlignCenter rendering and avoid a jump on first frame.
-            painter.drawPixmap(self.rect(), self._fallback_pixmap)
-            painter.end()
-            return
-        super().paintEvent(event)
-
     @Slot()
     def _on_qt_frame_ready(self):
         if not self._has_first_frame:
             self._has_first_frame = True
-            self._fallback_pixmap = None
+            # Don't clear _fallback_pixmap here — pts=None at this point means
+            # mpv fired its update callback but hasn't decoded a real frame yet.
+            # paintGL clears the fallback on the first non-None pts render.
+            logger.debug("[flash] first frame ready size=(%d,%d)", self.width(), self.height())
             self.firstFrameReady.emit()
+        else:
+            logger.debug("[flash] mpv frame update (subsequent) size=(%d,%d)", self.width(), self.height())
         self.update()
 
     def paintGL(self):
+        if self._scrub and self._fallback_pixmap and not self._fallback_pixmap.isNull():
+            # Show fallback until mpv has a genuinely decoded frame (pts != None).
+            # Even after _has_first_frame is set, pts=None means the surface is
+            # still black — mpv's update callback fires before the first decode.
+            pts_ready = False
+            if self._has_first_frame and self._render_ctx and self._player:
+                try:
+                    pts_ready = self._player.time_pos is not None
+                except Exception:
+                    pass
+            if not pts_ready:
+                logger.debug("[flash] paintGL FALLBACK (pts not ready) size=(%d,%d)", self.width(), self.height())
+                scaled = self._fallback_pixmap.scaled(
+                    self.width(), self.height(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+                painter = QPainter(self)
+                x = (self.width() - scaled.width()) // 2
+                y = (self.height() - scaled.height()) // 2
+                painter.drawPixmap(x, y, scaled)
+                painter.end()
+                return
+            # pts is non-None — mpv has real content; drop the fallback.
+            logger.debug("[flash] paintGL dropping fallback, pts ready size=(%d,%d)", self.width(), self.height())
+            self._fallback_pixmap = None
+
         if not self._render_ctx:
+            logger.debug("[flash] paintGL NO-CTX size=(%d,%d) first_frame=%s",
+                         self.width(), self.height(), self._has_first_frame)
             return
+        try:
+            pts = self._player.time_pos if self._player else None
+        except Exception:
+            pts = None
+        logger.debug("[flash] paintGL MPV size=(%d,%d) pts=%s", self.width(), self.height(), pts)
         fbo = self.defaultFramebufferObject()
         w = int(self.width() * self.devicePixelRatio())
         h = int(self.height() * self.devicePixelRatio())
-        logger.debug(
-            "[video-align] paintGL: widget=(%d,%d) dpr=%.1f render_fbo=(%d,%d) pos=(%d,%d)",
-            self.width(), self.height(), self.devicePixelRatio(),
-            w, h, self.x(), self.y(),
-        )
         self._render_ctx.render(
             opengl_fbo={'w': w, 'h': h, 'fbo': fbo},
             flip_y=True,
