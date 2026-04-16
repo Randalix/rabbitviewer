@@ -277,11 +277,14 @@ class ThumbnailViewWidget(QFrame):
             return  # hover cleared before the first frame arrived
         player = self._video_scrub_player
         player.show()
-        # repaint() is synchronous: calls paintGL() immediately, populating the
-        # GL FBO with the real frame before the cover is removed.  Without this,
-        # the FBO is still black when the cover hides, causing a black flash.
         player.repaint()
-        self._video_cover_label.hide()
+        # Delay the cover hide by one frame so the CALayer compositor has time
+        # to blit the freshly-rendered FBO before the cover disappears.
+        # Snapshot vis_idx so the timer is a no-op if the user already moved
+        # to a different video (or left entirely) within the delay window.
+        vis_idx = self._hovered_vis_idx
+        QTimer.singleShot(32, lambda: self._video_cover_label.hide()
+                          if self._hovered_vis_idx == vis_idx else None)
 
     def _on_video_stillness(self):
         """Called 500ms after the last mouse movement — unpause from current scrub position."""
@@ -375,7 +378,6 @@ class ThumbnailViewWidget(QFrame):
             # Start video playback if it's a video
             if label.is_video:
                 self._video_original_pixmap = label.pixmap()  # save before mpv overlay
-                self._start_video_playback()
                 self._last_scrub_position = 0.0  # Reset scrub position tracking
 
             if getattr(label, 'is_folder', False) and label._folder_node:
