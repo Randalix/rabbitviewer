@@ -424,6 +424,48 @@ class ImageTable(BaseTable):
             logger.error("Error clearing all thumbnail paths: %s", e)
             return 0
 
+    def clear_thumbnail_paths_for_extensions(self, extensions: List[str]) -> List[Dict[str, Optional[str]]]:
+        """Clear thumbnail_path/view_image_path for rows whose file extension matches.
+
+        Returns a list of ``{'file_path', 'thumbnail_path', 'view_image_path'}`` dicts
+        for every row that had at least one non-NULL cache path — the caller uses
+        these to delete the now-orphaned files from disk.
+
+        ``extensions`` must include the leading dot (e.g. ``['.mp4', '.mov']``).
+        Matching is case-insensitive via SQLite ``LOWER()``.
+        """
+        if not extensions:
+            return []
+        try:
+            patterns = [f"%{ext.lower()}" for ext in extensions]
+            where_like = " OR ".join(["LOWER(file_path) LIKE ?"] * len(patterns))
+
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    f"""SELECT file_path, thumbnail_path, view_image_path
+                        FROM image_metadata
+                        WHERE (thumbnail_path IS NOT NULL OR view_image_path IS NOT NULL)
+                          AND ({where_like})""",
+                    patterns,
+                )
+                rows = [
+                    {'file_path': r[0], 'thumbnail_path': r[1], 'view_image_path': r[2]}
+                    for r in cursor.fetchall()
+                ]
+                if rows:
+                    cursor.execute(
+                        f"""UPDATE image_metadata
+                            SET thumbnail_path = NULL, view_image_path = NULL, updated_at = ?
+                            WHERE {where_like}""",
+                        [time.time(), *patterns],
+                    )
+                    self._soft_commit()
+                return rows
+        except sqlite3.Error as e:
+            logger.error("Error clearing thumbnail paths for extensions %s: %s", extensions, e)
+            return []
+
     def get_thumbnail_paths(self, file_path: str) -> Dict[str, str]:
         """Gets the thumbnail and view image paths for a file."""
         try:

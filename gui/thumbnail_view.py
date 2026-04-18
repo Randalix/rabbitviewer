@@ -445,6 +445,13 @@ class ThumbnailViewWidget(QFrame):
 
         Delegates to Qt's own QStyle.alignedRect on label.contentsRect() so we
         match Qt's actual paint position (including DPR-aware pixmap sizes).
+        Returns the FULL aligned rect — possibly extending past contentsRect
+        when pix_size > content — because the QLabel paints the pixmap there
+        and the stylesheet border covers both the pixmap's outer ring and the
+        video widget's outer ring identically. Clipping this to contentsRect
+        would make the video widget smaller than the JPEG paint rect, trigger
+        independent mpv letterboxing, and change which portion of the source
+        is visible — producing the 1–2 px "resolution-dependent" jump we saw.
         """
         pix = label.pixmap()
         if pix is None or pix.isNull():

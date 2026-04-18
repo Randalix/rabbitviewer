@@ -61,6 +61,8 @@ class ThumbnailManager:
         self._check_cache_migration()
 
         self._plugins_dir = os.path.join(os.path.dirname(__file__), '..', 'plugins')
+        # Deferred: per-plugin migration needs the registry populated;
+        # load_plugins() triggers it.
         self.plugin_registry = plugin_registry
         self.supported_formats: set = set()  # populated by load_plugins()
 
@@ -142,6 +144,74 @@ class ThumbnailManager:
             f.write(str(CACHE_VERSION))
         logger.info("Cache migration complete. Version marker set to %d.", CACHE_VERSION)
 
+    def _check_per_plugin_cache_migration(self) -> None:
+        """Invalidate cached outputs for plugins whose cache_version bumped.
+
+        Per-plugin complement to _check_cache_migration: only rows for files
+        with matching extensions are cleared, so a change to (say) VideoPlugin
+        doesn't force regeneration of image thumbnails.
+        """
+        import json
+
+        marker_file = os.path.join(self.cache_dir, "plugin_cache_versions.json")
+
+        saved: dict = {}
+        try:
+            with open(marker_file) as f:  # disk-io: per-plugin marker read
+                saved = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+        current: dict = {
+            name: int(getattr(plugin, "cache_version", 1))
+            for name, plugin in self.plugin_registry.plugins.items()
+        }
+
+        # Missing-entry default is 1 (BasePlugin.cache_version default). That
+        # way existing installs upgrading to a bumped plugin get invalidated
+        # without treating fresh installs with default plugins as "everything
+        # changed".
+        bumped = [name for name, v in current.items() if v > saved.get(name, 1)]
+        if not bumped:
+            # Still persist any newly-added plugins so subsequent bumps are detected.
+            if current != saved:
+                try:
+                    with open(marker_file, "w") as f:  # disk-io: per-plugin marker write
+                        json.dump(current, f)
+                except OSError as e:
+                    logger.warning("Could not write per-plugin cache marker: %s", e)
+            return
+
+        for name in bumped:
+            plugin = self.plugin_registry.plugins[name]
+            exts = plugin.get_supported_formats()
+            if not exts:
+                continue
+
+            rows = self.metadata_db.images.clear_thumbnail_paths_for_extensions(exts)
+            logger.warning(
+                "Plugin %s cache_version %d → %d: clearing %d DB entries across %d extensions.",
+                name, saved.get(name, 0), current[name], len(rows), len(exts),
+            )
+
+            # NULL'd DB paths + deleted disk files are enough: the next grid
+            # access regenerates on demand, and the next directory scan re-queues
+            # via the existing file_work pipeline. No ledger edits needed.
+            for row in rows:
+                for key in ('thumbnail_path', 'view_image_path'):
+                    path = row.get(key)
+                    if path and os.path.exists(path):  # disk-io: per-plugin cache cleanup
+                        try:
+                            os.remove(path)
+                        except OSError as e:
+                            logger.warning("Failed to remove %s: %s", path, e)
+
+        try:
+            with open(marker_file, "w") as f:  # disk-io: per-plugin marker write
+                json.dump(current, f)
+        except OSError as e:
+            logger.warning("Could not write per-plugin cache marker: %s", e)
+
     # -----------------------------------------------------------------------
 
     def load_plugins(self) -> None:
@@ -152,6 +222,8 @@ class ThumbnailManager:
             )
         # Fast path: registry already populated by preload_plugins() — just sync formats.
         self.supported_formats = self.plugin_registry.get_supported_formats()
+        # Per-plugin migration runs here so the plugin registry is populated.
+        self._check_per_plugin_cache_migration()
         if not self.supported_formats:
             logger.warning("No format plugins loaded — scanning and thumbnailing will be non-functional.")
         else:

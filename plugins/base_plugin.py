@@ -121,6 +121,12 @@ plugin_registry = PluginRegistry()
 class BasePlugin(ABC):
     """Base class for all image format plugins."""
 
+    # Bump when this plugin's thumbnail/view-image generation changes in a way
+    # that invalidates existing cached outputs. ThumbnailManager compares this
+    # against the marker in ``plugin_cache_versions.json`` and clears DB paths
+    # + on-disk files for this plugin's extensions when it increases.
+    cache_version: int = 1
+
     def __init__(self, cache_dir: str, thumbnail_size: int = 64):
         self.cache_dir = cache_dir
         self.thumbnail_size = thumbnail_size

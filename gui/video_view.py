@@ -110,11 +110,14 @@ class VideoView(QOpenGLWidget):
                     hr_seek="yes",
                     pause=True,
                     aid="no",
-                    # Widget is sized to the ffmpeg thumbnail's aspect ratio, so
-                    # any mpv letterboxing would be sub-pixel and appear as a shift
-                    # relative to the JPEG thumbnail. Stretching to fill is at most
-                    # a 1-pixel aspect distortion — invisible in practice.
-                    keepaspect="no",
+                    # Widget is sized to the JPEG thumbnail's displayed rect
+                    # (via _pixmap_rect_in_label), whose aspect matches the
+                    # decoded video's. keepaspect=yes makes mpv letterbox
+                    # inside that rect the same way ffmpeg's scale filter did
+                    # — so the first hover frame aligns pixel-for-pixel with
+                    # the thumbnail instead of shifting by 1-2 px from the
+                    # stretched-fill rounding.
+                    keepaspect="yes",
                 )
                 if start_pct > 0.0:
                     mpv_kwargs["start"] = f"{start_pct * 100:.1f}%"
