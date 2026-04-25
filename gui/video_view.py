@@ -65,33 +65,14 @@ class VideoView(QOpenGLWidget):
     def duration(self) -> float:
         return self._duration
 
-    def initializeGL(self):
-        logger.debug("[flash] initializeGL scrub=%s size=(%d,%d)", self._scrub, self.width(), self.height())
-
-    def showEvent(self, event):
-        logger.debug("[flash] showEvent scrub=%s size=(%d,%d) first_frame=%s fallback=%s",
-                     self._scrub, self.width(), self.height(),
-                     self._has_first_frame, self._fallback_pixmap is not None)
-        super().showEvent(event)
-
-    def resizeEvent(self, event):
-        logger.debug("[flash] resizeEvent scrub=%s old=(%d,%d) new=(%d,%d) first_frame=%s fallback=%s",
-                     self._scrub,
-                     event.oldSize().width(), event.oldSize().height(),
-                     event.size().width(), event.size().height(),
-                     self._has_first_frame, self._fallback_pixmap is not None)
-        super().resizeEvent(event)
-
     def loadVideo(self, path: str, start_pct: float = 0.0) -> bool:
         if path == self._current_path and self._player:
-            logger.debug("[flash] loadVideo early-return (same path) size=(%d,%d)", self.width(), self.height())
             return True
 
         self._destroy_player()
         self._current_path = path
         self._duration = 0.0
         self._has_first_frame = False
-        logger.debug("[flash] loadVideo reset first_frame=False path=%s", path)
 
         # Geometry is already set by the caller (_start_video_playback).
         # Do not override it here.
@@ -110,11 +91,10 @@ class VideoView(QOpenGLWidget):
                     hr_seek="yes",
                     pause=True,
                     aid="no",
-                    # Widget is sized to the ffmpeg thumbnail's aspect ratio, so
-                    # any mpv letterboxing would be sub-pixel and appear as a shift
-                    # relative to the JPEG thumbnail. Stretching to fill is at most
-                    # a 1-pixel aspect distortion — invisible in practice.
-                    keepaspect="no",
+                    # Inert today (widget aspect matches video aspect via
+                    # _pixmap_rect_in_label). Principled for any future
+                    # non-square widget paths.
+                    keepaspect="yes",
                 )
                 if start_pct > 0.0:
                     mpv_kwargs["start"] = f"{start_pct * 100:.1f}%"
@@ -148,7 +128,7 @@ class VideoView(QOpenGLWidget):
             self.doneCurrent()
 
             self._player.play(path)
-            self.playbackStateChanged.emit(True)  # Emit signal when playback starts
+            self.playbackStateChanged.emit(True)
 
             if not self._scrub:
                 self._status_timer.start()
@@ -182,25 +162,23 @@ class VideoView(QOpenGLWidget):
         except Exception:  # why: mpv property/command raises on terminated player
             pass
 
+    def _refresh_duration(self):
+        if self._duration:
+            return
+        try:
+            dur = self._player.duration if self._player else None
+        except Exception:  # why: mpv property raises on terminated player
+            return
+        if dur and dur > 0:
+            self._duration = dur
+
     def seek_normalized(self, norm_x: float):
-        if not self._duration:
-            try:
-                dur = self._player.duration if self._player else None
-                if dur and dur > 0:
-                    self._duration = dur
-            except Exception:
-                pass
+        self._refresh_duration()
         self._seek_to_seconds(norm_x * self._duration)
 
     def setPosition(self, position: float):
         """Seek to a normalised position (0–1). Used by the thumbnail scrub overlay."""
-        if not self._duration:
-            try:
-                dur = self._player.duration if self._player else None
-                if dur and dur > 0:
-                    self._duration = dur
-            except Exception:
-                pass
+        self._refresh_duration()
         self._seek_to_seconds(position * self._duration)
         self.playbackStateChanged.emit(False)
 
@@ -225,13 +203,11 @@ class VideoView(QOpenGLWidget):
             if pts_ready:
                 self._has_first_frame = True
                 self._fallback_pixmap = None
-                logger.debug("[flash] first real frame ready size=(%d,%d)", self.width(), self.height())
                 self.firstFrameReady.emit()
         self.update()
 
     def paintGL(self):
         if self._scrub and not self._has_first_frame and self._fallback_pixmap and not self._fallback_pixmap.isNull():
-            logger.debug("[flash] paintGL FALLBACK size=(%d,%d)", self.width(), self.height())
             scaled = self._fallback_pixmap.scaled(
                 self.width(), self.height(),
                 Qt.KeepAspectRatio,
@@ -249,11 +225,6 @@ class VideoView(QOpenGLWidget):
         dpr = self.devicePixelRatio()
         w = int(self.width() * dpr)
         h = int(self.height() * dpr)
-        if self._scrub:
-            logger.debug(
-                "[align-mpv] paintGL css=(%d,%d) dpr=%.2f fbo=(%d,%d) widget_pos=(%d,%d)",
-                self.width(), self.height(), dpr, w, h, self.x(), self.y(),
-            )
         self._render_ctx.render(
             opengl_fbo={'w': w, 'h': h, 'fbo': fbo},
             flip_y=True,
@@ -479,21 +450,6 @@ class VideoView(QOpenGLWidget):
             except Exception:  # why: mpv handle may already be destroyed at shutdown
                 pass
             self._player = None
-
-    @property
-    def video_widget(self):
-        """Expose ourselves as the video widget for rendering"""
-        return self
-
-    def _apply_scaling(self):
-        """Ensure video fits within thumbnail boundaries while maintaining aspect ratio."""
-        w, h = self.width(), self.height()
-        if w <= 1 or h <= 1:
-            return
-
-        # The player is already sized to match the thumbnail by the caller
-        # Just ensure the video_widget (self) occupies the full space
-        self.setFixedSize(w, h)
 
     def closeEvent(self, event):
         self._destroy_player()

@@ -15,7 +15,19 @@ VIDEO_EXTENSIONS = [
 
 
 @functools.lru_cache(maxsize=1)
-def _is_ffmpeg_available() -> bool:
+def _is_mpv_available() -> bool:
+    try:
+        subprocess.run(
+            ["mpv", "--version"],
+            capture_output=True, check=True, timeout=5,
+        )
+        return True
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def _is_ffprobe_available() -> bool:
     try:
         subprocess.run(
             ["ffprobe", "-version"],
@@ -28,76 +40,47 @@ def _is_ffmpeg_available() -> bool:
 
 class VideoPlugin(BasePlugin):
 
+    cache_version = 3
+
     def is_available(self) -> bool:
-        return _is_ffmpeg_available()
+        return _is_mpv_available() and _is_ffprobe_available()
 
     def get_supported_formats(self) -> List[str]:
         return VIDEO_EXTENSIONS
 
     def process_thumbnail(self, image_path: str, md5_hash: str,
                           prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
-        """Extract a frame at ~10% of the video duration and save as JPEG thumbnail."""
+        """Extract a frame at ~10% of the video duration via mpv."""
         output_path = self.get_thumbnail_path(md5_hash)
         if os.path.exists(output_path):  # disk-io: cache file check
             return output_path
 
-        duration = self._get_duration(image_path)
-        seek_time = max(duration * 0.1, 0.0) if duration else 2.0
-
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-y",
-                    "-ss", str(seek_time),
-                    "-i", image_path,
-                    "-frames:v", "1",
-                    "-vf", f"scale={self.thumbnail_size}:{self.thumbnail_size}:"
-                           f"force_original_aspect_ratio=decrease",
-                    "-q:v", "5",
-                    output_path,
-                ],
-                capture_output=True, check=True, timeout=30,
-            )
-            return output_path if os.path.exists(output_path) else None  # disk-io: ffmpeg output check
-        except subprocess.SubprocessError as e:
-            logger.error("ffmpeg thumbnail failed for %s: %s", image_path, e)
-            return None
+        seek_time = self._seek_time(image_path)
+        vf = (f"scale=w={self.thumbnail_size}:h={self.thumbnail_size}:"
+              f"force_original_aspect_ratio=decrease")
+        return self._run_mpv_frame(image_path, output_path, seek_time, vf=vf)
 
     def process_view_image(self, image_path: str, md5_hash: str,
                            cancel_event=None,
                            prefetch_buffer: Optional[bytes] = None) -> Optional[str]:
-        """Return a poster frame for the brief moment before mpv starts rendering."""
+        """Native-size poster frame shown briefly before mpv starts rendering."""
         output_path = self.get_view_image_path(md5_hash)
         if os.path.exists(output_path):  # disk-io: cache file check
             return output_path
 
-        duration = self._get_duration(image_path)
-        seek_time = max(duration * 0.1, 0.0) if duration else 2.0
-
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-y",
-                    "-ss", str(seek_time),
-                    "-i", image_path,
-                    "-frames:v", "1",
-                    "-q:v", "2",
-                    output_path,
-                ],
-                capture_output=True, check=True, timeout=30,
-            )
-            return output_path if os.path.exists(output_path) else None  # disk-io: ffmpeg output check
-        except subprocess.SubprocessError as e:
-            logger.error("ffmpeg view image failed for %s: %s", image_path, e)
-            return None
+        seek_time = self._seek_time(image_path)
+        return self._run_mpv_frame(image_path, output_path, seek_time, vf=None)
 
     def generate_thumbnail(self, image_path: str, image_source: Union[str, bytes],
                            orientation: int, output_path: str) -> bool:
-        return self.process_thumbnail(image_path, "", None) is not None
+        # why: video thumbnails flow through process_thumbnail/_run_mpv_frame; the
+        # BasePlugin interface's image_source/output_path arguments don't map to mpv's
+        # seek-based extraction. Nothing in the codebase calls these for VideoPlugin.
+        raise NotImplementedError("VideoPlugin uses process_thumbnail, not generate_thumbnail")
 
     def generate_view_image(self, image_path: str, image_source: Union[str, bytes],
                             orientation: int, output_path: str) -> bool:
-        return self.process_view_image(image_path, "") is not None
+        raise NotImplementedError("VideoPlugin uses process_view_image, not generate_view_image")
 
     def extract_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
         """Use ffprobe to extract video metadata."""
@@ -132,6 +115,10 @@ class VideoPlugin(BasePlugin):
         """Videos don't embed XMP ratings. Store in DB only."""
         return False
 
+    def _seek_time(self, path: str) -> float:
+        duration = self._get_duration(path)
+        return max(duration * 0.1, 0.0) if duration else 2.0
+
     def _get_duration(self, path: str) -> float:
         try:
             result = subprocess.run(
@@ -146,3 +133,31 @@ class VideoPlugin(BasePlugin):
             return float(result.stdout.strip())
         except (subprocess.SubprocessError, ValueError):
             return 0.0
+
+    def _run_mpv_frame(self, image_path: str, output_path: str,
+                       seek_time: float, vf: Optional[str]) -> Optional[str]:
+        # --no-config: ignore user mpv.conf so output is deterministic.
+        # ovcopts=strict=unofficial: mjpeg encoder rejects non-full-range YUV
+        # in strict mode; relaxing matches hover's decode path.
+        # ofopts=update=1: single-file output without the image2 sequence warning.
+        cmd = [
+            "mpv", "--no-config", "--really-quiet", "--no-terminal",
+            "--no-audio", "--no-sub",
+            f"--start={seek_time}",
+            "--hr-seek=yes",  # match hover's precise seek so the cached frame == the first hover frame
+            "--frames=1",
+            "--of=image2", "--ovc=mjpeg",
+            "--ovcopts=strict=unofficial",
+            "--ofopts=update=1",
+            f"--o={output_path}",
+        ]
+        if vf:
+            cmd.append(f"--vf={vf}")
+        cmd.append(image_path)
+
+        try:
+            subprocess.run(cmd, capture_output=True, check=True, timeout=30)
+            return output_path if os.path.exists(output_path) else None  # disk-io: mpv output check
+        except subprocess.SubprocessError as e:
+            logger.error("mpv frame extract failed for %s: %s", image_path, e)
+            return None

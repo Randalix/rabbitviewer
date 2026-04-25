@@ -96,6 +96,10 @@ def _acquire_daemon_lock(pid_path):
     fd = open(pid_path, "a+")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # why: prevent subprocesses (exiftool, mpv, etc.) from inheriting
+        # the pidfile fd and keeping the flock alive after the daemon dies.
+        flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+        fcntl.fcntl(fd, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
         fd.seek(0)
         fd.truncate()
         fd.write(str(os.getpid()))

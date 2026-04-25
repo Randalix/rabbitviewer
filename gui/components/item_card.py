@@ -6,6 +6,7 @@ card-based views (thumbnail grid, face palette, …).
 """
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel
 
 
@@ -19,6 +20,25 @@ class ItemCard(QLabel):
         self.setAlignment(Qt.AlignCenter)
         self.setMouseTracking(True)
         self.setStyleSheet(self._build_card_stylesheet())
+
+    def setPixmap(self, pixmap: QPixmap) -> None:
+        # QLabel paints pixmaps at natural size and clips to contentsRect
+        # (inset by the stylesheet border). A pixmap larger than contentsRect
+        # gets its outer ring hidden — then a VideoView overlay sized to the
+        # same label rect renders that previously-hidden ring as visible
+        # video, producing the "jump" on hover. Pre-scale to fit inside
+        # contentsRect so the pixmap and any overlay both live at the same
+        # aligned rect.
+        if not pixmap.isNull():
+            content = self.contentsRect()
+            cw, ch = content.width(), content.height()
+            if cw > 0 and ch > 0 and (pixmap.width() > cw or pixmap.height() > ch):
+                pixmap = pixmap.scaled(
+                    cw, ch,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+        super().setPixmap(pixmap)
 
     # -- Style hooks (override in subclasses) -----------------------------
 

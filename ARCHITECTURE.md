@@ -258,7 +258,7 @@ Format handlers registered in a global `PluginRegistry` singleton (`plugins/base
 | `PILPlugin` | `.jpg .jpeg .png .bmp .gif .tiff .tif .webp` | Pillow |
 | `CR3Plugin` | `.cr3` | exiftool (CLI) |
 | `RawPlugin` | `.nef .nrw .arw .sr2 .srf .dng .raf .orf .rw2 .pef .srw .mrw .rwl .3fr .fff .mef .mos .iiq .cap .eip .cr2` | exiftool (CLI) |
-| `VideoPlugin` | `.mp4 .mov .mkv .avi .webm .m4v .wmv .flv .mpg .mpeg .3gp .ts` | ffmpeg + ffprobe (CLI) |
+| `VideoPlugin` | `.mp4 .mov .mkv .avi .webm .m4v .wmv .flv .mpg .mpeg .3gp .ts` | mpv (frames) + ffprobe (metadata) |
 
 Each plugin implements: `process_thumbnail()`, `process_view_image()`, `generate_thumbnail()`, `generate_view_image()`, `extract_metadata()`, `write_rating()`, `write_rating_embedded()`, `write_tags()`, `write_tags_embedded()`, `is_available()`.
 
