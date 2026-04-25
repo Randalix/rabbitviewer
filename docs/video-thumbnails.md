@@ -34,7 +34,7 @@ Frames land at the standard `BasePlugin` locations:
 
 ## Invalidating the ffmpeg-era cache
 
-`VideoPlugin.cache_version = 2` triggers the per-plugin migration in
+`VideoPlugin.cache_version = 3` triggers the per-plugin migration in
 `ThumbnailManager._check_per_plugin_cache_migration()` (see
 `core/thumbnail_manager.py`). On first run of the new code:
 
@@ -61,7 +61,7 @@ Thumbnail (scaled):
 
 ```
 mpv --no-config --really-quiet --no-terminal --no-audio --no-sub \
-    --start=<seek> --frames=1 \
+    --start=<seek> --hr-seek=yes --frames=1 \
     --of=image2 --ovc=mjpeg \
     --ovcopts=strict=unofficial --ofopts=update=1 \
     --vf=scale=w=<size>:h=<size>:force_original_aspect_ratio=decrease \
@@ -82,8 +82,9 @@ View image is identical but omits `--vf`.
 - **`--ofopts=update=1`** — single-file output without the image2 sequence
   warning.
 - **`--start=<seek>`** — 10% of duration (falls back to 2.0s if duration is
-  unknown). Matches the old ffmpeg behavior; this is what you want the
-  thumbnail to show, independent of the hover start.
+  unknown).
+- **`--hr-seek=yes`** — precise (frame-accurate) seek. Matches the hover
+  preview's seek so the cached thumbnail equals the first hover frame.
 - **`--frames=1`** — single frame, then exit.
 
 ## Seek time

@@ -457,7 +457,8 @@ class ImageTable(BaseTable):
                     cursor.execute(
                         f"""UPDATE image_metadata
                             SET thumbnail_path = NULL, view_image_path = NULL, updated_at = ?
-                            WHERE {where_like}""",
+                            WHERE (thumbnail_path IS NOT NULL OR view_image_path IS NOT NULL)
+                              AND ({where_like})""",
                         [time.time(), *patterns],
                     )
                     self._soft_commit()

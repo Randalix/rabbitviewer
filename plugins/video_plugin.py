@@ -40,8 +40,6 @@ def _is_ffprobe_available() -> bool:
 
 class VideoPlugin(BasePlugin):
 
-    # v2: switched from ffmpeg to mpv so cached frames match the hover preview.
-    # v3: added --hr-seek=yes so the cached frame matches hover's precise seek.
     cache_version = 3
 
     def is_available(self) -> bool:
@@ -75,11 +73,14 @@ class VideoPlugin(BasePlugin):
 
     def generate_thumbnail(self, image_path: str, image_source: Union[str, bytes],
                            orientation: int, output_path: str) -> bool:
-        return self.process_thumbnail(image_path, "", None) is not None
+        # why: video thumbnails flow through process_thumbnail/_run_mpv_frame; the
+        # BasePlugin interface's image_source/output_path arguments don't map to mpv's
+        # seek-based extraction. Nothing in the codebase calls these for VideoPlugin.
+        raise NotImplementedError("VideoPlugin uses process_thumbnail, not generate_thumbnail")
 
     def generate_view_image(self, image_path: str, image_source: Union[str, bytes],
                             orientation: int, output_path: str) -> bool:
-        return self.process_view_image(image_path, "") is not None
+        raise NotImplementedError("VideoPlugin uses process_view_image, not generate_view_image")
 
     def extract_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
         """Use ffprobe to extract video metadata."""
@@ -151,7 +152,7 @@ class VideoPlugin(BasePlugin):
             f"--o={output_path}",
         ]
         if vf:
-            cmd.insert(-1, f"--vf={vf}")
+            cmd.append(f"--vf={vf}")
         cmd.append(image_path)
 
         try:

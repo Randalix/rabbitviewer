@@ -1,4 +1,5 @@
 
+import json
 import os
 import shutil
 import stat as stat_mod
@@ -151,8 +152,6 @@ class ThumbnailManager:
         with matching extensions are cleared, so a change to (say) VideoPlugin
         doesn't force regeneration of image thumbnails.
         """
-        import json
-
         marker_file = os.path.join(self.cache_dir, "plugin_cache_versions.json")
 
         saved: dict = {}
